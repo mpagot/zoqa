@@ -1,0 +1,17 @@
+.{
+    .name = .openQAclient,
+    .version = "0.0.0",
+    .fingerprint = 0xa1b2c3d4e5f60718, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .clap = .{
+            .url = "git+https://github.com/Hejsil/zig-clap#560c8dd72ab25d556123846254040c5bf9ad3ba4",
+            .hash = "clap-0.7.0-AAAAAKz7AQAKutwUEJn_K6UJj37Km_hNVI3ZLsWCfvMj",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
