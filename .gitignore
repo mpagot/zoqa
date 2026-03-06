@@ -1,0 +1,29 @@
+zig-cache/
+zig-out/
+.zig-cache/
+
+# Local AFL++ installation
+vendor/aflplusplus/
+
+# Fuzzing
+out/
+cases/
+crashes/
+queue/
+fuzz/corpus_min/
+fuzz/out/
+openQAclient-afl
+
+# Temporary files and session logs
+*.tmp
+*.tmp.bkp
+session-*.md
+entrypoint-wrapper.sh
+client.conf.e2e
+test_output.log
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.swp
+*.swo

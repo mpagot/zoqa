@@ -1,12 +1,12 @@
 .{
     .name = .openQAclient,
     .version = "0.0.0",
-    .fingerprint = 0xa1b2c3d4e5f60718, // Changing this has security and trust implications.
+    .fingerprint = 0x7128da842c9832d9, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
-        .clap = .{
-            .url = "git+https://github.com/Hejsil/zig-clap#560c8dd72ab25d556123846254040c5bf9ad3ba4",
-            .hash = "clap-0.7.0-AAAAAKz7AQAKutwUEJn_K6UJj37Km_hNVI3ZLsWCfvMj",
+        .afl_kit = .{
+            .url = "git+https://github.com/kristoff-it/zig-afl-kit#395c39d5b33d999f6871a90bd731ec112d3995ca",
+            .hash = "afl_kit-0.1.0-NdJ3ch8eAABQkd1wk2W-JDCvvX5Jmnu3uJulS3lPepG7",
         },
     },
     .paths = .{

@@ -1,6 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 
+pub const config = @import("config.zig");
+pub const auth = @import("auth.zig");
+
 export fn add(a: i32, b: i32) i32 {
     return a + b;
 }
