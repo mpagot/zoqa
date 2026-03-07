@@ -1,0 +1,2 @@
+<http://openqaworker15.qe.prg2.suse.org/api/v1/jobs?limit=5&offset=0>; rel="first", <http://openqaworker15.qe.prg2.suse.org/api/v1/jobs?limit=5&offset=5>; rel="next"
+

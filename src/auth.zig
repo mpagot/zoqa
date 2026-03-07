@@ -72,3 +72,57 @@ test "buildAuthHeaders" {
     try testing.expectEqualStrings(&expected_hash, headers[2].value);
     try testing.expectEqualStrings(&expected_hash, &hash_buf);
 }
+
+test "buildAuthHeaders: openQA reference values" {
+    const testing = std.testing;
+
+    // Values from real failed E2E run against reference Perl implementation
+    const api_key = "47A19E5C33D8382C";
+    const api_secret = "A42C3826ECEAD136";
+    const path_and_query = "/api/v1/isos";
+    const timestamp = "1772841033";
+    const expected_hash = "fb0924abfd5c774240b2f54123d3ffda3ec265a3";
+
+    var hash_buf: [40]u8 = undefined;
+    const headers = buildAuthHeaders(api_key, api_secret, path_and_query, timestamp, &hash_buf);
+
+    try testing.expectEqualStrings(expected_hash, headers[2].value);
+    try testing.expectEqualStrings(expected_hash, &hash_buf);
+}
+
+test "buildAuthHeaders: dummy values" {
+    const testing = std.testing;
+
+    // Completely invented dummy values
+    const api_key = "DUMMY_KEY_123";
+    const api_secret = "DUMMY_SECRET_456";
+    const path_and_query = "/api/v1/dummy/path?foo=bar";
+    const timestamp = "1122334455";
+    
+    // Manual calculation verify:
+    // StringToSign: "/api/v1/dummy/path?foo=bar1122334455"
+    // Key: "DUMMY_SECRET_456"
+    // Expected Hash (HMAC-SHA1): "8635bb555e82de08b0a8ce7804df8fa9d3796f42"
+    const expected_hash = "8635bb555e82de08b0a8ce7804df8fa9d3796f42";
+
+    var hash_buf: [40]u8 = undefined;
+    const headers = buildAuthHeaders(api_key, api_secret, path_and_query, timestamp, &hash_buf);
+
+    try testing.expectEqualStrings(expected_hash, headers[2].value);
+}
+
+test "buildAuthHeaders: Turn 21 failed run values" {
+    const testing = std.testing;
+
+    const api_key = "DD91EFCBDB293F3B";
+    const api_secret = "A22BFECB924B4237";
+    const path_and_query = "/api/v1/isos";
+    const timestamp = "1772870327";
+    // Python says this should be: 1d926cbc771b814d1f36a234fd966d62db6cd03c
+    const expected_hash = "1d926cbc771b814d1f36a234fd966d62db6cd03c";
+
+    var hash_buf: [40]u8 = undefined;
+    const headers = buildAuthHeaders(api_key, api_secret, path_and_query, timestamp, &hash_buf);
+
+    try testing.expectEqualStrings(expected_hash, headers[2].value);
+}

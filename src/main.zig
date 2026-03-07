@@ -47,7 +47,7 @@ const Args = struct {
     help: bool = false,
 };
 
-fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
+pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
     var args = Args{
         .headers = .{},
         .param_files = .{},
@@ -282,7 +282,7 @@ fn printHelp() void {
 
 /// Parses `body` as a JSON object and encodes it as `key=value&...`.
 /// Caller owns the returned slice.
-fn jsonToFormEncoded(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+pub fn jsonToFormEncoded(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
     defer parsed.deinit();
 
@@ -390,6 +390,36 @@ pub fn main() !void {
     const api_path = args.kv_params.items[0];
     const kv_args = args.kv_params.items[1..];
 
+    // Collect all parameters (SPEC §3.1)
+    var params: std.ArrayList(u8) = .{};
+    defer params.deinit(gpa);
+
+    // Positional KEY=VALUE pairs
+    for (kv_args) |p| {
+        const eq = std.mem.indexOfScalar(u8, p, '=') orelse continue;
+        if (params.items.len > 0) try params.append(gpa, '&');
+        try formEncodeAppend(gpa, &params, p[0..eq]);
+        try params.append(gpa, '=');
+        try formEncodeAppend(gpa, &params, p[eq + 1 ..]);
+    }
+
+    // --param-file KEY=FILE
+    for (args.param_files.items) |pf| {
+        const eq = std.mem.indexOfScalar(u8, pf, '=') orelse {
+            std.debug.print("Warning: --param-file '{s}' missing '=', skipping.\n", .{pf});
+            continue;
+        };
+        const key = pf[0..eq];
+        const file_path = pf[eq + 1 ..];
+        const contents = try std.fs.cwd().readFileAlloc(gpa, file_path, 10 * 1024 * 1024);
+        defer gpa.free(contents);
+        const trimmed = std.mem.trimRight(u8, contents, "\n\r");
+        if (params.items.len > 0) try params.append(gpa, '&');
+        try formEncodeAppend(gpa, &params, key);
+        try params.append(gpa, '=');
+        try formEncodeAppend(gpa, &params, trimmed);
+    }
+
     // Resolve host
     const host_res = try config.resolveHost(
         gpa,
@@ -419,36 +449,7 @@ pub fn main() !void {
     };
     defer gpa.free(base_url);
 
-    // Collect KEY=VALUE params from positionals and --param-file
-    var params: std.ArrayList(u8) = .{};
-    defer params.deinit(gpa);
-
-    for (kv_args) |p| {
-        const eq = std.mem.indexOfScalar(u8, p, '=') orelse continue;
-        if (params.items.len > 0) try params.append(gpa, '&');
-        try params.appendSlice(gpa, p[0..eq]);
-        try params.append(gpa, '=');
-        try params.appendSlice(gpa, p[eq + 1 ..]);
-    }
-
-    // --param-file KEY=FILE: read file, trim trailing newline, append KEY=value
-    for (args.param_files.items) |pf| {
-        const eq = std.mem.indexOfScalar(u8, pf, '=') orelse {
-            std.debug.print("Warning: --param-file '{s}' missing '=', skipping.\n", .{pf});
-            continue;
-        };
-        const key = pf[0..eq];
-        const file_path = pf[eq + 1 ..];
-        const contents = try std.fs.cwd().readFileAlloc(gpa, file_path, 10 * 1024 * 1024);
-        defer gpa.free(contents);
-        const trimmed = std.mem.trimRight(u8, contents, "\n\r");
-        if (params.items.len > 0) try params.append(gpa, '&');
-        try params.appendSlice(gpa, key);
-        try params.append(gpa, '=');
-        try params.appendSlice(gpa, trimmed);
-    }
-
-    // Append query string for GET/DELETE (SPEC §3.1)
+    // Append query string ONLY for GET/DELETE (SPEC §3.1)
     const final_url: []const u8 = if ((method == .GET or method == .DELETE) and params.items.len > 0) blk: {
         const sep = if (std.mem.indexOfScalar(u8, base_url, '?') != null) "&" else "?";
         break :blk try std.fmt.allocPrint(gpa, "{s}{s}{s}", .{ base_url, sep, params.items });

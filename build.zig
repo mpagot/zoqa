@@ -54,6 +54,36 @@ pub fn build(b: *std.Build) void {
     }
 }
 
+fn addFuzzBinary(
+    b: *std.Build,
+    afl: anytype,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    name: []const u8,
+    src: []const u8,
+    imports: []const std.Build.Module.Import,
+) void {
+    const obj = b.addObject(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(src),
+            .target = b.resolveTargetQuery(.{}),
+            .optimize = .Debug,
+            .fuzz = true,
+            .imports = imports,
+        }),
+    });
+    obj.root_module.stack_check = false;
+    obj.root_module.link_libc = true;
+
+    // use_system_afl = true: afl_kit will call whichever afl-cc is on PATH.
+    // Add vendor/aflplusplus to PATH before invoking `zig build -Dfuzz`, e.g.:
+    //   PATH=$PWD/vendor/aflplusplus:$PATH zig build -Dfuzz
+    if (afl.addInstrumentedExe(b, target, optimize, null, true, obj, &.{})) |afl_exe| {
+        b.getInstallStep().dependOn(&b.addInstallFile(afl_exe, name).step);
+    }
+}
+
 fn setupFuzzing(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -61,25 +91,42 @@ fn setupFuzzing(
 ) void {
     const afl = b.lazyImport(@This(), "afl_kit") orelse return;
 
-    const fuzz_obj = b.addObject(.{
-        .name = "fuzz_obj",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/fuzz/fuzz.zig"),
-            .target = b.resolveTargetQuery(.{}),
-            .optimize = .Debug,
-            .fuzz = true,
-            .imports = &.{
-                .{ .name = "openQAclient", .module = b.modules.get("openQAclient").? },
-            },
-        }),
-    });
-    fuzz_obj.root_module.stack_check = false;
-    fuzz_obj.root_module.link_libc = true;
+    const lib_mod = b.modules.get("openQAclient").?;
 
-    // use_system_afl = true: afl_kit will call whichever afl-cc is on PATH.
-    // Add vendor/aflplusplus to PATH before invoking `zig build -Dfuzz`, e.g.:
-    //   PATH=$PWD/vendor/aflplusplus:$PATH zig build -Dfuzz
-    if (afl.addInstrumentedExe(b, target, optimize, null, true, fuzz_obj, &.{})) |afl_exe| {
-        b.getInstallStep().dependOn(&b.addInstallFile(afl_exe, "openQAclient-afl").step);
-    }
+    // Build a module for src/main.zig so fuzz_cli.zig can import it as "main".
+    // It depends on the library module for config/http_client access.
+    const main_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "openQAclient", .module = lib_mod },
+        },
+    });
+
+    // Build a module for src/http_client.zig so fuzz_http.zig can import it
+    // as "http_client".
+    const http_mod = b.createModule(.{
+        .root_source_file = b.path("src/http_client.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "openQAclient", .module = lib_mod },
+        },
+    });
+
+    // openQAclient-fuzz-ini: INI config file parser
+    addFuzzBinary(b, afl, target, optimize, "openQAclient-fuzz-ini", "tests/fuzz/fuzz_ini.zig", &.{
+        .{ .name = "openQAclient", .module = lib_mod },
+    });
+
+    // openQAclient-fuzz-cli: CLI argument parser + jsonToFormEncoded
+    addFuzzBinary(b, afl, target, optimize, "openQAclient-fuzz-cli", "tests/fuzz/fuzz_cli.zig", &.{
+        .{ .name = "main", .module = main_mod },
+    });
+
+    // openQAclient-fuzz-http: parseLinkHeader + JSON pretty-print path
+    addFuzzBinary(b, afl, target, optimize, "openQAclient-fuzz-http", "tests/fuzz/fuzz_http.zig", &.{
+        .{ .name = "http_client", .module = http_mod },
+    });
 }

@@ -6,19 +6,17 @@ zig-out/
 vendor/aflplusplus/
 
 # Fuzzing
-out/
 cases/
 crashes/
 queue/
-fuzz/corpus_min/
-fuzz/out/
+out/
 openQAclient-afl
 
 # Temporary files and session logs
 *.tmp
 *.tmp.bkp
 session-*.md
-entrypoint-wrapper.sh
+tests/e2e/entrypoint-wrapper.sh
 client.conf.e2e
 test_output.log
 

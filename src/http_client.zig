@@ -56,24 +56,48 @@ pub fn execute(req: Request) !u8 {
         const timestamp_str = try std.fmt.bufPrint(&timestamp_buf, "{d}", .{std.time.timestamp()});
 
         if (req.credentials) |creds| {
-            // HMAC message: percent-encoded path + optional "?query" + timestamp
+            // HMAC message: path + ("?" + query if query else "") + timestamp.
+            // Body parameters are strictly EXCLUDED. (SPEC §5.3)
             var msg_buf: std.ArrayList(u8) = .{};
             defer msg_buf.deinit(req.allocator);
 
             const w = msg_buf.writer(req.allocator);
+
+            // 1. Build the path + query string
             try w.print("{s}", .{uri.path.percent_encoded});
             if (uri.query) |q| {
                 try w.print("?{s}", .{q.percent_encoded});
             }
-            try w.print("{s}", .{timestamp_str});
 
+            // 2. Normalize the string: %20 -> +, ~ -> %7E
+            // Copy to temporary slice then rewrite into msg_buf
+            const raw_path_query = try msg_buf.toOwnedSlice(req.allocator);
+            defer req.allocator.free(raw_path_query);
+            msg_buf.clearRetainingCapacity();
+
+            var i: usize = 0;
+            while (i < raw_path_query.len) {
+                if (i + 2 < raw_path_query.len and std.mem.eql(u8, raw_path_query[i .. i + 3], "%20")) {
+                    try w.writeByte('+');
+                    i += 3;
+                } else if (raw_path_query[i] == '~') {
+                    try w.print("%7E", .{});
+                    i += 1;
+                } else {
+                    try w.writeByte(raw_path_query[i]);
+                    i += 1;
+                }
+            }
+
+            // 3. Generate the hash. buildAuthHeaders will append the timestamp to its own HMAC update.
             const auth_headers = auth.buildAuthHeaders(
                 creds.key,
                 creds.secret,
-                msg_buf.items,
+                msg_buf.items, // Only normalized path+query
                 timestamp_str,
                 &hash_buf,
             );
+
             try headers.appendSlice(req.allocator, &auth_headers);
         }
 
@@ -158,7 +182,9 @@ pub fn execute(req: Request) !u8 {
                 try stdout.print("{s}: {s}\n", .{ hdr.name, hdr.value });
             }
             if (req.links and std.ascii.eqlIgnoreCase(hdr.name, "Link")) {
-                parseLinkHeader(hdr.value);
+                var stderr_buf: [4096]u8 = undefined;
+                var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+                parseLinkHeader(hdr.value, &stderr_writer.interface);
             }
             if (std.ascii.eqlIgnoreCase(hdr.name, "Content-Encoding") and
                 std.ascii.eqlIgnoreCase(std.mem.trim(u8, hdr.value, " \t"), "gzip"))
@@ -242,10 +268,10 @@ pub fn execute(req: Request) !u8 {
     }
 }
 
-/// Parse a single RFC 5988 Link header value and print each link to stderr.
+/// Parse a single RFC 5988 Link header value and write each link to `writer`.
 /// Format: <url>; rel="name", <url2>; rel="name2"
-/// Output: "name: url" per link, written to stderr.
-fn parseLinkHeader(value: []const u8) void {
+/// Output: "name: url\n" per link.
+pub fn parseLinkHeader(value: []const u8, writer: anytype) void {
     var it = std.mem.splitScalar(u8, value, ',');
     while (it.next()) |entry| {
         const trimmed = std.mem.trim(u8, entry, " \t");
@@ -272,7 +298,7 @@ fn parseLinkHeader(value: []const u8) void {
         }
 
         if (rel.len > 0) {
-            std.debug.print("{s}: {s}\n", .{ rel, url });
+            writer.print("{s}: {s}\n", .{ rel, url }) catch {};
         }
     }
 }
