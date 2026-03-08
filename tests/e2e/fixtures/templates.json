@@ -1,0 +1,55 @@
+{
+  "JobGroups": [
+    {
+      "group_name": "example",
+      "template": "scenarios:\n  x86_64:\n    example-DVD-0:\n      - simple_boot:\n          machine: 64bit\n          priority: 50\nproducts:\n  example-DVD-0:\n    distri: example\n    flavor: DVD\n    version: \"0\"\n"
+    }
+  ],
+  "Machines": [
+    {
+      "name": "64bit",
+      "backend": "qemu",
+      "settings": [
+        { "key": "QEMUCPU", "value": "qemu64" },
+        { "key": "VIRTIO_CONSOLE", "value": "1" }
+      ]
+    },
+    {
+      "name": "32bit",
+      "backend": "qemu",
+      "settings": [
+        { "key": "QEMUCPU", "value": "i686" }
+      ]
+    },
+    {
+      "name": "uefi",
+      "backend": "qemu",
+      "settings": [
+        { "key": "UEFI", "value": "1" }
+      ]
+    }
+  ],
+  "TestSuites": [
+    {
+      "name": "simple_boot",
+      "settings": [
+        { "key": "DESKTOP", "value": "textmode" }
+      ]
+    },
+    {
+      "name": "install_default",
+      "settings": [
+        { "key": "DESKTOP", "value": "gnome" }
+      ]
+    }
+  ],
+  "Products": [
+    {
+      "arch": "x86_64",
+      "distri": "example",
+      "flavor": "DVD",
+      "version": "0",
+      "settings": []
+    }
+  ]
+}

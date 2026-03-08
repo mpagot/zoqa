@@ -197,9 +197,7 @@ pub fn execute(req: Request) !u8 {
                 try stdout.print("{s}: {s}\n", .{ hdr.name, hdr.value });
             }
             if (req.links and std.ascii.eqlIgnoreCase(hdr.name, "Link")) {
-                var stderr_buf: [4096]u8 = undefined;
-                var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
-                parseLinkHeader(hdr.value, &stderr_writer.interface);
+                parseLinkHeader(hdr.value, stdout);
             }
             if (std.ascii.eqlIgnoreCase(hdr.name, "Content-Encoding") and
                 std.ascii.eqlIgnoreCase(std.mem.trim(u8, hdr.value, " \t"), "gzip"))

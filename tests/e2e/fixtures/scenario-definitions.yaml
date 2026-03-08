@@ -1,0 +1,17 @@
+---
+# Minimal scenario-definitions.yaml for offline E2E testing.
+# Modelled after os-autoinst-distri-example/scenario-definitions.yaml (origin/main).
+# Passed inline as SCENARIO_DEFINITIONS_YAML= to POST /api/v1/isos.
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  simple_boot:
+    product: "example"
+    machine: "64bit"
