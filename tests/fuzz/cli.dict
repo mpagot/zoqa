@@ -1,0 +1,90 @@
+# AFL++ token dictionary for the openQAclient CLI argument parser.
+# Each token is a keyword the parser branches on; seeding the fuzzer with
+# these tokens dramatically speeds up coverage of flag-handling code paths.
+
+# Global flags
+"--host"
+"--host="
+"--osd"
+"--o3"
+"--odn"
+"--apikey"
+"--apikey="
+"--apisecret"
+"--apisecret="
+"-v"
+"--verbose"
+"-q"
+"--quiet"
+"--links"
+"-h"
+"--help"
+
+# API subcommand flags
+"api"
+"-X"
+"--method"
+"--method="
+"-d"
+"--data"
+"--data="
+"-D"
+"--data-file"
+"--data-file="
+"-f"
+"--form"
+"-j"
+"--json"
+"-p"
+"--pretty"
+"-a"
+"--header"
+"--header="
+"--param-file"
+"--param-file="
+"-r"
+"--retries"
+"--retries="
+
+# Common HTTP methods
+"GET"
+"POST"
+"PUT"
+"DELETE"
+"PATCH"
+
+# Separator / stop-flags sentinel
+"--"
+
+# param-file corpus markers
+"---FILECONTENT---"
+"---FILECONTENTEND---"
+
+# data-file content corpus markers
+"---DATAFILECONTENT---"
+"---DATAFILECONTENTEND---"
+
+# Integer boundary values (exercises parseInt paths)
+"4294967295"
+"4294967296"
+
+# Lowercase method variants (exercises toUpper fallback)
+"get"
+"post"
+"put"
+"delete"
+"patch"
+
+# URL schemes (exercises isAbsoluteUrl)
+"http://"
+"https://"
+"ftp://"
+
+# Header format (exercises colon splitting)
+"Content-Type:application/json"
+"X-Custom:value"
+
+# Common host values
+"openqa.suse.de"
+"openqa.opensuse.org"
+"localhost"

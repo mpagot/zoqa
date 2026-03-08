@@ -6,7 +6,7 @@ const http_client = @import("http_client.zig");
 // URL helpers
 // ---------------------------------------------------------------------------
 
-fn isAbsoluteUrl(path: []const u8) bool {
+pub fn isAbsoluteUrl(path: []const u8) bool {
     if (std.mem.startsWith(u8, path, "//") or std.mem.startsWith(u8, path, "#")) return true;
     const colon_idx = std.mem.indexOfScalar(u8, path, ':') orelse return false;
     for (path[0..colon_idx]) |c| {
@@ -19,7 +19,7 @@ fn isAbsoluteUrl(path: []const u8) bool {
 // Argument parsing
 // ---------------------------------------------------------------------------
 
-const Args = struct {
+pub const Args = struct {
     // global
     host: ?[]const u8 = null,
     osd: bool = false,
@@ -324,7 +324,7 @@ pub fn jsonToFormEncoded(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
 
 /// Percent-encode a string for application/x-www-form-urlencoded.
 /// Unreserved chars (RFC 3986) pass through; space → '+'; everything else → %XX.
-fn formEncodeAppend(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), input: []const u8) !void {
+pub fn formEncodeAppend(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), input: []const u8) !void {
     for (input) |c| {
         if (isUnreserved(c)) {
             try buf.append(allocator, c);
@@ -343,6 +343,213 @@ fn isUnreserved(c: u8) bool {
         (c >= 'a' and c <= 'z') or
         (c >= '0' and c <= '9') or
         c == '-' or c == '_' or c == '.' or c == '~';
+}
+
+// ---------------------------------------------------------------------------
+// buildRequest — extracted post-parseArgs processing (fuzzable)
+// ---------------------------------------------------------------------------
+
+/// Fully-built request configuration, ready to pass to http_client.execute().
+/// All slices are owned by the caller's allocator.
+pub const RequestConfig = struct {
+    method: std.http.Method,
+    url: []const u8,
+    body: ?[]const u8,
+    headers: std.ArrayList(std.http.Header),
+    params_encoded: []const u8,
+
+    // Owned buffers that must be freed by the caller
+    url_owned: bool,
+    body_owned: bool,
+    form_body_buf: ?[]u8,
+    params_buf: std.ArrayList(u8),
+    base_url_buf: ?[]u8,
+
+    pub fn deinit(self: *RequestConfig, allocator: std.mem.Allocator) void {
+        if (self.form_body_buf) |b| allocator.free(b);
+        self.params_buf.deinit(allocator);
+        if (self.base_url_buf) |b| allocator.free(b);
+        if (self.url_owned and self.url.ptr != (self.base_url_buf orelse self.url).ptr) {
+            allocator.free(self.url);
+        }
+        self.headers.deinit(allocator);
+    }
+};
+
+/// Logic for merging credentials from multiple sources with field-level priority.
+/// Priority: CLI > ENV > Config File.
+/// Returns allocated Credentials on success (caller owns fields).
+pub fn mergeCredentials(
+    allocator: std.mem.Allocator,
+    cli: struct { key: ?[]const u8, secret: ?[]const u8 },
+    env: struct { key: ?[]const u8, secret: ?[]const u8 },
+    conf: ?config.Credentials,
+) !?config.Credentials {
+    const key = cli.key orelse env.key orelse if (conf) |c| c.key else null;
+    const secret = cli.secret orelse env.secret orelse if (conf) |c| c.secret else null;
+
+    if (key != null and secret != null) {
+        return config.Credentials{
+            .key = try allocator.dupe(u8, key.?),
+            .secret = try allocator.dupe(u8, secret.?),
+        };
+    }
+    return null;
+}
+
+/// Build a RequestConfig from parsed arguments.
+///
+/// This function performs all the post-parseArgs processing that was previously
+/// inlined in main(): positional KV encoding, param-file reading, host
+/// resolution, method parsing, URL building, body assembly (--data, --data-file,
+/// --form), and header construction.
+///
+/// `data_file_content` is the pre-read content of --data-file (or stdin).
+/// Pass null when --data-file was not supplied. The caller is responsible for
+/// reading the file/stdin before calling this function — buildRequest itself
+/// does no filesystem I/O for body data. It DOES read --param-file files from
+/// the filesystem (because the fuzz harness already writes a temp file that
+/// the function can read).
+pub fn buildRequest(
+    allocator: std.mem.Allocator,
+    args: *const Args,
+    data_file_content: ?[]const u8,
+) !RequestConfig {
+    // kv_params[0] = PATH, kv_params[1..] = KEY=VALUE pairs.
+    if (args.kv_params.items.len == 0) return error.MissingPath;
+
+    const api_path = args.kv_params.items[0];
+    const kv_args = args.kv_params.items[1..];
+
+    // Collect all parameters (SPEC §3.1)
+    var params: std.ArrayList(u8) = .{};
+    errdefer params.deinit(allocator);
+
+    // Positional KEY=VALUE pairs
+    for (kv_args) |p| {
+        const eq = std.mem.indexOfScalar(u8, p, '=') orelse continue;
+        if (params.items.len > 0) try params.append(allocator, '&');
+        try formEncodeAppend(allocator, &params, p[0..eq]);
+        try params.append(allocator, '=');
+        try formEncodeAppend(allocator, &params, p[eq + 1 ..]);
+    }
+
+    // --param-file KEY=FILE
+    for (args.param_files.items) |pf| {
+        const eq = std.mem.indexOfScalar(u8, pf, '=') orelse continue;
+        const key = pf[0..eq];
+        const file_path = pf[eq + 1 ..];
+
+        // Security check: Zig's path functions assert no null bytes.
+        if (std.mem.indexOfScalar(u8, file_path, 0) != null) return error.PathContainsNullByte;
+
+        const contents = try std.fs.cwd().readFileAlloc(allocator, file_path, 10 * 1024 * 1024);
+        defer allocator.free(contents);
+        const trimmed = std.mem.trimRight(u8, contents, "\n\r");
+        if (params.items.len > 0) try params.append(allocator, '&');
+        try formEncodeAppend(allocator, &params, key);
+        try params.append(allocator, '=');
+        try formEncodeAppend(allocator, &params, trimmed);
+    }
+
+    // Resolve host
+    const host_res = try config.resolveHost(
+        allocator,
+        args.osd,
+        args.o3,
+        args.odn,
+        args.host,
+    );
+    defer if (host_res.allocated) allocator.free(host_res.url);
+
+    // Parse HTTP method (accept upper or lower case)
+    const method = std.meta.stringToEnum(std.http.Method, args.method) orelse blk: {
+        var upper_buf: [16]u8 = undefined;
+        if (args.method.len <= upper_buf.len) {
+            const upper = std.ascii.upperString(upper_buf[0..args.method.len], args.method);
+            break :blk std.meta.stringToEnum(std.http.Method, upper) orelse .GET;
+        }
+        break :blk .GET;
+    };
+
+    // Build base URL (SPEC §4)
+    var base_url_buf: ?[]u8 = null;
+    errdefer if (base_url_buf) |b| allocator.free(b);
+
+    const base_url: []const u8 = if (isAbsoluteUrl(api_path))
+        api_path
+    else blk: {
+        const clean = if (std.mem.startsWith(u8, api_path, "/")) api_path[1..] else api_path;
+        base_url_buf = try std.fmt.allocPrint(allocator, "{s}/api/v1/{s}", .{ host_res.url, clean });
+        break :blk base_url_buf.?;
+    };
+
+    // Append query string ONLY for GET/DELETE (SPEC §3.1)
+    var url_owned = false;
+    const final_url: []const u8 = if ((method == .GET or method == .DELETE) and params.items.len > 0) blk: {
+        const sep: []const u8 = if (std.mem.indexOfScalar(u8, base_url, '?') != null) "&" else "?";
+        url_owned = true;
+        break :blk try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ base_url, sep, params.items });
+    } else base_url;
+    errdefer if (url_owned) allocator.free(final_url);
+
+    // Build request body (SPEC §7)
+    var req_body: ?[]const u8 = null;
+
+    if (data_file_content) |dfc| {
+        req_body = dfc;
+    } else if (args.data) |d| {
+        req_body = d;
+    } else if ((method == .POST or method == .PUT or method == .PATCH) and params.items.len > 0) {
+        req_body = params.items;
+    }
+
+    // --form: JSON object body → application/x-www-form-urlencoded (SPEC §7)
+    var form_body_buf: ?[]u8 = null;
+    errdefer if (form_body_buf) |b| allocator.free(b);
+
+    if (args.form) {
+        if (req_body) |rb| {
+            form_body_buf = try jsonToFormEncoded(allocator, rb);
+            req_body = form_body_buf.?;
+        } else {
+            return error.FormRequiresData;
+        }
+    }
+
+    // Build extra request headers
+    var custom_headers: std.ArrayList(std.http.Header) = .{};
+    errdefer custom_headers.deinit(allocator);
+
+    for (args.headers.items) |h| {
+        const colon = std.mem.indexOfScalar(u8, h, ':') orelse continue;
+        const name = std.mem.trim(u8, h[0..colon], " \t");
+        const value = std.mem.trim(u8, h[colon + 1 ..], " \t");
+        try custom_headers.append(allocator, .{ .name = name, .value = value });
+    }
+
+    if (args.json) {
+        try custom_headers.append(allocator, .{ .name = "Content-Type", .value = "application/json" });
+    }
+
+    if (args.form or ((method == .POST or method == .PUT or method == .PATCH) and
+        params.items.len > 0 and args.data == null and args.data_file == null))
+    {
+        try custom_headers.append(allocator, .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" });
+    }
+
+    return RequestConfig{
+        .method = method,
+        .url = final_url,
+        .body = req_body,
+        .headers = custom_headers,
+        .params_encoded = params.items,
+        .url_owned = url_owned,
+        .body_owned = data_file_content != null,
+        .form_body_buf = form_body_buf,
+        .params_buf = params,
+        .base_url_buf = base_url_buf,
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -381,160 +588,46 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    // kv_params[0] = PATH, kv_params[1..] = KEY=VALUE pairs.
-    if (args.kv_params.items.len == 0) {
-        std.debug.print("Error: Missing PATH for api subcommand.\n", .{});
-        std.process.exit(1);
-    }
-
-    const api_path = args.kv_params.items[0];
-    const kv_args = args.kv_params.items[1..];
-
-    // Collect all parameters (SPEC §3.1)
-    var params: std.ArrayList(u8) = .{};
-    defer params.deinit(gpa);
-
-    // Positional KEY=VALUE pairs
-    for (kv_args) |p| {
-        const eq = std.mem.indexOfScalar(u8, p, '=') orelse continue;
-        if (params.items.len > 0) try params.append(gpa, '&');
-        try formEncodeAppend(gpa, &params, p[0..eq]);
-        try params.append(gpa, '=');
-        try formEncodeAppend(gpa, &params, p[eq + 1 ..]);
-    }
-
-    // --param-file KEY=FILE
-    for (args.param_files.items) |pf| {
-        const eq = std.mem.indexOfScalar(u8, pf, '=') orelse {
-            std.debug.print("Warning: --param-file '{s}' missing '=', skipping.\n", .{pf});
-            continue;
-        };
-        const key = pf[0..eq];
-        const file_path = pf[eq + 1 ..];
-        const contents = try std.fs.cwd().readFileAlloc(gpa, file_path, 10 * 1024 * 1024);
-        defer gpa.free(contents);
-        const trimmed = std.mem.trimRight(u8, contents, "\n\r");
-        if (params.items.len > 0) try params.append(gpa, '&');
-        try formEncodeAppend(gpa, &params, key);
-        try params.append(gpa, '=');
-        try formEncodeAppend(gpa, &params, trimmed);
-    }
-
-    // Resolve host
-    const host_res = try config.resolveHost(
-        gpa,
-        args.osd,
-        args.o3,
-        args.odn,
-        args.host,
-    );
-    defer if (host_res.allocated) gpa.free(host_res.url);
-
-    // Parse HTTP method (accept upper or lower case)
-    const method = std.meta.stringToEnum(std.http.Method, args.method) orelse blk: {
-        var upper_buf: [16]u8 = undefined;
-        if (args.method.len <= upper_buf.len) {
-            const upper = std.ascii.upperString(upper_buf[0..args.method.len], args.method);
-            break :blk std.meta.stringToEnum(std.http.Method, upper) orelse .GET;
-        }
-        break :blk .GET;
-    };
-
-    // Build base URL (SPEC §4)
-    const base_url: []const u8 = if (isAbsoluteUrl(api_path))
-        try gpa.dupe(u8, api_path)
-    else blk: {
-        const clean = if (std.mem.startsWith(u8, api_path, "/")) api_path[1..] else api_path;
-        break :blk try std.fmt.allocPrint(gpa, "{s}/api/v1/{s}", .{ host_res.url, clean });
-    };
-    defer gpa.free(base_url);
-
-    // Append query string ONLY for GET/DELETE (SPEC §3.1)
-    const final_url: []const u8 = if ((method == .GET or method == .DELETE) and params.items.len > 0) blk: {
-        const sep = if (std.mem.indexOfScalar(u8, base_url, '?') != null) "&" else "?";
-        break :blk try std.fmt.allocPrint(gpa, "{s}{s}{s}", .{ base_url, sep, params.items });
-    } else base_url;
-    defer if (final_url.ptr != base_url.ptr) gpa.free(final_url);
-
-    // Build request body (SPEC §7)
-    var body_buf: ?[]u8 = null; // owns allocated body bytes, if any
-    defer if (body_buf) |b| gpa.free(b);
-
-    var req_body: ?[]const u8 = null;
+    // Read --data-file content before buildRequest (filesystem I/O)
+    var data_file_buf: ?[]u8 = null;
+    defer if (data_file_buf) |b| gpa.free(b);
 
     if (args.data_file) |df| {
-        const raw = if (std.mem.eql(u8, df, "-"))
+        if (std.mem.indexOfScalar(u8, df, 0) != null) return error.PathContainsNullByte;
+        data_file_buf = if (std.mem.eql(u8, df, "-"))
             try std.fs.File.stdin().readToEndAlloc(gpa, 10 * 1024 * 1024)
         else
             try std.fs.cwd().readFileAlloc(gpa, df, 10 * 1024 * 1024);
-        body_buf = raw;
-        req_body = raw;
-    } else if (args.data) |d| {
-        req_body = d; // borrowed from argv, no allocation
-    } else if ((method == .POST or method == .PUT or method == .PATCH) and params.items.len > 0) {
-        req_body = params.items; // borrowed from params ArrayList
     }
 
-    // --form: JSON object body → application/x-www-form-urlencoded (SPEC §7)
-    var form_body_buf: ?[]u8 = null;
-    defer if (form_body_buf) |b| gpa.free(b);
+    const data_file_content: ?[]const u8 = if (data_file_buf) |b| b else null;
 
-    if (args.form) {
-        if (req_body) |rb| {
-            form_body_buf = jsonToFormEncoded(gpa, rb) catch |err| {
-                std.debug.print("--form error: {s}\n", .{@errorName(err)});
-                std.process.exit(1);
-            };
-            req_body = form_body_buf.?;
-        } else {
-            std.debug.print("--form requires --data or --data-file\n", .{});
-            std.process.exit(1);
-        }
-    }
-
-    // Build extra request headers
-    var custom_headers: std.ArrayList(std.http.Header) = .{};
-    defer custom_headers.deinit(gpa);
-
-    for (args.headers.items) |h| {
-        const colon = std.mem.indexOfScalar(u8, h, ':') orelse {
-            std.debug.print("Warning: --header '{s}' missing ':', skipping.\n", .{h});
-            continue;
-        };
-        const name = std.mem.trim(u8, h[0..colon], " \t");
-        const value = std.mem.trim(u8, h[colon + 1 ..], " \t");
-        try custom_headers.append(gpa, .{ .name = name, .value = value });
-    }
-
-    if (args.json) {
-        try custom_headers.append(gpa, .{ .name = "Content-Type", .value = "application/json" });
-    }
-
-    if (args.form or ((method == .POST or method == .PUT or method == .PATCH) and
-        params.items.len > 0 and args.data == null and args.data_file == null))
-    {
-        try custom_headers.append(gpa, .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" });
-    }
+    var req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
+        std.debug.print("Request build error: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer req_cfg.deinit(gpa);
 
     // Resolve credentials (SPEC §5.1)
-    var creds: ?config.Credentials = null;
-    if (args.apikey != null and args.apisecret != null) {
-        creds = .{ .key = args.apikey.?, .secret = args.apisecret.? };
-    } else if (std.posix.getenv("OPENQA_API_KEY") != null and
-        std.posix.getenv("OPENQA_API_SECRET") != null)
-    {
-        creds = .{
-            .key = std.posix.getenv("OPENQA_API_KEY").?,
-            .secret = std.posix.getenv("OPENQA_API_SECRET").?,
-        };
-    } else {
-        const uri = try std.Uri.parse(host_res.url);
-        if (uri.host) |h| {
-            if (try config.findCredentials(gpa, h.percent_encoded)) |c| {
-                creds = c;
-            }
-        }
-    }
+    const host_url = req_cfg.url;
+    const uri = try std.Uri.parse(host_url);
+    const hostname = if (uri.host) |h| h.percent_encoded else "localhost";
+    const conf_creds = try config.findCredentials(gpa, hostname);
+    defer if (conf_creds) |c| {
+        gpa.free(c.key);
+        gpa.free(c.secret);
+    };
+
+    const creds = try mergeCredentials(
+        gpa,
+        .{ .key = args.apikey, .secret = args.apisecret },
+        .{ .key = std.posix.getenv("OPENQA_API_KEY"), .secret = std.posix.getenv("OPENQA_API_SECRET") },
+        conf_creds,
+    );
+    defer if (creds) |c| {
+        gpa.free(c.key);
+        gpa.free(c.secret);
+    };
 
     // Retry count: --retries > OPENQA_CLI_RETRIES env > 0 (SPEC §8)
     const retries: u32 = args.retries orelse blk: {
@@ -546,10 +639,10 @@ pub fn main() !void {
 
     const req = http_client.Request{
         .allocator = gpa,
-        .method = method,
-        .url = final_url,
-        .headers = custom_headers.items,
-        .body = req_body,
+        .method = req_cfg.method,
+        .url = req_cfg.url,
+        .headers = req_cfg.headers.items,
+        .body = req_cfg.body,
         .credentials = creds,
         .retries = retries,
         .verbose = args.verbose,
@@ -565,6 +658,57 @@ pub fn main() !void {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+test "mergeCredentials: field-level priority behavior" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Scenario 1: Partial CLI override (Secret only)
+    // Should combine CLI secret with Config key
+    {
+        const res = try mergeCredentials(
+            allocator,
+            .{ .key = null, .secret = "CLI_SECRET" },
+            .{ .key = null, .secret = null },
+            .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
+        );
+        try testing.expect(res != null);
+        defer {
+            allocator.free(res.?.key);
+            allocator.free(res.?.secret);
+        }
+        try testing.expectEqualStrings("CONF_KEY", res.?.key);
+        try testing.expectEqualStrings("CLI_SECRET", res.?.secret);
+    }
+
+    // Scenario 2: CLI overrides ENV
+    {
+        const res = try mergeCredentials(
+            allocator,
+            .{ .key = "CLI_KEY", .secret = null },
+            .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
+            null,
+        );
+        try testing.expect(res != null);
+        defer {
+            allocator.free(res.?.key);
+            allocator.free(res.?.secret);
+        }
+        try testing.expectEqualStrings("CLI_KEY", res.?.key);
+        try testing.expectEqualStrings("ENV_SECRET", res.?.secret);
+    }
+
+    // Scenario 3: All null returns null
+    {
+        const res = try mergeCredentials(
+            allocator,
+            .{ .key = null, .secret = null },
+            .{ .key = null, .secret = null },
+            null,
+        );
+        try testing.expect(res == null);
+    }
+}
 
 test "isAbsoluteUrl: absolute schemes" {
     try std.testing.expect(isAbsoluteUrl("https://example.com/foo"));
@@ -662,4 +806,563 @@ test "parseArgs: --retries" {
     defer parsed.param_files.deinit(allocator);
     defer parsed.kv_params.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 3), parsed.retries.?);
+}
+
+test "buildRequest: GET with KV params appends query string" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--host", "http://example.com", "api", "jobs", "state=running",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expect(req_cfg.method == .GET);
+    // URL should contain the query string
+    try std.testing.expect(std.mem.indexOf(u8, req_cfg.url, "?state=running") != null);
+}
+
+test "buildRequest: POST with --data and --form" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--host", "http://example.com", "-X",  "POST",
+        "--form",       "--data", "{\"foo\":\"bar\"}",  "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expect(req_cfg.method == .POST);
+    try std.testing.expect(req_cfg.body != null);
+    try std.testing.expectEqualStrings("foo=bar", req_cfg.body.?);
+    // Should have Content-Type: application/x-www-form-urlencoded header
+    var found_ct = false;
+    for (req_cfg.headers.items) |h| {
+        if (std.mem.eql(u8, h.name, "Content-Type") and
+            std.mem.eql(u8, h.value, "application/x-www-form-urlencoded"))
+        {
+            found_ct = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_ct);
+}
+
+test "buildRequest: lowercase method is upper-cased" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "-X", "post", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expect(req_cfg.method == .POST);
+}
+
+test "buildRequest: absolute URL used as-is" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "api", "https://custom.host/api/v1/jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expectEqualStrings("https://custom.host/api/v1/jobs", req_cfg.url);
+}
+
+test "buildRequest: --header with colon splitting" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--header", "X-Custom: my-value", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), req_cfg.headers.items.len);
+    try std.testing.expectEqualStrings("X-Custom", req_cfg.headers.items[0].name);
+    try std.testing.expectEqualStrings("my-value", req_cfg.headers.items[0].value);
+}
+
+test "buildRequest: --json adds Content-Type header" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--json", "-X", "POST", "--data", "{}", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    var found_json_ct = false;
+    for (req_cfg.headers.items) |h| {
+        if (std.mem.eql(u8, h.name, "Content-Type") and
+            std.mem.eql(u8, h.value, "application/json"))
+        {
+            found_json_ct = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_json_ct);
+}
+
+test "buildRequest: --form without --data returns error" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--form", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    try std.testing.expectError(error.FormRequiresData, buildRequest(allocator, &parsed, null));
+}
+
+test "buildRequest: data-file content used as body" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "-X", "POST", "--data-file", "dummy.txt", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    const file_data = "file body content";
+    var req_cfg = try buildRequest(allocator, &parsed, file_data);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expectEqualStrings("file body content", req_cfg.body.?);
+}
+
+test "buildRequest: --osd flag resolves to openqa.suse.de" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--osd", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, req_cfg.url, "openqa.suse.de") != null);
+}
+
+// ---------------------------------------------------------------------------
+// Additional coverage for pub functions
+// ---------------------------------------------------------------------------
+
+test "mergeCredentials: env-only fallback (no CLI, no conf)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
+        null,
+    );
+    try testing.expect(res != null);
+    defer {
+        allocator.free(res.?.key);
+        allocator.free(res.?.secret);
+    }
+    try testing.expectEqualStrings("ENV_KEY", res.?.key);
+    try testing.expectEqualStrings("ENV_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: conf-only fallback (no CLI, no env)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = null, .secret = null },
+        .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
+    );
+    try testing.expect(res != null);
+    defer {
+        allocator.free(res.?.key);
+        allocator.free(res.?.secret);
+    }
+    try testing.expectEqualStrings("CONF_KEY", res.?.key);
+    try testing.expectEqualStrings("CONF_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: key from env, secret from conf" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = "ENV_KEY", .secret = null },
+        .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
+    );
+    try testing.expect(res != null);
+    defer {
+        allocator.free(res.?.key);
+        allocator.free(res.?.secret);
+    }
+    try testing.expectEqualStrings("ENV_KEY", res.?.key);
+    try testing.expectEqualStrings("CONF_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: partial key only returns null (no secret anywhere)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = "CLI_KEY", .secret = null },
+        .{ .key = null, .secret = null },
+        null,
+    );
+    try testing.expect(res == null);
+}
+
+test "mergeCredentials: partial secret only returns null (no key anywhere)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = "CLI_SECRET" },
+        .{ .key = null, .secret = null },
+        null,
+    );
+    try testing.expect(res == null);
+}
+
+test "isAbsoluteUrl: empty string" {
+    try std.testing.expect(!isAbsoluteUrl(""));
+}
+
+test "isAbsoluteUrl: colon after slash is relative" {
+    // "foo/bar:baz" has a slash before the colon → not a scheme
+    try std.testing.expect(!isAbsoluteUrl("foo/bar:baz"));
+}
+
+test "isAbsoluteUrl: colon after question mark is relative" {
+    try std.testing.expect(!isAbsoluteUrl("foo?bar:baz"));
+}
+
+test "isAbsoluteUrl: protocol-relative" {
+    try std.testing.expect(isAbsoluteUrl("//cdn.example.com/asset.js"));
+}
+
+test "isAbsoluteUrl: ftp scheme" {
+    try std.testing.expect(isAbsoluteUrl("ftp://files.example.com/data"));
+}
+
+test "formEncodeAppend: empty input produces empty output" {
+    const allocator = std.testing.allocator;
+    var buf: std.ArrayList(u8) = .{};
+    defer buf.deinit(allocator);
+    try formEncodeAppend(allocator, &buf, "");
+    try std.testing.expectEqual(@as(usize, 0), buf.items.len);
+}
+
+test "formEncodeAppend: all special bytes percent-encoded" {
+    const allocator = std.testing.allocator;
+    var buf: std.ArrayList(u8) = .{};
+    defer buf.deinit(allocator);
+    try formEncodeAppend(allocator, &buf, "\x00\x01\xff");
+    try std.testing.expectEqualStrings("%00%01%FF", buf.items);
+}
+
+test "jsonToFormEncoded: float and bool values" {
+    const allocator = std.testing.allocator;
+    const result = try jsonToFormEncoded(allocator, "{\"f\":3.14,\"b\":true}");
+    defer allocator.free(result);
+    // Float formatting may vary; just check it contains the key names
+    try std.testing.expect(std.mem.indexOf(u8, result, "f=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "b=true") != null);
+}
+
+test "jsonToFormEncoded: null value produces empty value" {
+    const allocator = std.testing.allocator;
+    const result = try jsonToFormEncoded(allocator, "{\"x\":null}");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("x=", result);
+}
+
+test "jsonToFormEncoded: nested array value returns error" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.FormUnsupportedValueType,
+        jsonToFormEncoded(allocator, "{\"arr\":[1,2]}"),
+    );
+}
+
+test "jsonToFormEncoded: nested object value returns error" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.FormUnsupportedValueType,
+        jsonToFormEncoded(allocator, "{\"obj\":{\"a\":1}}"),
+    );
+}
+
+test "jsonToFormEncoded: empty object" {
+    const allocator = std.testing.allocator;
+    const result = try jsonToFormEncoded(allocator, "{}");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "buildRequest: DELETE with KV params appends query string" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "-X",     "DELETE",  "--host", "http://example.com",
+        "api",          "jobs/1", "force=1",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expect(req_cfg.method == .DELETE);
+    try std.testing.expect(std.mem.indexOf(u8, req_cfg.url, "?force=1") != null);
+}
+
+test "buildRequest: POST with KV params uses body not query string" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "-X",   "POST",       "--host",     "http://example.com",
+        "api",          "jobs", "DISTRI=sle", "VERSION=15",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expect(req_cfg.method == .POST);
+    // URL should NOT contain query string for POST
+    try std.testing.expect(std.mem.indexOf(u8, req_cfg.url, "?") == null);
+    // Body should contain the params
+    try std.testing.expect(req_cfg.body != null);
+    try std.testing.expect(std.mem.indexOf(u8, req_cfg.body.?, "DISTRI=sle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, req_cfg.body.?, "VERSION=15") != null);
+    // Should have form Content-Type
+    var found_ct = false;
+    for (req_cfg.headers.items) |h| {
+        if (std.mem.eql(u8, h.name, "Content-Type") and
+            std.mem.eql(u8, h.value, "application/x-www-form-urlencoded"))
+        {
+            found_ct = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_ct);
+}
+
+test "buildRequest: missing path returns error" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "openQAclient", "api" };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    try std.testing.expectError(error.MissingPath, buildRequest(allocator, &parsed, null));
+}
+
+test "buildRequest: --o3 flag resolves to openqa.opensuse.org" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--o3", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, req_cfg.url, "openqa.opensuse.org") != null);
+}
+
+test "buildRequest: --header without colon is skipped" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--header", "MalformedHeader", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    // Malformed header without colon should be silently skipped
+    try std.testing.expectEqual(@as(usize, 0), req_cfg.headers.items.len);
+}
+
+test "buildRequest: leading slash stripped from relative api path" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--host", "http://example.com", "api", "/jobs/overview",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    // Should build "http://example.com/api/v1/jobs/overview" (no double slash)
+    try std.testing.expectEqualStrings("http://example.com/api/v1/jobs/overview", req_cfg.url);
+}
+
+test "buildRequest: bare hostname gets https:// prefix via resolveHost" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--host", "myhost.example.com", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expect(std.mem.startsWith(u8, req_cfg.url, "https://myhost.example.com"));
+}
+
+test "buildRequest: data-file content with --form encodes JSON body" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "-X", "POST", "--data-file", "dummy.json", "--form", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    const file_data = "{\"key\":\"value\"}";
+    var req_cfg = try buildRequest(allocator, &parsed, file_data);
+    defer req_cfg.deinit(allocator);
+
+    try std.testing.expectEqualStrings("key=value", req_cfg.body.?);
+}
+
+test "parseArgs: equals-form flags" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient",
+        "--host=http://ex.com",
+        "--apikey=K1",
+        "--apisecret=S1",
+        "--method=PUT",
+        "--data=body",
+        "--data-file=f.txt",
+        "--header=X-A: B",
+        "--param-file=K=V",
+        "--retries=5",
+        "api",
+        "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    try std.testing.expectEqualStrings("http://ex.com", parsed.host.?);
+    try std.testing.expectEqualStrings("K1", parsed.apikey.?);
+    try std.testing.expectEqualStrings("S1", parsed.apisecret.?);
+    try std.testing.expectEqualStrings("PUT", parsed.method);
+    try std.testing.expectEqualStrings("body", parsed.data.?);
+    try std.testing.expectEqualStrings("f.txt", parsed.data_file.?);
+    try std.testing.expectEqual(@as(usize, 1), parsed.headers.items.len);
+    try std.testing.expectEqualStrings("X-A: B", parsed.headers.items[0]);
+    try std.testing.expectEqual(@as(usize, 1), parsed.param_files.items.len);
+    try std.testing.expectEqualStrings("K=V", parsed.param_files.items[0]);
+    try std.testing.expectEqual(@as(u32, 5), parsed.retries.?);
+}
+
+test "parseArgs: unknown flag returns error" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "openQAclient", "--nonexistent" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: missing value after flag returns error" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "openQAclient", "--host" };
+    try std.testing.expectError(error.MissingValue, parseArgs(allocator, argv));
+}
+
+test "parseArgs: invalid retries returns error" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "openQAclient", "--retries", "abc" };
+    try std.testing.expectError(error.InvalidRetries, parseArgs(allocator, argv));
+}
+
+test "buildRequest: path with null byte returns error" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--param-file", "key=path\x00with_null", "api", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    try std.testing.expectError(error.PathContainsNullByte, buildRequest(allocator, &parsed, null));
+}
+
+test "parseArgs: stop flag --" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "openQAclient", "--", "--osd", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.headers.deinit(allocator);
+    defer parsed.param_files.deinit(allocator);
+    defer parsed.kv_params.deinit(allocator);
+
+    // --osd after -- is treated as subcmd, not flag
+    try std.testing.expect(!parsed.osd);
+    try std.testing.expectEqualStrings("--osd", parsed.path.?);
+    try std.testing.expectEqualStrings("jobs", parsed.kv_params.items[0]);
 }

@@ -129,4 +129,12 @@ fn setupFuzzing(
     addFuzzBinary(b, afl, target, optimize, "openQAclient-fuzz-http", "tests/fuzz/fuzz_http.zig", &.{
         .{ .name = "http_client", .module = http_mod },
     });
+
+    // openQAclient-fuzz-auth: HMAC-SHA1 signing + URL normalization
+    addFuzzBinary(b, afl, target, optimize, "openQAclient-fuzz-auth", "tests/fuzz/fuzz_auth.zig", &.{
+        .{ .name = "openQAclient", .module = lib_mod },
+    });
+
+    // openQAclient-fuzz-gzip: gzip decompression (Content-Encoding: gzip path)
+    addFuzzBinary(b, afl, target, optimize, "openQAclient-fuzz-gzip", "tests/fuzz/fuzz_gzip.zig", &.{});
 }

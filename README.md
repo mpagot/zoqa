@@ -14,6 +14,14 @@ both a CLI executable and a static library.
 
 ---
 
+## Authentication
+The tool supports HMAC-SHA1 authentication using API keys. Credentials are resolved with **field-level priority**, meaning each field (Key and Secret) is determined independently:
+1. CLI Flags (`--apikey`, `--apisecret`)
+2. Environment Variables (`OPENQA_API_KEY`, `OPENQA_API_SECRET`)
+3. Configuration file (`client.conf`)
+
+For example, if only `--apisecret` is provided on the command line, it will override the secret from the config file while still using the key defined in that file.
+
 ## Build
 
 ```sh
@@ -62,107 +70,9 @@ zig build
 
 ## Fuzz Testing
 
-Coverage-guided fuzz testing uses [AFL++](https://github.com/AFLplusplus/AFLplusplus)
-in Persistent Mode with LLVM instrumentation. There are **three separate fuzz targets**,
-one per domain:
+Coverage-guided fuzz testing using AFL++ is supported for the INI parser, CLI argument parser, and HTTP response handling.
 
-| Binary | Harness | Corpus | Dict | What it tests |
-|---|---|---|---|---|
-| `openQAclient-fuzz-ini` | `tests/fuzz/fuzz_ini.zig` | `tests/fuzz/corpus/` | `ini.dict` | INI config parser (`src/config.zig`) |
-| `openQAclient-fuzz-cli` | `tests/fuzz/fuzz_cli.zig` | `tests/fuzz/corpus_cli/` | `cli.dict` | CLI arg parser + `jsonToFormEncoded` (`src/main.zig`) |
-| `openQAclient-fuzz-http` | `tests/fuzz/fuzz_http.zig` | `tests/fuzz/corpus_http/` | `http.dict` | Link header parser + JSON body (`src/http_client.zig`) |
-
-AFL++ is vendored at `vendor/aflplusplus/` (git-ignored). Build it once after
-cloning the repo.
-
-### 1. Install LLVM
-
-AFL++'s LLVM mode requires `llvm-config` and `clang` from the same LLVM version.
-
-```sh
-# openSUSE / Tumbleweed
-sudo zypper install llvm21-devel
-```
-
-### 2. Build the vendored AFL++
-
-```sh
-make source-only -j$(nproc) -C vendor/aflplusplus
-# Produces: vendor/aflplusplus/afl-fuzz, vendor/aflplusplus/afl-cc, ...
-```
-
-### 3. Build the instrumented binaries
-
-`afl-cc` must be on `PATH`. Pass `-Dfuzz` to activate the fuzz build step:
-
-```sh
-PATH="$PWD/vendor/aflplusplus:$PATH" zig build -Dfuzz
-# Produces:
-#   zig-out/openQAclient-fuzz-ini
-#   zig-out/openQAclient-fuzz-cli
-#   zig-out/openQAclient-fuzz-http
-```
-
-### 4. Minimise the seed corpora
-
-Run `afl-cmin` separately for each target:
-
-```sh
-# INI parser
-rm -rf tests/fuzz/corpus_ini_min
-PATH="$PWD/vendor/aflplusplus:$PATH" \
-  vendor/aflplusplus/afl-cmin \
-    -i tests/fuzz/corpus \
-    -o tests/fuzz/corpus_ini_min \
-    -- ./zig-out/openQAclient-fuzz-ini
-
-# CLI argument parser
-rm -rf tests/fuzz/corpus_cli_min
-PATH="$PWD/vendor/aflplusplus:$PATH" \
-  vendor/aflplusplus/afl-cmin \
-    -i tests/fuzz/corpus_cli \
-    -o tests/fuzz/corpus_cli_min \
-    -- ./zig-out/openQAclient-fuzz-cli
-
-# HTTP response parser
-rm -rf tests/fuzz/corpus_http_min
-PATH="$PWD/vendor/aflplusplus:$PATH" \
-  vendor/aflplusplus/afl-cmin \
-    -i tests/fuzz/corpus_http \
-    -o tests/fuzz/corpus_http_min \
-    -- ./zig-out/openQAclient-fuzz-http
-```
-
-### 5. Run a fuzzer
-
-```sh
-# INI parser
-PATH="$PWD/vendor/aflplusplus:$PATH" \
-  vendor/aflplusplus/afl-fuzz \
-    -M main-node \
-    -i tests/fuzz/corpus_ini_min \
-    -o tests/fuzz/out_ini \
-    -x tests/fuzz/ini.dict \
-    -- ./zig-out/openQAclient-fuzz-ini
-
-# CLI argument parser
-PATH="$PWD/vendor/aflplusplus:$PATH" \
-  vendor/aflplusplus/afl-fuzz \
-    -M main-node \
-    -i tests/fuzz/corpus_cli_min \
-    -o tests/fuzz/out_cli \
-    -x tests/fuzz/cli.dict \
-    -- ./zig-out/openQAclient-fuzz-cli
-
-# HTTP response parser
-PATH="$PWD/vendor/aflplusplus:$PATH" \
-  vendor/aflplusplus/afl-fuzz \
-    -M main-node \
-    -i tests/fuzz/corpus_http_min \
-    -o tests/fuzz/out_http \
-    -x tests/fuzz/http.dict \
-    -- ./zig-out/openQAclient-fuzz-http
-```
+Refer to [tests/fuzz/README.md](tests/fuzz/README.md) for setup and workflow instructions.
 
 ---
 

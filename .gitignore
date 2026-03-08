@@ -6,10 +6,11 @@ zig-out/
 vendor/aflplusplus/
 
 # Fuzzing
+tests/fuzz/corpus*_min/
+tests/fuzz/out*/
 cases/
 crashes/
 queue/
-out/
 openQAclient-afl
 
 # Temporary files and session logs

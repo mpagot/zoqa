@@ -49,6 +49,12 @@ pub fn execute(req: Request) !u8 {
         // raw bytes so the response body is always human-readable text.
         try headers.append(req.allocator, .{ .name = "Accept-Encoding", .value = "identity" });
 
+        // if (req.body) |b| {
+        //     var cl_buf: [32]u8 = undefined;
+        //     const cl_val = try std.fmt.bufPrint(&cl_buf, "{d}", .{b.len});
+        //     try headers.append(req.allocator, .{ .name = "Content-Length", .value = try req.allocator.dupe(u8, cl_val) });
+        // }
+
         const uri = try std.Uri.parse(req.url);
 
         var hash_buf: [40]u8 = undefined;
@@ -124,6 +130,15 @@ pub fn execute(req: Request) !u8 {
             const body_mut = try req.allocator.dupe(u8, body_bytes);
             defer req.allocator.free(body_mut);
             http_req.sendBodyComplete(body_mut) catch |err| {
+                if (attempt < req.retries) {
+                    try sleepForRetry(attempt);
+                    continue;
+                }
+                if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
+                return 1;
+            };
+        } else if (req.method.requestHasBody()) {
+            http_req.sendBodyComplete(&.{}) catch |err| {
                 if (attempt < req.retries) {
                     try sleepForRetry(attempt);
                     continue;
@@ -313,4 +328,68 @@ fn sleepForRetry(attempt: u32) !void {
     const delay_s = base * std.math.pow(f64, factor, @floatFromInt(attempt));
     const delay_ns: u64 = @intFromFloat(delay_s * 1_000_000_000.0);
     std.Thread.sleep(delay_ns);
+}
+
+test "parseLinkHeader: basic parsing" {
+    const testing = std.testing;
+    var list = std.ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    const header = "<http://example.com/api/v1/jobs?offset=0>; rel=\"first\", <http://example.com/api/v1/jobs?offset=10>; rel=\"next\"";
+    parseLinkHeader(header, list.writer());
+
+    try testing.expectEqualStrings(
+        "first: http://example.com/api/v1/jobs?offset=0\nnext: http://example.com/api/v1/jobs?offset=10\n",
+        list.items,
+    );
+}
+
+test "execute: bodiless POST/PUT/PATCH does not panic" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Start a temporary listener to allow std.http.Client to connect.
+    // This allows us to reach the sendBodyComplete/sendBodiless calls.
+    const address = try std.net.Address.parseIp("127.0.0.1", 0);
+    var listener = try address.listen(.{ .reuse_address = true });
+    defer listener.deinit();
+
+    const port = listener.listen_address.getPosixPort();
+    var url_buf: [64]u8 = undefined;
+    const url = try std.fmt.bufPrint(&url_buf, "http://127.0.0.1:{d}/api/v1/jobs", .{port});
+
+    // Accept one connection in a thread to prevent hanging
+    const handle = try std.Thread.spawn(.{}, struct {
+        fn run(l: *std.net.Server) void {
+            var conn = l.accept() catch return;
+            defer conn.stream.close();
+            // Just read a bit and close; std.http.Client will fail with EndOfStream or Reset,
+            // which is fine as long as we don't panic.
+            var buf: [1024]u8 = undefined;
+            _ = conn.stream.read(&buf) catch {};
+        }
+    }.run, .{&listener});
+    defer handle.join();
+
+    const methods = [_]std.http.Method{ .POST, .PUT, .PATCH };
+    for (methods) |m| {
+        const req = Request{
+            .allocator = allocator,
+            .method = m,
+            .url = url,
+            .headers = &.{},
+            .body = null,
+            .credentials = null,
+            .retries = 0,
+            .verbose = false,
+            .quiet = true,
+            .links = false,
+            .pretty = false,
+        };
+
+        // If it panics, the test runner will report it.
+        // We don't care about the exit code/error (it will likely be 1/EndOfStream),
+        // we just want to ensure it doesn't crash.
+        _ = try execute(req);
+    }
 }

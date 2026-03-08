@@ -1,0 +1,53 @@
+# auth.dict — AFL++ dictionary for fuzz_auth harness
+# Targets: hmacSha1Hex, buildAuthHeaders, URL normalization (%20→+, ~→%7E)
+
+# Structural separators
+"\n"
+
+# URL path components
+"/"
+"/api"
+"/api/v1"
+"/api/v1/jobs"
+"/api/v1/isos"
+"/api/v1/machines"
+"/api/v1/products"
+"/api/v1/workers"
+
+# Query string tokens
+"?"
+"&"
+"="
+
+# Normalization targets: %20 and tilde
+"%20"
+"~"
+"%7E"
+"+"
+
+# Other percent-encoded chars
+"%2F"
+"%3A"
+"%3D"
+"%26"
+"%3F"
+"%00"
+"%0A"
+"%0D"
+
+# Common API key chars
+"0123456789ABCDEF"
+
+# Boundary values
+""
+"A"
+"AAAAAAAAAAAAAAAA"
+
+# Hex digits
+"0"
+"1"
+"a"
+"f"
+"F"
+"ff"
+"00"

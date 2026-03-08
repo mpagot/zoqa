@@ -98,7 +98,7 @@ test "buildAuthHeaders: dummy values" {
     const api_secret = "DUMMY_SECRET_456";
     const path_and_query = "/api/v1/dummy/path?foo=bar";
     const timestamp = "1122334455";
-    
+
     // Manual calculation verify:
     // StringToSign: "/api/v1/dummy/path?foo=bar1122334455"
     // Key: "DUMMY_SECRET_456"

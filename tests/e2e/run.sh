@@ -168,8 +168,7 @@ run_test() {
     echo "Command: $cmd"
     
     set +e
-    # shellcheck disable=SC2086
-    pe $cmd > test_output.log 2>&1
+    eval pe "$cmd" > test_output.log 2>&1
     local exit_code=$?
     set -e
 
@@ -193,73 +192,62 @@ run_test() {
     echo "PASS"
 }
 
-# Define base commands (NO CLI KEYS - relies on /etc/openqa/client.conf)
-ZIG_BASE="/app/zig-out/bin/openQAclient --host http://localhost api"
-PERL_BASE="openqa-cli api --host http://localhost"
+# Define base binary commands (without api subcommand yet, to allow flags injection)
+ZIG_EXE="/app/zig-out/bin/openQAclient"
+PERL_EXE="openqa-cli"
 
 run_comparison() {
     local label=$1
-    local api_args=$2
-    local expected_exit=$3
-    local grep_pattern=$4
+    local env_vars=$2
+    local api_args=$3
+    local expected_exit=${4:-0}
+    local grep_pattern=$5
 
-    run_test "PERL: $label" "$PERL_BASE $api_args" "$expected_exit" "$grep_pattern"
-    run_test "ZIG : $label" "$ZIG_BASE $api_args" "$expected_exit" "$grep_pattern"
+    run_test "PERL: $label" "bash -c \"$env_vars $PERL_EXE api --host http://localhost $api_args\"" "$expected_exit" "$grep_pattern"
+    run_test "ZIG : $label" "bash -c \"$env_vars $ZIG_EXE --host http://localhost api $api_args\"" "$expected_exit" "$grep_pattern"
 }
 
 # Test 1: Basic GET jobs/overview
-run_comparison "GET jobs/overview" "jobs/overview" 0 "\[\]"
+run_comparison "GET jobs/overview" "" "jobs/overview" 0 "\[\]"
 
 # Test 2: GET workers
-run_comparison "GET workers" "workers" 0
+run_comparison "GET workers" "" "workers" 0
 
 # Test 3: GET with query params
-run_comparison "GET jobs with filter" "jobs distri=opensuse" 0 "\[\]"
+run_comparison "GET jobs with filter" "" "jobs distri=opensuse" 0 "\[\]"
 
 # Test 4: GET 404
-run_comparison "GET non-existent (404)" "jobs/999999" 1 "404 Not Found"
+run_comparison "GET non-existent (404)" "" "jobs/999999" 1 "404 Not Found"
 
 # Test 5: DELETE 404 (Tests HMAC on DELETE)
-run_comparison "DELETE non-existent (404)" "-X DELETE assets/999999" 1 "404 Not Found"
+run_comparison "DELETE non-existent (404)" "" "-X DELETE assets/999999" 1 "404 Not Found"
 
 # Test 6: POST isos (HMAC validation)
-echo "--- Reference Debug: Comparing HMAC for POST isos ---"
-if [[ "$DRY_RUN" == "false" ]]; then
-    echo ">> PERL Output (MOJO_CLIENT_DEBUG):"
-    pe bash -c "MOJO_CLIENT_DEBUG=1 openqa-cli api --host http://localhost -X POST isos DISTRI=test VERSION=1 FLAVOR=test ARCH=x86_64 2>&1" | grep -E "X-API-Hash|X-API-Microtime|POST /api/v1/isos|StringToSign" || true
-    
-    echo ">> ZIG Output:"
-    pe /app/zig-out/bin/openQAclient --verbose --host http://localhost -X POST api isos DISTRI=test VERSION=1 FLAVOR=test ARCH=x86_64 2>&1 | grep -E "DEBUG: HMAC Message|DEBUG: Generated Hash|X-API-Hash|X-API-Microtime" || true
-fi
-run_comparison "POST isos (HMAC validation)" "-X POST isos DISTRI=test VERSION=1 FLAVOR=test ARCH=x86_64" 0
+run_comparison "POST isos (HMAC validation)" "" "-X POST isos DISTRI=test VERSION=1 FLAVOR=test ARCH=x86_64" 0
 
-# Test 7: Zig specific: --pretty
-run_test "ZIG : Pretty print" "$ZIG_BASE --pretty jobs/overview" 0 "\[\]"
-
-# Test 8: Zig specific: --param-file
+# Test 7: --param-file support
 pe bash -c "printf 'opensuse' > /tmp/distri.txt"
-run_test "ZIG : --param-file" "$ZIG_BASE --param-file distri=/tmp/distri.txt jobs" 0 "\[\]"
+run_comparison "--param-file" "" "--param-file distri=/tmp/distri.txt jobs" 0 "\[\]"
 
-# Test 9: CLI Flags Override
-echo "--- Test: ZIG : CLI Override ---"
-# We create a temporary config with WRONG credentials
+# Test 8: CLI Flags Override (Correct credentials on CLI override wrong ones in config)
 pe bash -c "printf '[localhost]\nkey=WRONG\nsecret=WRONG\n' > /tmp/wrong.conf"
-# Then we run the zig client pointing to this config via env var, but providing CORRECT keys via CLI
-# The CLI keys should win.
-# Note: we use 'pe bash -c' to set the environment variable inside the container
-ZIG_OVERRIDE_CMD="OPENQA_CONFIG=/tmp /app/zig-out/bin/openQAclient --host http://localhost --apikey '$API_KEY' --apisecret '$API_SECRET' api jobs/overview"
-echo "Command: $ZIG_OVERRIDE_CMD"
-set +e
-pe bash -c "$ZIG_OVERRIDE_CMD" > test_output.log 2>&1
-EXIT_CODE=$?
-set -e
-if [[ "$EXIT_CODE" -eq 0 ]]; then
-    echo "PASS (CLI override successful)"
-else
-    echo "FAIL: CLI override did not work (Exit code: $EXIT_CODE)"
-    cat test_output.log
-    failed_tests=$((failed_tests + 1))
-fi
+run_comparison "CLI Override" "OPENQA_CONFIG=/tmp" "--apikey '$API_KEY' --apisecret '$API_SECRET' jobs/overview" 0 "\[\]"
+
+# Test 9: Authentication Failure (Wrong Secret)
+# We use POST /jobs because it's an authenticated route (unlike jobs/overview which is public)
+run_comparison "Wrong Secret (403)" "" "--apisecret WRONG_SECRET -X POST jobs" 1 "403 Forbidden"
+
+# Test 10: Missing PATH positional
+run_test "PERL: Missing PATH" "$PERL_EXE api --host http://localhost" 255
+run_test "ZIG : Missing PATH" "$ZIG_EXE --host http://localhost api" 1 "MissingPath"
+
+# Test 11: Invalid Host (Connection Refused)
+# Note: we don't use binary base here to avoid injecting --host http://localhost
+run_test "PERL: Invalid Host" "$PERL_EXE api --host http://localhost:12345 jobs/overview" 1
+run_test "ZIG : Invalid Host" "$ZIG_EXE --host http://localhost:12345 api jobs/overview" 1 "Connection error"
+
+# Test 12: Zig specific: --pretty (Perl doesn't have it)
+run_test "ZIG : Pretty print" "$ZIG_EXE --host http://localhost api --pretty jobs/overview" 0 "\[\]"
 
 if [[ "$DRY_RUN" == "true" ]]; then
     echo "==> [DRY-RUN] E2E tests simulated successfully!"
