@@ -11,7 +11,7 @@
 // contents are provided inline in the corpus using a content block. The block
 // MUST appear immediately after the KEY=IGNORED line that follows --param-file:
 //
-//   openQAclient
+//   zoqa
 //   --param-file
 //   BUILD=IGNORED
 //   ---FILECONTENT---

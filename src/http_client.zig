@@ -1,6 +1,6 @@
 const std = @import("std");
-const config = @import("openQAclient").config;
-const auth = @import("openQAclient").auth;
+const config = @import("zoqa").config;
+const auth = @import("zoqa").auth;
 
 pub const Request = struct {
     allocator: std.mem.Allocator,

@@ -1,5 +1,5 @@
 const std = @import("std");
-const config = @import("openQAclient").config;
+const config = @import("zoqa").config;
 const http_client = @import("http_client.zig");
 
 // ---------------------------------------------------------------------------
@@ -248,7 +248,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
 
 fn printHelp() void {
     std.debug.print(
-        \\Usage: openQAclient [GLOBAL OPTIONS] api [API OPTIONS] PATH [KEY=VALUE ...]
+        \\Usage: zoqa [GLOBAL OPTIONS] api [API OPTIONS] PATH [KEY=VALUE ...]
         \\
         \\Global Options:
         \\  --host HOST          Base URL of the OpenQA instance
@@ -758,8 +758,8 @@ test "jsonToFormEncoded: non-object returns error" {
 test "parseArgs: basic flags" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--host",        "http://example.com", "-v", "-q",
-        "api",          "jobs/overview", "state=running",
+        "zoqa", "--host",        "http://example.com", "-v", "-q",
+        "api",  "jobs/overview", "state=running",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -776,7 +776,7 @@ test "parseArgs: basic flags" {
 
 test "parseArgs: --method long and short" {
     const allocator = std.testing.allocator;
-    const argv: []const []const u8 = &.{ "openQAclient", "-X", "POST", "api", "jobs" };
+    const argv: []const []const u8 = &.{ "zoqa", "-X", "POST", "api", "jobs" };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
     defer parsed.param_files.deinit(allocator);
@@ -787,7 +787,7 @@ test "parseArgs: --method long and short" {
 test "parseArgs: repeatable --header" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--header", "X-Foo: bar", "-a", "X-Baz: qux", "api", "jobs",
+        "zoqa", "--header", "X-Foo: bar", "-a", "X-Baz: qux", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -800,7 +800,7 @@ test "parseArgs: repeatable --header" {
 
 test "parseArgs: --retries" {
     const allocator = std.testing.allocator;
-    const argv: []const []const u8 = &.{ "openQAclient", "--retries", "3", "api", "jobs" };
+    const argv: []const []const u8 = &.{ "zoqa", "--retries", "3", "api", "jobs" };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
     defer parsed.param_files.deinit(allocator);
@@ -811,7 +811,7 @@ test "parseArgs: --retries" {
 test "buildRequest: GET with KV params appends query string" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--host", "http://example.com", "api", "jobs", "state=running",
+        "zoqa", "--host", "http://example.com", "api", "jobs", "state=running",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -829,8 +829,8 @@ test "buildRequest: GET with KV params appends query string" {
 test "buildRequest: POST with --data and --form" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--host", "http://example.com", "-X",  "POST",
-        "--form",       "--data", "{\"foo\":\"bar\"}",  "api", "jobs",
+        "zoqa",   "--host", "http://example.com", "-X",  "POST",
+        "--form", "--data", "{\"foo\":\"bar\"}",  "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -859,7 +859,7 @@ test "buildRequest: POST with --data and --form" {
 test "buildRequest: lowercase method is upper-cased" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "-X", "post", "api", "jobs",
+        "zoqa", "-X", "post", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -875,7 +875,7 @@ test "buildRequest: lowercase method is upper-cased" {
 test "buildRequest: absolute URL used as-is" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "api", "https://custom.host/api/v1/jobs",
+        "zoqa", "api", "https://custom.host/api/v1/jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -891,7 +891,7 @@ test "buildRequest: absolute URL used as-is" {
 test "buildRequest: --header with colon splitting" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--header", "X-Custom: my-value", "api", "jobs",
+        "zoqa", "--header", "X-Custom: my-value", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -909,7 +909,7 @@ test "buildRequest: --header with colon splitting" {
 test "buildRequest: --json adds Content-Type header" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--json", "-X", "POST", "--data", "{}", "api", "jobs",
+        "zoqa", "--json", "-X", "POST", "--data", "{}", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -934,7 +934,7 @@ test "buildRequest: --json adds Content-Type header" {
 test "buildRequest: --form without --data returns error" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--form", "api", "jobs",
+        "zoqa", "--form", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -947,7 +947,7 @@ test "buildRequest: --form without --data returns error" {
 test "buildRequest: data-file content used as body" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "-X", "POST", "--data-file", "dummy.txt", "api", "jobs",
+        "zoqa", "-X", "POST", "--data-file", "dummy.txt", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -964,7 +964,7 @@ test "buildRequest: data-file content used as body" {
 test "buildRequest: --osd flag resolves to openqa.suse.de" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--osd", "api", "jobs",
+        "zoqa", "--osd", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -1143,8 +1143,8 @@ test "jsonToFormEncoded: empty object" {
 test "buildRequest: DELETE with KV params appends query string" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "-X",     "DELETE",  "--host", "http://example.com",
-        "api",          "jobs/1", "force=1",
+        "zoqa", "-X",     "DELETE",  "--host", "http://example.com",
+        "api",  "jobs/1", "force=1",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -1161,8 +1161,8 @@ test "buildRequest: DELETE with KV params appends query string" {
 test "buildRequest: POST with KV params uses body not query string" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "-X",   "POST",       "--host",     "http://example.com",
-        "api",          "jobs", "DISTRI=sle", "VERSION=15",
+        "zoqa", "-X",   "POST",       "--host",     "http://example.com",
+        "api",  "jobs", "DISTRI=sle", "VERSION=15",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -1194,7 +1194,7 @@ test "buildRequest: POST with KV params uses body not query string" {
 
 test "buildRequest: missing path returns error" {
     const allocator = std.testing.allocator;
-    const argv: []const []const u8 = &.{ "openQAclient", "api" };
+    const argv: []const []const u8 = &.{ "zoqa", "api" };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
     defer parsed.param_files.deinit(allocator);
@@ -1206,7 +1206,7 @@ test "buildRequest: missing path returns error" {
 test "buildRequest: --o3 flag resolves to openqa.opensuse.org" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--o3", "api", "jobs",
+        "zoqa", "--o3", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -1222,7 +1222,7 @@ test "buildRequest: --o3 flag resolves to openqa.opensuse.org" {
 test "buildRequest: --header without colon is skipped" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--header", "MalformedHeader", "api", "jobs",
+        "zoqa", "--header", "MalformedHeader", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -1239,7 +1239,7 @@ test "buildRequest: --header without colon is skipped" {
 test "buildRequest: leading slash stripped from relative api path" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--host", "http://example.com", "api", "/jobs/overview",
+        "zoqa", "--host", "http://example.com", "api", "/jobs/overview",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -1256,7 +1256,7 @@ test "buildRequest: leading slash stripped from relative api path" {
 test "buildRequest: bare hostname gets https:// prefix via resolveHost" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--host", "myhost.example.com", "api", "jobs",
+        "zoqa", "--host", "myhost.example.com", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -1272,7 +1272,7 @@ test "buildRequest: bare hostname gets https:// prefix via resolveHost" {
 test "buildRequest: data-file content with --form encodes JSON body" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "-X", "POST", "--data-file", "dummy.json", "--form", "api", "jobs",
+        "zoqa", "-X", "POST", "--data-file", "dummy.json", "--form", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -1289,7 +1289,7 @@ test "buildRequest: data-file content with --form encodes JSON body" {
 test "parseArgs: equals-form flags" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient",
+        "zoqa",
         "--host=http://ex.com",
         "--apikey=K1",
         "--apisecret=S1",
@@ -1322,26 +1322,26 @@ test "parseArgs: equals-form flags" {
 
 test "parseArgs: unknown flag returns error" {
     const allocator = std.testing.allocator;
-    const argv: []const []const u8 = &.{ "openQAclient", "--nonexistent" };
+    const argv: []const []const u8 = &.{ "zoqa", "--nonexistent" };
     try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
 }
 
 test "parseArgs: missing value after flag returns error" {
     const allocator = std.testing.allocator;
-    const argv: []const []const u8 = &.{ "openQAclient", "--host" };
+    const argv: []const []const u8 = &.{ "zoqa", "--host" };
     try std.testing.expectError(error.MissingValue, parseArgs(allocator, argv));
 }
 
 test "parseArgs: invalid retries returns error" {
     const allocator = std.testing.allocator;
-    const argv: []const []const u8 = &.{ "openQAclient", "--retries", "abc" };
+    const argv: []const []const u8 = &.{ "zoqa", "--retries", "abc" };
     try std.testing.expectError(error.InvalidRetries, parseArgs(allocator, argv));
 }
 
 test "buildRequest: path with null byte returns error" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--param-file", "key=path\x00with_null", "api", "jobs",
+        "zoqa", "--param-file", "key=path\x00with_null", "api", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);
@@ -1354,7 +1354,7 @@ test "buildRequest: path with null byte returns error" {
 test "parseArgs: stop flag --" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "openQAclient", "--", "--osd", "jobs",
+        "zoqa", "--", "--osd", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.headers.deinit(allocator);

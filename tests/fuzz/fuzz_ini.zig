@@ -20,7 +20,7 @@
 // with an empty INI body — this still exercises the empty-input path.
 //
 const std = @import("std");
-const config = @import("openQAclient").config;
+const config = @import("zoqa").config;
 
 export fn zig_fuzz_init() void {}
 

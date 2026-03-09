@@ -1,4 +1,4 @@
-openQAclient
+zoqa
 --delete
 --host
 openqa.suse.de

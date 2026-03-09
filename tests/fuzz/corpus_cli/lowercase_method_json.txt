@@ -1,4 +1,4 @@
-openQAclient
+zoqa
 --put
 --host
 openqa.suse.de

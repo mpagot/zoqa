@@ -1,2 +1,0 @@
-
-{"workers":[{"id":752,"host":"openqaworker15","instance":36,"status":"idle","alive":1,"connected":1,"job_id":null},{"id":753,"host":"openqaworker15","instance":37,"status":"running","alive":1,"connected":1,"job_id":358512}]}

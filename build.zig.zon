@@ -1,7 +1,7 @@
 .{
-    .name = .openQAclient,
+    .name = .zoqa,
     .version = "0.0.0",
-    .fingerprint = 0x7128da842c9832d9, // Changing this has security and trust implications.
+    .fingerprint = 0x6adc0a80d9a18fee, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .afl_kit = .{

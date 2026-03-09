@@ -1,4 +1,4 @@
-openQAclient
+zoqa
 --osd
 --verbose
 --quiet

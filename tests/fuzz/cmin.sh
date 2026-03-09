@@ -53,11 +53,11 @@ declare -A CORPUS_DIR=(
 	[gzip]="corpus_gzip"
 )
 declare -A BINARY=(
-	[ini]="openQAclient-fuzz-ini"
-	[cli]="openQAclient-fuzz-cli"
-	[http]="openQAclient-fuzz-http"
-	[auth]="openQAclient-fuzz-auth"
-	[gzip]="openQAclient-fuzz-gzip"
+	[ini]="zoqa-fuzz-ini"
+	[cli]="zoqa-fuzz-cli"
+	[http]="zoqa-fuzz-http"
+	[auth]="zoqa-fuzz-auth"
+	[gzip]="zoqa-fuzz-gzip"
 )
 ALL_TARGETS=(ini cli http auth gzip)
 

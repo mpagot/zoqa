@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# run.sh — Near End-to-End tests for openQAclient.
+# run.sh — Near End-to-End tests for zoqa.
 #
 # Starts the openQA container (via setup.sh), runs comparison tests between
-# openqa-cli (Perl reference) and openQAclient (Zig), then tears down.
+# openqa-cli (Perl reference) and zoqa (Zig), then tears down.
 #
 # Usage:
 #   bash tests/e2e/run.sh [OPTIONS]
@@ -35,13 +35,13 @@ show_help() {
 	cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Near End-to-End testing for the openQAclient Zig binary against a live openQA
+Near End-to-End testing for the zoqa Zig binary against a live openQA
 single-instance container.
 
 WHAT IT DOES:
   1. Starts an official openQA single-instance container.
   2. Seeds it with test fixtures (machines, products, jobs, assets).
-  3. Runs comparison tests between openqa-cli (Perl) and openQAclient (Zig).
+  3. Runs comparison tests between openqa-cli (Perl) and zoqa (Zig).
   4. Reports results and optionally collects logs / keeps the container alive.
 
 OPTIONS:
@@ -102,8 +102,8 @@ TEARDOWN_ARGS=()
 # -----------------------------------------------------------------------------
 # Preflight Check
 # -----------------------------------------------------------------------------
-if [[ ! -f "zig-out/bin/openQAclient" && "$DRY_RUN" == "false" ]]; then
-	echo "Error: zig-out/bin/openQAclient not found. Please run 'zig build' first." >&2
+if [[ ! -f "zig-out/bin/zoqa" && "$DRY_RUN" == "false" ]]; then
+	echo "Error: zig-out/bin/zoqa not found. Please run 'zig build' first." >&2
 	exit 1
 fi
 
@@ -159,7 +159,7 @@ echo "    JOB_ID=$JOB_ID  ASSET_ID=$ASSET_ID  ZIG_ASSET_ID=${ZIG_ASSET_ID:-}  GR
 # -----------------------------------------------------------------------------
 # Test Infrastructure
 # -----------------------------------------------------------------------------
-ZIG_EXE="/app/zig-out/bin/openQAclient"
+ZIG_EXE="/app/zig-out/bin/zoqa"
 PERL_EXE="openqa-cli"
 
 failed_tests=0

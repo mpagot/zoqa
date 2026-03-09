@@ -1,4 +1,4 @@
-openQAclient
+zoqa
 --host
 http://openqa.suse.de
 api

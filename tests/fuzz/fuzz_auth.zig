@@ -27,7 +27,7 @@
 //   3. URL normalization — %20→+, ~→%7E rewriting (same logic as http_client.zig)
 //
 const std = @import("std");
-const auth = @import("openQAclient").auth;
+const auth = @import("zoqa").auth;
 
 export fn zig_fuzz_init() void {}
 

@@ -76,12 +76,12 @@ test "buildAuthHeaders" {
 test "buildAuthHeaders: openQA reference values" {
     const testing = std.testing;
 
-    // Values from real failed E2E run against reference Perl implementation
-    const api_key = "47A19E5C33D8382C";
-    const api_secret = "A42C3826ECEAD136";
+    // Synthetic values — HMAC-SHA1 independently verified with Python hmac module
+    const api_key = "AAAA1111AAAA1111";
+    const api_secret = "BBBB2222BBBB2222";
     const path_and_query = "/api/v1/isos";
-    const timestamp = "1772841033";
-    const expected_hash = "fb0924abfd5c774240b2f54123d3ffda3ec265a3";
+    const timestamp = "1700000000";
+    const expected_hash = "45bd393ec99bf60c167394cc248930ce2f74df40";
 
     var hash_buf: [40]u8 = undefined;
     const headers = buildAuthHeaders(api_key, api_secret, path_and_query, timestamp, &hash_buf);
@@ -111,15 +111,16 @@ test "buildAuthHeaders: dummy values" {
     try testing.expectEqualStrings(expected_hash, headers[2].value);
 }
 
-test "buildAuthHeaders: Turn 21 failed run values" {
+test "buildAuthHeaders: Turn 21 regression" {
     const testing = std.testing;
 
-    const api_key = "DD91EFCBDB293F3B";
-    const api_secret = "A22BFECB924B4237";
+    // Synthetic values — HMAC-SHA1 independently verified with Python hmac module
+    const api_key = "CCCC3333CCCC3333";
+    const api_secret = "DDDD4444DDDD4444";
     const path_and_query = "/api/v1/isos";
-    const timestamp = "1772870327";
-    // Python says this should be: 1d926cbc771b814d1f36a234fd966d62db6cd03c
-    const expected_hash = "1d926cbc771b814d1f36a234fd966d62db6cd03c";
+    const timestamp = "1700001000";
+    // Python says this should be: 261e38ff743e1095525af2e737feb8f07e6ff6c6
+    const expected_hash = "261e38ff743e1095525af2e737feb8f07e6ff6c6";
 
     var hash_buf: [40]u8 = undefined;
     const headers = buildAuthHeaders(api_key, api_secret, path_and_query, timestamp, &hash_buf);
