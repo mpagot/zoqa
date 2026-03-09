@@ -125,33 +125,51 @@ podman rm -f openqa-e2e
 
 ---
 
-## Test Coverage (20 tests)
+## Testing Methodology
 
-| # | Description |
-|---|---|
-| 1 | GET `jobs/overview` — blank slate returns `[]` |
-| 2 | GET `workers` |
-| 3 | GET `jobs` with query parameters |
-| 4 | GET non-existent resource (404) |
-| 5 | DELETE non-existent resource — validates HMAC on DELETE (404) |
-| 6 | POST `isos` — validates HMAC on POST |
-| 7 | `--param-file` flag support |
-| 8 | CLI flags override wrong config-file credentials |
-| 9 | Wrong secret returns 403 Forbidden |
-| 10 | Missing PATH positional argument handled gracefully |
-| 11 | Invalid host (connection refused) |
-| 12 | `--pretty` on empty response |
-| 13 | GET `jobs/overview` returns seeded job names |
-| 14 | GET `jobs/:id` returns nested job object with `settings` |
-| 15 | `--links` flag surfaces `Link: rel="next"` pagination header |
-| 16 | `--verbose` flag shows HTTP response headers |
-| 17 | `--pretty` on non-empty response produces indented JSON |
-| 18 | DELETE a real asset (successful authenticated DELETE) |
-| 19 | GET `job_groups` returns the seeded group name |
-| 20 | Perl vs Zig output parity on a nested object (soft WARN, not hard FAIL) |
+The harness employs three primary testing patterns to validate the Zig executable:
 
-Tests 1–12 use the blank-slate container. Tests 13–20 require seeded fixture data
-(provided automatically by `seed_fixtures.sh`).
+1.  **Functional Testing:** Validates that `openQAclient` correctly handles internal logic, such as CLI argument validation and connection error reporting.
+2.  **Comparison Testing:** Runs the same command against both the Perl reference (`openqa-cli`) and the Zig binary, ensuring both return the same exit codes and match specific output patterns.
+3.  **Parity Testing (Diff):** Captures the full JSON output of both binaries for a complex nested resource and performs a `diff` to detect structural or data mismatches.
+
+---
+
+## Test Coverage (20 test cases)
+
+### API & Protocol
+| # | Test | Verification |
+|---|---|---|
+| 1 | GET `jobs/overview` | Basic endpoint connectivity and JSON array response. |
+| 2 | GET `workers` | Basic endpoint connectivity. |
+| 3 | Query Parameters | Appending filters (e.g., `distri=opensuse`) to the URL. |
+| 14 | Nested JSON Parsing | Correctly parsing and returning complex nested objects (e.g., `settings`). |
+| 19 | Resource Discovery | Retrieving seeded groups and verifying data persistence. |
+
+### Authentication (HMAC-SHA1)
+| # | Test | Verification |
+|---|---|---|
+| 5 | DELETE HMAC | Correct signature generation for `DELETE` requests (verified via 404). |
+| 6 | POST HMAC | Correct signature generation for `POST` requests. |
+| 18 | Authenticated DELETE | Successful deletion of a real asset using full HMAC handshake. |
+| 9 | Auth Failure (403) | Graceful handling of invalid secrets/signatures. |
+
+### CLI Flags & Configuration
+| # | Test | Verification |
+|---|---|---|
+| 7 | `--param-file` | Reading key/value pairs from external files. |
+| 8 | CLI Overrides | Explicit flags (`--apikey`) take precedence over `client.conf`. |
+| 15 | `--links` Flag | Parsing and displaying `Link` pagination headers. |
+| 16 | `--verbose` Flag | Capturing and displaying raw HTTP response headers. |
+| 12, 17 | `--pretty` Flag | JSON indentation logic for both empty and populated responses. |
+
+### Error Handling & Edge Cases
+| # | Test | Verification |
+|---|---|---|
+| 4 | 404 Not Found | Standard API error propagation. |
+| 10 | Missing Arguments | Internal validation when the required `PATH` is omitted. |
+| 11 | Connection Refused | Graceful exit when the host is unreachable. |
+| 20 | Output Parity | Soft-warning `diff` comparison between Perl and Zig output. |
 
 ---
 
