@@ -58,13 +58,25 @@ zig test src/config.zig --test-filter "parseIni"
 This validates the HTTP client, HMAC handshake, and API interaction against a live
 official openQA single-instance container.
 
+Requires: Podman, `/dev/kvm` access recommended.
+
 ```sh
 # Ensure the binary is built first
 zig build
 
-# Run the E2E suite (starts/stops container automatically)
-./tests/e2e/run.sh
+# Run the full E2E suite (starts container, seeds data, runs 20 tests, tears down)
+bash tests/e2e/run.sh
+
+# Keep the container alive after tests and expose the web UI
+bash tests/e2e/run.sh --keep-container
+# Then open http://localhost:8080
+
+# Dry-run: print all commands without executing anything
+bash tests/e2e/run.sh --dryrun
 ```
+
+See [tests/e2e/README.md](tests/e2e/README.md) for the full script reference,
+debugging tips, flag documentation, and test coverage table.
 
 ---
 
@@ -87,7 +99,14 @@ src/
   http_client.zig — std.http.Client wrapper (retry, response handling)
 tests/
   e2e/
-    run.sh          — Near End-to-End test harness
+    lib.sh          — shared helpers (it, pe, die, cd_to_project_root)
+    run.sh          — Near End-to-End test harness (20 tests)
+    setup.sh        — container start, bootstrap wait, fixture seeding
+    teardown.sh     — container stop, log collection, temp file cleanup
+    seed_fixtures.sh — fixture seeding (runs inside container)
+    fixtures/
+      templates.json            — machines, test suites, products, job group
+      scenario-definitions.yaml — job scheduling YAML for POST /api/v1/isos
   fuzz/
     fuzz_ini.zig    — AFL++ harness: INI config parser
     fuzz_cli.zig    — AFL++ harness: CLI arg parser + jsonToFormEncoded

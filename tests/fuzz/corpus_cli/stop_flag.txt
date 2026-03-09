@@ -1,0 +1,7 @@
+openQAclient
+--host
+http://localhost
+--
+api
+jobs/overview
+state=running

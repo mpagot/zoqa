@@ -1,0 +1,5 @@
+openQAclient
+--delete
+--host
+openqa.suse.de
+api/v1/jobs/456

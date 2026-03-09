@@ -1,0 +1,3 @@
+openQAclient
+--o3
+api/v1/machines

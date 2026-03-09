@@ -1,0 +1,3 @@
+KEY
+SECRET
+/api/v1/jobs?name=test%20job&suite=textmode~extra

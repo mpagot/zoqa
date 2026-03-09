@@ -1,0 +1,3 @@
+openQAclient
+--osd
+api/v1/workers

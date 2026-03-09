@@ -1,0 +1,10 @@
+openQAclient
+--host
+http://localhost
+--param-file
+DISTRI=IGNORED
+---FILECONTENT---
+openSUSE Leap 15.7 & friends=yes%20no
+---FILECONTENTEND---
+api
+isos

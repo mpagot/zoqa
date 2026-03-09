@@ -1,0 +1,10 @@
+openQAclient
+--host
+openqa.suse.de
+--form
+--data
+{"DISTRI":"sle","VERSION":"15-SP7","BUILD":"123.4","ARCH":"x86_64"}
+---DATAFILECONTENT---
+{"extra":"data"}
+---DATAFILECONTENTEND---
+api/v1/isos
