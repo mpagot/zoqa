@@ -104,17 +104,6 @@ fn setupFuzzing(
         },
     });
 
-    // Build a module for src/http_client.zig so fuzz_http.zig can import it
-    // as "http_client".
-    const http_mod = b.createModule(.{
-        .root_source_file = b.path("src/http_client.zig"),
-        .target = b.resolveTargetQuery(.{}),
-        .optimize = .Debug,
-        .imports = &.{
-            .{ .name = "zoqa", .module = lib_mod },
-        },
-    });
-
     // zoqa-fuzz-ini: INI config file parser
     addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-ini", "tests/fuzz/fuzz_ini.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },
@@ -127,7 +116,7 @@ fn setupFuzzing(
 
     // zoqa-fuzz-http: parseLinkHeader + JSON pretty-print path
     addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-http", "tests/fuzz/fuzz_http.zig", &.{
-        .{ .name = "http_client", .module = http_mod },
+        .{ .name = "zoqa", .module = lib_mod },
     });
 
     // zoqa-fuzz-auth: HMAC-SHA1 signing + URL normalization

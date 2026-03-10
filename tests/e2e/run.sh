@@ -107,6 +107,34 @@ if [[ ! -f "zig-out/bin/zoqa" && "$DRY_RUN" == "false" ]]; then
 	exit 1
 fi
 
+# Podman sanity check — verify podman is usable before spending time on the
+# openQA container setup.
+#
+# NOTE on BoltDB warnings: on some systems (e.g. older Podman installations
+# that have not yet been migrated to SQLite) every `podman` invocation emits a
+# deprecation warning to stderr:
+#
+#   level=warning msg="The deprecated BoltDB database driver is in use..."
+#
+# This is a Podman-level issue, not specific to any one container or command —
+# it appears on ALL `podman` calls throughout this script (run, exec, rm, …).
+# It is purely cosmetic and does not affect correctness.  Where test output
+# comparisons are sensitive to stderr noise (e.g. Test 21) stderr is redirected
+# to /dev/null.  To silence it permanently, migrate with:
+#   podman system migrate --migrate-db
+if [[ "$DRY_RUN" == "false" ]]; then
+	if ! podman info >/dev/null 2>&1; then
+		echo "Error: 'podman info' failed — is the Podman daemon running?" >&2
+		exit 1
+	fi
+	# Quick smoke-test: run a minimal container and confirm it exits cleanly.
+	if ! podman run --rm busybox true >/dev/null 2>&1; then
+		echo "Error: podman run smoke-test failed — check Podman installation." >&2
+		echo "       Run 'podman run --rm busybox true' manually to diagnose." >&2
+		exit 1
+	fi
+fi
+
 # -----------------------------------------------------------------------------
 # Container Setup
 # -----------------------------------------------------------------------------
@@ -215,7 +243,9 @@ run_comparison() {
 		"$expected_exit" "$grep_pattern"
 }
 
-# Diff test: same output expected, failure is a soft WARN (not a hard FAIL).
+# Diff test: same output expected, failure is a hard FAIL.
+# Both outputs are normalised to end with exactly one newline before diffing,
+# so a trailing-newline difference between Perl and Zig is not flagged.
 run_diff_test() {
 	local label=$1
 	local api_args=$2
@@ -229,12 +259,16 @@ run_diff_test() {
 		>test_output_zig.log 2>/dev/null
 	set -e
 
-	if diff -u test_output_perl.log test_output_zig.log >test_output_diff.log 2>&1; then
+	# Normalise: strip all trailing newlines then add exactly one.
+	{ printf '%s\n' "$(cat test_output_perl.log)"; } >test_output_perl_norm.log
+	{ printf '%s\n' "$(cat test_output_zig.log)"; } >test_output_zig_norm.log
+
+	if diff -u test_output_perl_norm.log test_output_zig_norm.log >test_output_diff.log 2>&1; then
 		echo "PASS (outputs identical)"
 	else
-		echo "WARN: Perl and Zig outputs differ (soft failure — not counted as FAIL):"
+		echo "FAIL: Perl and Zig outputs differ:"
 		cat test_output_diff.log
-		warned_tests=$((warned_tests + 1))
+		failed_tests=$((failed_tests + 1))
 	fi
 }
 
@@ -293,7 +327,7 @@ run_test "ZIG : Invalid Host" "$ZIG_EXE --host http://localhost:12345 api jobs/o
 run_test "ZIG : --pretty" "$ZIG_EXE --host http://localhost api --pretty jobs/overview" 0
 
 # =============================================================================
-# Tests 13–20: New coverage using seeded data
+# Tests 13–21: New coverage using seeded data
 # =============================================================================
 
 # Test 13: GET jobs/overview returns non-empty list after seeding
@@ -306,19 +340,30 @@ run_comparison "GET jobs/$JOB_ID (nested object)" "" \
 # Test 15: GET machines?limit=2 with --links triggers the Link pagination header
 # We seeded 3 machines; requesting limit=2 should yield a Link: rel="next" header.
 # parseLinkHeader formats output as "next: <url>" per link.
-run_test "ZIG : --links pagination header" \
-	"$ZIG_EXE --host http://localhost api --links 'machines?limit=2'" \
-	0 'next:'
+echo "--- Test: ZIG : --links and follow pagination ---"
+container_exec bash -c "$ZIG_EXE --host http://localhost api --links 'machines?limit=2'" >test_pagination.log 2>&1
+if grep -q "next:" test_pagination.log; then
+	NEXT_URL=$(grep "^next: " test_pagination.log | cut -d' ' -f2 | tr -d '\r')
+	echo "Found next URL: $NEXT_URL"
+	# Call again with the next URL to verify it returns the remaining data
+	run_test "ZIG : Follow pagination link" "$ZIG_EXE --host http://localhost api '$NEXT_URL'" 0 '"name":"uefi"'
+else
+	echo "FAIL: next link not found in output"
+	cat test_pagination.log
+	failed_tests=$((failed_tests + 1))
+fi
 
 # Test 16: --verbose on a real endpoint shows HTTP response headers
 run_test "ZIG : --verbose shows HTTP headers" \
 	"$ZIG_EXE --host http://localhost api --verbose jobs/overview" \
 	0 "HTTP/"
 
-# Test 17: --pretty on a non-empty response produces indented JSON
+# Test 17: --pretty on a non-empty response produces indented JSON.
+# The pattern "^  " matches any line with a 2-space indent — present in all
+# pretty-printed JSON but never in the compact single-line output.
 run_test "ZIG : --pretty (non-empty)" \
 	"$ZIG_EXE --host http://localhost api --pretty jobs/overview" \
-	0 "simple_boot"
+	0 "^  "
 
 # Test 18: DELETE a real asset (successful authenticated DELETE)
 # Perl and Zig each get their own asset to avoid ordering conflicts.
@@ -341,8 +386,30 @@ fi
 # Test 19: GET job_groups returns the seeded group
 run_comparison "GET job_groups (seeded group present)" "" "job_groups" 0 '"example"'
 
-# Test 20: Perl vs Zig output diff on a real nested object (soft WARN on mismatch)
+# Test 20: Perl vs Zig output parity on a real nested object (hard FAIL on mismatch)
 run_diff_test "GET jobs/$JOB_ID output parity" "jobs/$JOB_ID"
+
+# Test 21: Relative and absolute path produce identical output
+# Verifies that `zoqa api jobs/$JOB_ID` and
+# `zoqa api http://localhost/api/v1/jobs/$JOB_ID` return the same body.
+#
+# stderr is redirected to /dev/null for both invocations to suppress the
+# per-call BoltDB deprecation warning that podman emits on affected systems
+# (see the "Podman sanity check" comment above).  The warning timestamp
+# differs between the two calls, which would cause a spurious diff failure
+# if stderr were captured.
+echo "--- Test: ZIG : relative vs absolute path parity ---"
+container_exec bash -c "$ZIG_EXE --host http://localhost api jobs/$JOB_ID" \
+	>test_relative.log 2>/dev/null
+container_exec bash -c "$ZIG_EXE api 'http://localhost/api/v1/jobs/$JOB_ID'" \
+	>test_absolute.log 2>/dev/null
+if diff -u test_relative.log test_absolute.log >test_path_parity_diff.log 2>&1; then
+	echo "PASS (relative and absolute outputs identical)"
+else
+	echo "FAIL: relative and absolute path outputs differ"
+	cat test_path_parity_diff.log
+	failed_tests=$((failed_tests + 1))
+fi
 
 # =============================================================================
 # Summary

@@ -18,7 +18,7 @@
 // parseLinkHeader; the second part is fed to std.json.parseFromSlice. Either
 // section may be empty — the harness handles that gracefully.
 const std = @import("std");
-const http_client = @import("http_client");
+const zoqa = @import("zoqa");
 
 export fn zig_fuzz_init() void {}
 
@@ -39,7 +39,7 @@ export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     // Target 1: RFC 5988 Link header parser.
     // Use a null writer so the fuzzer doesn't spend time on write syscalls.
     if (link_section.len > 0) {
-        http_client.parseLinkHeader(link_section, std.io.null_writer);
+        zoqa.parseLinkHeader(link_section, std.io.null_writer);
     }
 
     // Target 2: JSON response body pretty-printing path (--pretty flag path).

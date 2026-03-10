@@ -1,30 +1,84 @@
 const std = @import("std");
-const config = @import("zoqa").config;
-const auth = @import("zoqa").auth;
+const config = @import("config.zig");
+const auth = @import("auth.zig");
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+/// Response returned by execute(). Caller must call deinit() to free memory.
+pub const APIResponse = struct {
+    allocator: std.mem.Allocator,
+    status: std.http.Status,
+    /// Decompressed response body. Always allocated; never null.
+    body: []u8,
+    /// Value of the Content-Type header, if present. Allocated.
+    content_type: ?[]u8,
+    /// Value of the Link header, if present. Allocated.
+    link: ?[]u8,
+
+    pub fn deinit(self: APIResponse) void {
+        if (self.content_type) |ct| self.allocator.free(ct);
+        if (self.link) |l| self.allocator.free(l);
+        self.allocator.free(self.body);
+    }
+
+    /// Returns 0 for 2xx status codes, 1 otherwise.
+    pub fn exitCode(self: APIResponse) u8 {
+        const s = @intFromEnum(self.status);
+        return if (s >= 200 and s < 300) 0 else 1;
+    }
+};
 
 pub const Request = struct {
     allocator: std.mem.Allocator,
     method: std.http.Method,
     url: []const u8,
-    headers: []std.http.Header,
+    headers: []const std.http.Header,
     body: ?[]const u8,
     credentials: ?config.Credentials,
     retries: u32,
-    verbose: bool,
     quiet: bool,
-    links: bool,
-    pretty: bool,
 };
 
-pub fn execute(req: Request) !u8 {
-    var client = std.http.Client{ .allocator = req.allocator };
-    defer client.deinit();
+// ---------------------------------------------------------------------------
+// Normalize path+query for HMAC signing: %20 → +, ~ → %7E
+// ---------------------------------------------------------------------------
 
-    // A single stdout writer with a stack buffer, reused across the retry loop.
-    var stdout_buf: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-    const stdout = &stdout_writer.interface;
+/// Normalize a URL path+query string for HMAC-SHA1 signing.
+/// Rewrites %20 → + and ~ → %7E.
+/// Output is written to `writer`.
+pub fn normalizePathQuery(input: []const u8, writer: anytype) !void {
+    var i: usize = 0;
+    while (i < input.len) {
+        if (i + 2 < input.len and std.mem.eql(u8, input[i .. i + 3], "%20")) {
+            try writer.writeByte('+');
+            i += 3;
+        } else if (input[i] == '~') {
+            try writer.print("%7E", .{});
+            i += 1;
+        } else {
+            try writer.writeByte(input[i]);
+            i += 1;
+        }
+    }
+}
 
+// ---------------------------------------------------------------------------
+// execute — injectable HTTP engine
+// ---------------------------------------------------------------------------
+
+/// Perform an HTTP request using the provided client.
+///
+/// `client` must implement a `.request(method, uri, options)` method
+/// compatible with `std.http.Client.request`. Pass a pointer to a real
+/// `std.http.Client` for production, or a `MockClient` for tests.
+///
+/// Returns an `APIResponse` that the caller must `deinit()`.
+/// On connection or send errors (after exhausting retries), returns error
+/// rather than an `APIResponse` with a non-2xx status, so that callers can
+/// distinguish network failures from HTTP-level failures.
+pub fn execute(req: Request, client: anytype) !APIResponse {
     var attempt: u32 = 0;
     while (true) : (attempt += 1) {
         // Build the header list for this attempt (unmanaged ArrayList)
@@ -45,15 +99,9 @@ pub fn execute(req: Request) !u8 {
             try headers.append(req.allocator, .{ .name = "Accept", .value = "application/json" });
         }
 
-        // Disable compression: std.http.Client does not decompress; request
-        // raw bytes so the response body is always human-readable text.
+        // Disable compression: request raw bytes so the response body is
+        // always human-readable text. We still handle gzip defensively.
         try headers.append(req.allocator, .{ .name = "Accept-Encoding", .value = "identity" });
-
-        // if (req.body) |b| {
-        //     var cl_buf: [32]u8 = undefined;
-        //     const cl_val = try std.fmt.bufPrint(&cl_buf, "{d}", .{b.len});
-        //     try headers.append(req.allocator, .{ .name = "Content-Length", .value = try req.allocator.dupe(u8, cl_val) });
-        // }
 
         const uri = try std.Uri.parse(req.url);
 
@@ -75,40 +123,26 @@ pub fn execute(req: Request) !u8 {
                 try w.print("?{s}", .{q.percent_encoded});
             }
 
-            // 2. Normalize the string: %20 -> +, ~ -> %7E
-            // Copy to temporary slice then rewrite into msg_buf
+            // 2. Normalize: %20 → +, ~ → %7E
             const raw_path_query = try msg_buf.toOwnedSlice(req.allocator);
             defer req.allocator.free(raw_path_query);
             msg_buf.clearRetainingCapacity();
 
-            var i: usize = 0;
-            while (i < raw_path_query.len) {
-                if (i + 2 < raw_path_query.len and std.mem.eql(u8, raw_path_query[i .. i + 3], "%20")) {
-                    try w.writeByte('+');
-                    i += 3;
-                } else if (raw_path_query[i] == '~') {
-                    try w.print("%7E", .{});
-                    i += 1;
-                } else {
-                    try w.writeByte(raw_path_query[i]);
-                    i += 1;
-                }
-            }
+            try normalizePathQuery(raw_path_query, w);
 
-            // 3. Generate the hash. buildAuthHeaders will append the timestamp to its own HMAC update.
+            // 3. Generate auth headers
             const auth_headers = auth.buildAuthHeaders(
                 creds.key,
                 creds.secret,
-                msg_buf.items, // Only normalized path+query
+                msg_buf.items,
                 timestamp_str,
                 &hash_buf,
             );
-
             try headers.appendSlice(req.allocator, &auth_headers);
         }
 
         // ----------------------------------------------------------------
-        // Use client.request() so we can inspect response headers.
+        // Issue the request via the injected client
         // ----------------------------------------------------------------
         var http_req = client.request(req.method, uri, .{
             .extra_headers = headers.items,
@@ -120,13 +154,12 @@ pub fn execute(req: Request) !u8 {
             if (!req.quiet) {
                 std.debug.print("Connection error: {s}\n", .{@errorName(err)});
             }
-            return 1;
+            return err;
         };
         defer http_req.deinit();
 
         // Send request (with or without body)
         if (req.body) |body_bytes| {
-            // sendBodyComplete requires []u8 (mutable); duplicate into mutable memory
             const body_mut = try req.allocator.dupe(u8, body_bytes);
             defer req.allocator.free(body_mut);
             http_req.sendBodyComplete(body_mut) catch |err| {
@@ -135,7 +168,7 @@ pub fn execute(req: Request) !u8 {
                     continue;
                 }
                 if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
-                return 1;
+                return err;
             };
         } else if (req.method.requestHasBody()) {
             http_req.sendBodyComplete(&.{}) catch |err| {
@@ -144,7 +177,7 @@ pub fn execute(req: Request) !u8 {
                     continue;
                 }
                 if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
-                return 1;
+                return err;
             };
         } else {
             http_req.sendBodiless() catch |err| {
@@ -153,7 +186,7 @@ pub fn execute(req: Request) !u8 {
                     continue;
                 }
                 if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
-                return 1;
+                return err;
             };
         }
 
@@ -165,7 +198,7 @@ pub fn execute(req: Request) !u8 {
                 continue;
             }
             if (!req.quiet) std.debug.print("Response error: {s}\n", .{@errorName(err)});
-            return 1;
+            return err;
         };
 
         const status_uint = @intFromEnum(response.head.status);
@@ -178,45 +211,37 @@ pub fn execute(req: Request) !u8 {
             }
         }
 
-        // Single pass over response headers to collect all needed information
-        // before the response head bytes (borrowed from redirect_buf) may
-        // become inaccessible after the body read.
+        // Single pass over response headers to collect needed information
+        var content_type_buf: ?[]u8 = null;
+        var link_buf: ?[]u8 = null;
         var content_type_is_json = false;
         var is_gzip = false;
 
-        if (req.verbose) {
-            try stdout.print("HTTP/1.1 {d} {s}\n", .{
-                status_uint,
-                response.head.status.phrase() orelse "",
-            });
-        }
-
         var hit = response.head.iterateHeaders();
         while (hit.next()) |hdr| {
-            if (req.verbose) {
-                try stdout.print("{s}: {s}\n", .{ hdr.name, hdr.value });
-            }
-            if (req.links and std.ascii.eqlIgnoreCase(hdr.name, "Link")) {
-                parseLinkHeader(hdr.value, stdout);
+            if (std.ascii.eqlIgnoreCase(hdr.name, "Link") and link_buf == null) {
+                link_buf = try req.allocator.dupe(u8, hdr.value);
             }
             if (std.ascii.eqlIgnoreCase(hdr.name, "Content-Encoding") and
                 std.ascii.eqlIgnoreCase(std.mem.trim(u8, hdr.value, " \t"), "gzip"))
             {
                 is_gzip = true;
             }
-            if (std.ascii.eqlIgnoreCase(hdr.name, "Content-Type") and
-                std.mem.indexOf(u8, hdr.value, "application/json") != null)
-            {
-                content_type_is_json = true;
+            if (std.ascii.eqlIgnoreCase(hdr.name, "Content-Type")) {
+                if (content_type_buf == null) {
+                    content_type_buf = try req.allocator.dupe(u8, hdr.value);
+                }
+                if (std.mem.indexOf(u8, hdr.value, "application/json") != null) {
+                    content_type_is_json = true;
+                }
             }
         }
-
-        if (req.verbose) {
-            try stdout.print("\n", .{});
-            try stdout.flush();
+        errdefer {
+            if (content_type_buf) |ct| req.allocator.free(ct);
+            if (link_buf) |l| req.allocator.free(l);
         }
 
-        // Also check the structured content_type field as a fallback
+        // Fallback: check structured content_type field
         if (!content_type_is_json) {
             if (response.head.content_type) |ct| {
                 content_type_is_json = std.mem.indexOf(u8, ct, "application/json") != null;
@@ -238,17 +263,16 @@ pub fn execute(req: Request) !u8 {
         _ = body_reader.streamRemaining(&body_aw.writer) catch |err| switch (err) {
             error.ReadFailed => {
                 if (!req.quiet) std.debug.print("Read error\n", .{});
-                return 1;
+                return err;
             },
             else => |e| return e,
         };
 
         const raw_body = body_aw.written();
 
-        // Decompress gzip body if Content-Encoding: gzip (server may ignore
-        // Accept-Encoding: identity and compress anyway).
+        // Decompress gzip body if Content-Encoding: gzip
         var decompressed_buf: ?[]u8 = null;
-        defer if (decompressed_buf) |b| req.allocator.free(b);
+        errdefer if (decompressed_buf) |b| req.allocator.free(b);
 
         const body_bytes: []const u8 = if (is_gzip) blk: {
             var in: std.Io.Reader = .fixed(raw_body);
@@ -257,29 +281,28 @@ pub fn execute(req: Request) !u8 {
             defer out.deinit();
             _ = decompress.reader.streamRemaining(&out.writer) catch |err| {
                 if (!req.quiet) std.debug.print("Decompression error: {s}\n", .{@errorName(err)});
-                return 1;
+                return err;
             };
             decompressed_buf = try req.allocator.dupe(u8, out.written());
             break :blk decompressed_buf.?;
         } else raw_body;
 
-        if (req.pretty and content_type_is_json) {
-            var parsed = std.json.parseFromSlice(std.json.Value, req.allocator, body_bytes, .{}) catch null;
-            if (parsed) |*p| {
-                defer p.deinit();
-                try std.json.Stringify.value(p.value, .{ .whitespace = .indent_2 }, stdout);
-                try stdout.print("\n", .{});
-            } else {
-                try stdout.print("{s}\n", .{body_bytes});
-            }
-        } else {
-            try stdout.print("{s}\n", .{body_bytes});
-        }
-        try stdout.flush();
+        // Allocate owned copy of body
+        const owned_body = try req.allocator.dupe(u8, body_bytes);
 
-        return if (status_uint >= 200 and status_uint < 300) 0 else 1;
+        return APIResponse{
+            .allocator = req.allocator,
+            .status = response.head.status,
+            .body = owned_body,
+            .content_type = content_type_buf,
+            .link = link_buf,
+        };
     }
 }
+
+// ---------------------------------------------------------------------------
+// RFC 5988 Link header parser
+// ---------------------------------------------------------------------------
 
 /// Parse a single RFC 5988 Link header value and write each link to `writer`.
 /// Format: <url>; rel="name", <url2>; rel="name2"
@@ -316,6 +339,10 @@ pub fn parseLinkHeader(value: []const u8, writer: anytype) void {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Retry sleep
+// ---------------------------------------------------------------------------
+
 fn sleepForRetry(attempt: u32) !void {
     const base_str = std.posix.getenv("OPENQA_CLI_RETRY_SLEEP_TIME_S") orelse "3";
     const base: f64 = std.fmt.parseFloat(f64, base_str) catch 3.0;
@@ -328,13 +355,17 @@ fn sleepForRetry(attempt: u32) !void {
     std.Thread.sleep(delay_ns);
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 test "parseLinkHeader: basic parsing" {
     const testing = std.testing;
-    var list = std.ArrayList(u8).init(testing.allocator);
-    defer list.deinit();
+    var list: std.ArrayList(u8) = .{};
+    defer list.deinit(testing.allocator);
 
     const header = "<http://example.com/api/v1/jobs?offset=0>; rel=\"first\", <http://example.com/api/v1/jobs?offset=10>; rel=\"next\"";
-    parseLinkHeader(header, list.writer());
+    parseLinkHeader(header, list.writer(testing.allocator));
 
     try testing.expectEqualStrings(
         "first: http://example.com/api/v1/jobs?offset=0\nnext: http://example.com/api/v1/jobs?offset=10\n",
@@ -342,52 +373,97 @@ test "parseLinkHeader: basic parsing" {
     );
 }
 
-test "execute: bodiless POST/PUT/PATCH does not panic" {
+test "normalizePathQuery: %20 becomes plus, tilde becomes %7E" {
+    const testing = std.testing;
+    var buf: std.ArrayList(u8) = .{};
+    defer buf.deinit(testing.allocator);
+    try normalizePathQuery("/api/v1/jobs?name=hello%20world&t=~1", buf.writer(testing.allocator));
+    try testing.expectEqualStrings("/api/v1/jobs?name=hello+world&t=%7E1", buf.items);
+}
+
+test "normalizePathQuery: no substitutions needed" {
+    const testing = std.testing;
+    var buf: std.ArrayList(u8) = .{};
+    defer buf.deinit(testing.allocator);
+    try normalizePathQuery("/api/v1/jobs?limit=10", buf.writer(testing.allocator));
+    try testing.expectEqualStrings("/api/v1/jobs?limit=10", buf.items);
+}
+
+test "execute: MockClient returns APIResponse" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    // Start a temporary listener to allow std.http.Client to connect.
-    // This allows us to reach the sendBodyComplete/sendBodiless calls.
-    const address = try std.net.Address.parseIp("127.0.0.1", 0);
-    var listener = try address.listen(.{ .reuse_address = true });
-    defer listener.deinit();
+    // A minimal mock that simulates a 200 OK JSON response.
+    const MockClient = struct {
+        const Self = @This();
 
-    const port = listener.listen_address.getPosixPort();
-    var url_buf: [64]u8 = undefined;
-    const url = try std.fmt.bufPrint(&url_buf, "http://127.0.0.1:{d}/api/v1/jobs", .{port});
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_type: ?[]const u8 = "application/json",
 
-    // Accept one connection in a thread to prevent hanging
-    const handle = try std.Thread.spawn(.{}, struct {
-        fn run(l: *std.net.Server) void {
-            var conn = l.accept() catch return;
-            defer conn.stream.close();
-            // Just read a bit and close; std.http.Client will fail with EndOfStream or Reset,
-            // which is fine as long as we don't panic.
-            var buf: [1024]u8 = undefined;
-            _ = conn.stream.read(&buf) catch {};
-        }
-    }.run, .{&listener});
-    defer handle.join();
+            const HeaderIterator = struct {
+                done: bool = false,
+                pub fn next(self: *HeaderIterator) ?std.http.Header {
+                    if (self.done) return null;
+                    self.done = true;
+                    return .{ .name = "Content-Type", .value = "application/json" };
+                }
+            };
 
-    const methods = [_]std.http.Method{ .POST, .PUT, .PATCH };
-    for (methods) |m| {
-        const req = Request{
-            .allocator = allocator,
-            .method = m,
-            .url = url,
-            .headers = &.{},
-            .body = null,
-            .credentials = null,
-            .retries = 0,
-            .verbose = false,
-            .quiet = true,
-            .links = false,
-            .pretty = false,
+            pub fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
         };
 
-        // If it panics, the test runner will report it.
-        // We don't care about the exit code/error (it will likely be 1/EndOfStream),
-        // we just want to ensure it doesn't crash.
-        _ = try execute(req);
-    }
+        const MockReader = struct {
+            done: bool = false,
+            pub fn streamRemaining(self: *MockReader, w: anytype) anyerror!usize {
+                if (self.done) return 0;
+                self.done = true;
+                const body = "{\"jobs\":[]}";
+                try w.writeAll(body);
+                return body.len;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn sendBodyComplete(_: *MockResponse, _: []u8) !void {}
+
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        response: MockResponse = .{},
+
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            return &self.response;
+        }
+    };
+
+    var mock: MockClient = .{};
+    const req = Request{
+        .allocator = allocator,
+        .method = .GET,
+        .url = "http://localhost/api/v1/jobs",
+        .headers = &.{},
+        .body = null,
+        .credentials = null,
+        .retries = 0,
+        .quiet = true,
+    };
+
+    const resp = try execute(req, &mock);
+    defer resp.deinit();
+
+    try testing.expect(resp.exitCode() == 0);
+    try testing.expectEqualStrings("{\"jobs\":[]}", resp.body);
 }

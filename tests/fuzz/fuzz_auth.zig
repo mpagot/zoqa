@@ -27,7 +27,8 @@
 //   3. URL normalization — %20→+, ~→%7E rewriting (same logic as http_client.zig)
 //
 const std = @import("std");
-const auth = @import("zoqa").auth;
+const zoqa = @import("zoqa");
+const auth = zoqa.auth;
 
 export fn zig_fuzz_init() void {}
 
@@ -63,7 +64,6 @@ export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 
     // -------------------------------------------------------------------
     // Target 2: URL normalization (%20 → +, ~ → %7E)
-    // This mirrors the exact logic in http_client.zig lines 84-96.
     // -------------------------------------------------------------------
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -71,20 +71,7 @@ export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 
     var normalized: std.ArrayList(u8) = .{};
     const w = normalized.writer(allocator);
-
-    var i: usize = 0;
-    while (i < raw_path_query.len) {
-        if (i + 2 < raw_path_query.len and std.mem.eql(u8, raw_path_query[i .. i + 3], "%20")) {
-            w.writeByte('+') catch return;
-            i += 3;
-        } else if (raw_path_query[i] == '~') {
-            w.print("%7E", .{}) catch return;
-            i += 1;
-        } else {
-            w.writeByte(raw_path_query[i]) catch return;
-            i += 1;
-        }
-    }
+    zoqa.normalizePathQuery(raw_path_query, w) catch return;
 
     // -------------------------------------------------------------------
     // Target 3: buildAuthHeaders with normalized path+query
