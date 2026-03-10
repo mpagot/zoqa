@@ -1,6 +1,6 @@
 // Fuzz harness for HTTP response data parsers:
-//   - parseLinkHeader      (src/http_client.zig): parses RFC 5988 Link headers
-//   - std.json.parseFromSlice:                    parses JSON response body (--pretty path)
+//   - parseLinkHeader      (src/root.zig): parses RFC 5988 Link headers
+//   - std.json.parseFromSlice:             parses JSON response body (--pretty path)
 //
 // Corpus format — two sections separated by a blank line:
 //
@@ -37,9 +37,10 @@ export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     const json_section: []const u8 = if (split_pos) |p| input[p + separator.len ..] else "";
 
     // Target 1: RFC 5988 Link header parser.
-    // Use a null writer so the fuzzer doesn't spend time on write syscalls.
+    // Consume all entries so the fuzzer exercises the full parsing logic.
     if (link_section.len > 0) {
-        zoqa.parseLinkHeader(link_section, std.io.null_writer);
+        var it = zoqa.parseLinkHeader(link_section);
+        while (it.next()) |_| {}
     }
 
     // Target 2: JSON response body pretty-printing path (--pretty flag path).

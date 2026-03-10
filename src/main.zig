@@ -622,10 +622,6 @@ test "formEncodeAppend: all special bytes percent-encoded" {
     try std.testing.expectEqualStrings("%00%01%FF", buf.items);
 }
 
-// ---------------------------------------------------------------------------
-// buildRequest — extracted post-parseArgs processing (fuzzable)
-// ---------------------------------------------------------------------------
-
 /// Post-parseArgs processing result, ready to pass to `zoqa.openQAReq()`.
 ///
 /// `buildRequest` extracts and validates CLI arguments into the fields needed
@@ -674,181 +670,54 @@ const RequestConfig = struct {
     }
 };
 
-/// Logic for merging credentials from multiple sources with field-level priority.
-/// Priority: CLI > ENV > Config File.
-/// Returns allocated Credentials on success (caller owns fields).
-fn mergeCredentials(
-    allocator: std.mem.Allocator,
-    cli: struct { key: ?[]const u8, secret: ?[]const u8 },
-    env: struct { key: ?[]const u8, secret: ?[]const u8 },
-    conf: ?config.Credentials,
-) !?config.Credentials {
-    const key = cli.key orelse env.key orelse if (conf) |c| c.key else null;
-    const secret = cli.secret orelse env.secret orelse if (conf) |c| c.secret else null;
-
-    if (key != null and secret != null) {
-        return config.Credentials{
-            .key = try allocator.dupe(u8, key.?),
-            .secret = try allocator.dupe(u8, secret.?),
-        };
-    }
-    return null;
-}
-
-test "mergeCredentials: field-level priority behavior" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    // Scenario 1: Partial CLI override (Secret only)
-    // Should combine CLI secret with Config key
-    {
-        const res = try mergeCredentials(
-            allocator,
-            .{ .key = null, .secret = "CLI_SECRET" },
-            .{ .key = null, .secret = null },
-            .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
-        );
-        try testing.expect(res != null);
-        defer {
-            allocator.free(res.?.key);
-            allocator.free(res.?.secret);
-        }
-        try testing.expectEqualStrings("CONF_KEY", res.?.key);
-        try testing.expectEqualStrings("CLI_SECRET", res.?.secret);
-    }
-
-    // Scenario 2: CLI overrides ENV
-    {
-        const res = try mergeCredentials(
-            allocator,
-            .{ .key = "CLI_KEY", .secret = null },
-            .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
-            null,
-        );
-        try testing.expect(res != null);
-        defer {
-            allocator.free(res.?.key);
-            allocator.free(res.?.secret);
-        }
-        try testing.expectEqualStrings("CLI_KEY", res.?.key);
-        try testing.expectEqualStrings("ENV_SECRET", res.?.secret);
-    }
-
-    // Scenario 3: All null returns null
-    {
-        const res = try mergeCredentials(
-            allocator,
-            .{ .key = null, .secret = null },
-            .{ .key = null, .secret = null },
-            null,
-        );
-        try testing.expect(res == null);
-    }
-}
-
-test "mergeCredentials: env-only fallback (no CLI, no conf)" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    const res = try mergeCredentials(
-        allocator,
-        .{ .key = null, .secret = null },
-        .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
-        null,
-    );
-    try testing.expect(res != null);
-    defer {
-        allocator.free(res.?.key);
-        allocator.free(res.?.secret);
-    }
-    try testing.expectEqualStrings("ENV_KEY", res.?.key);
-    try testing.expectEqualStrings("ENV_SECRET", res.?.secret);
-}
-
-test "mergeCredentials: conf-only fallback (no CLI, no env)" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    const res = try mergeCredentials(
-        allocator,
-        .{ .key = null, .secret = null },
-        .{ .key = null, .secret = null },
-        .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
-    );
-    try testing.expect(res != null);
-    defer {
-        allocator.free(res.?.key);
-        allocator.free(res.?.secret);
-    }
-    try testing.expectEqualStrings("CONF_KEY", res.?.key);
-    try testing.expectEqualStrings("CONF_SECRET", res.?.secret);
-}
-
-test "mergeCredentials: key from env, secret from conf" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    const res = try mergeCredentials(
-        allocator,
-        .{ .key = null, .secret = null },
-        .{ .key = "ENV_KEY", .secret = null },
-        .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
-    );
-    try testing.expect(res != null);
-    defer {
-        allocator.free(res.?.key);
-        allocator.free(res.?.secret);
-    }
-    try testing.expectEqualStrings("ENV_KEY", res.?.key);
-    try testing.expectEqualStrings("CONF_SECRET", res.?.secret);
-}
-
-test "mergeCredentials: partial key only returns null (no secret anywhere)" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    const res = try mergeCredentials(
-        allocator,
-        .{ .key = "CLI_KEY", .secret = null },
-        .{ .key = null, .secret = null },
-        null,
-    );
-    try testing.expect(res == null);
-}
-
-test "mergeCredentials: partial secret only returns null (no key anywhere)" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    const res = try mergeCredentials(
-        allocator,
-        .{ .key = null, .secret = "CLI_SECRET" },
-        .{ .key = null, .secret = null },
-        null,
-    );
-    try testing.expect(res == null);
-}
-
-/// Build a RequestConfig from parsed arguments.
+/// Transform parsed CLI arguments into a `RequestConfig` ready for `zoqa.openQAReq()`.
 ///
-/// This function performs all post-parseArgs processing **except** URL
-/// construction (which is owned by `zoqa.openQAReq`):
-///   - positional KEY=VALUE encoding into a params string,
-///   - --param-file reading and encoding,
-///   - host resolution (--host / --osd / --o3 / --odn → base URL),
-///   - HTTP method parsing,
-///   - body assembly (--data, --data-file, --form),
-///   - header construction (--header, --json, --form content-type).
+/// This is the main post-`parseArgs` processing step. It performs everything
+/// **except** final URL assembly and HTTP execution (both owned by `openQAReq`):
+///   - Positional KEY=VALUE encoding into a percent-encoded params string.
+///   - `--param-file` file reading, trimming, and encoding.
+///   - Host resolution (`--host` / `--osd` / `--o3` / `--odn` → base URL).
+///   - HTTP method string → `std.http.Method` parsing (case-insensitive).
+///   - Body assembly from `--data`, `--data-file`, or `--form`.
+///   - Header construction from `--header`, `--json`, and `--form` content-type.
 ///
 /// For **absolute URLs** passed as the API path (e.g.
 /// `zoqa api https://host/api/v1/jobs`), the function splits the URL into
 /// `host` (scheme + authority) and `path` (relative, after `/api/v1/`).
 ///
-/// `data_file_content` is the pre-read content of --data-file (or stdin).
-/// Pass null when --data-file was not supplied. The caller is responsible for
-/// reading the file/stdin before calling this function — buildRequest itself
-/// does no filesystem I/O for body data. It DOES read --param-file files from
-/// the filesystem.
+/// **Side effects:** Reads `--param-file` targets from the filesystem via
+/// `std.fs.cwd().readFileAlloc`. All other processing is pure.
+///
+/// Arguments:
+///   - `allocator`: Used for all internal allocations (param encoding buffer,
+///     form body conversion, host/path buffers, header list). Owned buffers are
+///     tracked inside the returned `RequestConfig` and freed by its `deinit`.
+///   - `args`: Parsed CLI arguments from `parseArgs`. Borrowed — the caller
+///     must keep it alive (and its backing slices valid) for the lifetime of
+///     the returned `RequestConfig`, since string fields may alias into it.
+///   - `data_file_content`: Pre-read content of `--data-file` (or stdin).
+///     Pass `null` when `--data-file` was not supplied. The caller reads
+///     the file/stdin before calling this function because `--data-file`
+///     supports `-` for stdin — a blocking, consume-once, process-global
+///     operation that cannot be repeated inside a fuzz harness or unit test.
+///     By contrast, `--param-file` is always a named path (no stdin), so it
+///     is read internally via `readFileAlloc`; the fuzz harness compensates
+///     with a temp-file rewrite.
+///
+/// Returns: A `RequestConfig` whose fields are ready to pass to
+/// `zoqa.openQAReq()`. The caller owns the result and must call
+/// `deinit(allocator)` to release internally-allocated buffers.
+///
+/// Errors:
+///   - `error.MissingPath` — `args.kv_params` is empty (no API path provided).
+///   - `error.FormRequiresData` — `--form` was set but no body source
+///     (`--data` or `--data-file`) was provided.
+///   - `error.FormRequiresJsonObject` — `--form` body is not a JSON object.
+///   - `error.FormUnsupportedValueType` — `--form` JSON contains nested
+///     arrays or objects.
+///   - `error.PathContainsNullByte` — a `--param-file` path contains `\x00`.
+///   - Any error from `std.fs.cwd().readFileAlloc` (param-file I/O),
+///     `std.Uri.parse` (absolute URL), `config.resolveHost`, or allocator OOM.
 pub fn buildRequest(
     allocator: std.mem.Allocator,
     args: *const Args,
@@ -1365,6 +1234,261 @@ test "buildRequest: path with null byte returns error" {
     try std.testing.expectError(error.PathContainsNullByte, buildRequest(allocator, &parsed, null));
 }
 
+/// Logic for merging credentials from multiple sources with field-level priority.
+/// Priority: CLI > ENV > Config File.
+/// Returns allocated Credentials on success (caller owns fields).
+fn mergeCredentials(
+    allocator: std.mem.Allocator,
+    cli: struct { key: ?[]const u8, secret: ?[]const u8 },
+    env: struct { key: ?[]const u8, secret: ?[]const u8 },
+    conf: ?config.Credentials,
+) !?config.Credentials {
+    const key = cli.key orelse env.key orelse if (conf) |c| c.key else null;
+    const secret = cli.secret orelse env.secret orelse if (conf) |c| c.secret else null;
+
+    if (key != null and secret != null) {
+        return config.Credentials{
+            .key = try allocator.dupe(u8, key.?),
+            .secret = try allocator.dupe(u8, secret.?),
+        };
+    }
+    return null;
+}
+
+test "mergeCredentials: field-level priority behavior" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Scenario 1: Partial CLI override (Secret only)
+    // Should combine CLI secret with Config key
+    {
+        const res = try mergeCredentials(
+            allocator,
+            .{ .key = null, .secret = "CLI_SECRET" },
+            .{ .key = null, .secret = null },
+            .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
+        );
+        try testing.expect(res != null);
+        defer {
+            allocator.free(res.?.key);
+            allocator.free(res.?.secret);
+        }
+        try testing.expectEqualStrings("CONF_KEY", res.?.key);
+        try testing.expectEqualStrings("CLI_SECRET", res.?.secret);
+    }
+
+    // Scenario 2: CLI overrides ENV
+    {
+        const res = try mergeCredentials(
+            allocator,
+            .{ .key = "CLI_KEY", .secret = null },
+            .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
+            null,
+        );
+        try testing.expect(res != null);
+        defer {
+            allocator.free(res.?.key);
+            allocator.free(res.?.secret);
+        }
+        try testing.expectEqualStrings("CLI_KEY", res.?.key);
+        try testing.expectEqualStrings("ENV_SECRET", res.?.secret);
+    }
+
+    // Scenario 3: All null returns null
+    {
+        const res = try mergeCredentials(
+            allocator,
+            .{ .key = null, .secret = null },
+            .{ .key = null, .secret = null },
+            null,
+        );
+        try testing.expect(res == null);
+    }
+}
+
+test "mergeCredentials: env-only fallback (no CLI, no conf)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
+        null,
+    );
+    try testing.expect(res != null);
+    defer {
+        allocator.free(res.?.key);
+        allocator.free(res.?.secret);
+    }
+    try testing.expectEqualStrings("ENV_KEY", res.?.key);
+    try testing.expectEqualStrings("ENV_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: conf-only fallback (no CLI, no env)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = null, .secret = null },
+        .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
+    );
+    try testing.expect(res != null);
+    defer {
+        allocator.free(res.?.key);
+        allocator.free(res.?.secret);
+    }
+    try testing.expectEqualStrings("CONF_KEY", res.?.key);
+    try testing.expectEqualStrings("CONF_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: key from env, secret from conf" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = "ENV_KEY", .secret = null },
+        .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
+    );
+    try testing.expect(res != null);
+    defer {
+        allocator.free(res.?.key);
+        allocator.free(res.?.secret);
+    }
+    try testing.expectEqualStrings("ENV_KEY", res.?.key);
+    try testing.expectEqualStrings("CONF_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: partial key only returns null (no secret anywhere)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = "CLI_KEY", .secret = null },
+        .{ .key = null, .secret = null },
+        null,
+    );
+    try testing.expect(res == null);
+}
+
+test "mergeCredentials: partial secret only returns null (no key anywhere)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = "CLI_SECRET" },
+        .{ .key = null, .secret = null },
+        null,
+    );
+    try testing.expect(res == null);
+}
+
+// ---------------------------------------------------------------------------
+// printResponse — format and write HTTP response to stdout/stderr
+// ---------------------------------------------------------------------------
+
+/// Write the HTTP response to stdout (and optionally stderr), implementing
+/// SPEC §9.1 (verbose headers), §9.2 (Link header parsing), and §9.4 (body
+/// output with optional JSON pretty-printing).
+///
+/// This is a pure output helper with no control-flow side effects — it never
+/// calls `std.process.exit`. The caller (`main()`) is responsible for the exit
+/// code.
+///
+/// Every `stdout.print` / `stdout.writeAll` call uses `catch {}` to silently
+/// swallow write errors. This is intentional: when the output is piped into a
+/// process that closes early (e.g. `zoqa ... | head`), the OS delivers SIGPIPE
+/// or returns EPIPE on the next write. Propagating that error would cause the
+/// CLI to exit with a confusing diagnostic; swallowing it produces the same
+/// silent exit behaviour as coreutils.
+///
+/// Arguments:
+///   - `allocator`: Scratch allocator for JSON pretty-print parsing. Only used
+///     when `pretty` is true and the response body is `application/json`.
+///   - `resp`: The HTTP response returned by `zoqa.openQAReq()`. Borrowed —
+///     the caller retains ownership and is responsible for calling `resp.deinit()`.
+///   - `verbose`: When true, print the HTTP status line and Content-Type header
+///     to stdout before the body (SPEC §9.1).
+///   - `quiet`: Currently unused by this function (quiet suppression of error
+///     messages happens at the HTTP layer). Accepted for forward-compatibility
+///     and to keep the call-site expressive.
+///   - `links`: When true and the response contains a Link header, parse it and
+///     print `rel: url` pairs to stderr (SPEC §9.2).
+///   - `pretty`: When true and Content-Type contains `application/json`, parse
+///     the body and re-serialize with 2-space indentation (SPEC §9.4).
+fn printResponse(
+    allocator: std.mem.Allocator,
+    resp: zoqa.APIResponse,
+    verbose: bool,
+    quiet: bool,
+    links: bool,
+    pretty: bool,
+) void {
+    _ = quiet; // reserved for forward-compatibility
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_writer.interface;
+
+    // SPEC §9.1 — verbose response headers
+    if (verbose) {
+        stdout.print("HTTP/1.1 {d} {s}\n", .{
+            @intFromEnum(resp.status),
+            resp.status.phrase() orelse "Unknown",
+        }) catch {}; // broken-pipe safe
+        if (resp.content_type) |ct| {
+            stdout.print("Content-Type: {s}\n", .{ct}) catch {}; // broken-pipe safe
+        }
+        stdout.print("\n", .{}) catch {}; // broken-pipe safe
+        stdout.flush() catch {}; // broken-pipe safe
+    }
+
+    // SPEC §9.2 — Link header parsing to stderr
+    if (links) {
+        if (resp.link) |lh| {
+            var stderr_buf: [4096]u8 = undefined;
+            var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+            var it = zoqa.parseLinkHeader(lh);
+            while (it.next()) |link| {
+                stderr_writer.interface.print("{s}: {s}\n", .{ link.rel, link.url }) catch {}; // broken-pipe safe
+            }
+            stderr_writer.interface.flush() catch {}; // broken-pipe safe
+        }
+    }
+
+    // SPEC §9.4 — body output (pretty JSON or raw)
+    if (pretty) {
+        const is_json = if (resp.content_type) |ct|
+            std.mem.indexOf(u8, ct, "application/json") != null
+        else
+            false;
+        if (is_json) {
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, resp.body, .{}) catch null;
+            if (parsed) |*p| {
+                defer p.deinit();
+                std.json.Stringify.value(p.value, .{ .whitespace = .indent_2 }, stdout) catch {}; // broken-pipe safe
+                stdout.writeByte('\n') catch {}; // broken-pipe safe
+            } else {
+                stdout.writeAll(resp.body) catch {}; // broken-pipe safe
+                stdout.writeByte('\n') catch {}; // broken-pipe safe
+            }
+        } else {
+            stdout.writeAll(resp.body) catch {}; // broken-pipe safe
+            stdout.writeByte('\n') catch {}; // broken-pipe safe
+        }
+    } else {
+        stdout.writeAll(resp.body) catch {}; // broken-pipe safe
+        stdout.writeByte('\n') catch {}; // broken-pipe safe
+    }
+    stdout.flush() catch {}; // broken-pipe safe
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -1470,58 +1594,7 @@ pub fn main() !void {
     };
     defer resp.deinit();
 
-    // --verbose: print status line + response headers to stdout (SPEC §9.1)
-    // --links: parse Link header and print rel: url to stderr (SPEC §9.2)
-    // Body output to stdout (SPEC §9.4)
-    var stdout_buf: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-    const stdout = &stdout_writer.interface;
-
-    if (args.verbose) {
-        stdout.print("HTTP/1.1 {d} {s}\n", .{
-            @intFromEnum(resp.status),
-            resp.status.phrase() orelse "Unknown",
-        }) catch {};
-        if (resp.content_type) |ct| {
-            stdout.print("Content-Type: {s}\n", .{ct}) catch {};
-        }
-        stdout.print("\n", .{}) catch {};
-        stdout.flush() catch {};
-    }
-
-    if (args.links) {
-        if (resp.link) |lh| {
-            var stderr_buf: [4096]u8 = undefined;
-            var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
-            zoqa.parseLinkHeader(lh, &stderr_writer.interface);
-            stderr_writer.interface.flush() catch {};
-        }
-    }
-
-    if (args.pretty) {
-        const is_json = if (resp.content_type) |ct|
-            std.mem.indexOf(u8, ct, "application/json") != null
-        else
-            false;
-        if (is_json) {
-            const parsed = std.json.parseFromSlice(std.json.Value, gpa, resp.body, .{}) catch null;
-            if (parsed) |*p| {
-                defer p.deinit();
-                std.json.Stringify.value(p.value, .{ .whitespace = .indent_2 }, stdout) catch {};
-                stdout.writeByte('\n') catch {};
-            } else {
-                stdout.writeAll(resp.body) catch {};
-                stdout.writeByte('\n') catch {};
-            }
-        } else {
-            stdout.writeAll(resp.body) catch {};
-            stdout.writeByte('\n') catch {};
-        }
-    } else {
-        stdout.writeAll(resp.body) catch {};
-        stdout.writeByte('\n') catch {};
-    }
-    stdout.flush() catch {};
+    printResponse(gpa, resp, args.verbose, args.quiet, args.links, args.pretty);
 
     std.process.exit(resp.exitCode());
 }

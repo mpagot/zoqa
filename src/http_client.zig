@@ -301,45 +301,6 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
 }
 
 // ---------------------------------------------------------------------------
-// RFC 5988 Link header parser
-// ---------------------------------------------------------------------------
-
-/// Parse a single RFC 5988 Link header value and write each link to `writer`.
-/// Format: <url>; rel="name", <url2>; rel="name2"
-/// Output: "name: url\n" per link.
-pub fn parseLinkHeader(value: []const u8, writer: anytype) void {
-    var it = std.mem.splitScalar(u8, value, ',');
-    while (it.next()) |entry| {
-        const trimmed = std.mem.trim(u8, entry, " \t");
-        // Extract URL between < and >
-        const url_start = std.mem.indexOfScalar(u8, trimmed, '<') orelse continue;
-        const url_end = std.mem.indexOfScalar(u8, trimmed, '>') orelse continue;
-        if (url_end <= url_start) continue;
-        const url = trimmed[url_start + 1 .. url_end];
-
-        // Extract rel="..." value
-        var rel: []const u8 = "";
-        var params = std.mem.splitScalar(u8, trimmed[url_end + 1 ..], ';');
-        while (params.next()) |param| {
-            const p = std.mem.trim(u8, param, " \t");
-            if (std.mem.startsWith(u8, p, "rel=")) {
-                var r = p[4..];
-                // Strip optional surrounding quotes
-                if (r.len >= 2 and r[0] == '"' and r[r.len - 1] == '"') {
-                    r = r[1 .. r.len - 1];
-                }
-                rel = r;
-                break;
-            }
-        }
-
-        if (rel.len > 0) {
-            writer.print("{s}: {s}\n", .{ rel, url }) catch {};
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Retry sleep
 // ---------------------------------------------------------------------------
 
@@ -358,20 +319,6 @@ fn sleepForRetry(attempt: u32) !void {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-test "parseLinkHeader: basic parsing" {
-    const testing = std.testing;
-    var list: std.ArrayList(u8) = .{};
-    defer list.deinit(testing.allocator);
-
-    const header = "<http://example.com/api/v1/jobs?offset=0>; rel=\"first\", <http://example.com/api/v1/jobs?offset=10>; rel=\"next\"";
-    parseLinkHeader(header, list.writer(testing.allocator));
-
-    try testing.expectEqualStrings(
-        "first: http://example.com/api/v1/jobs?offset=0\nnext: http://example.com/api/v1/jobs?offset=10\n",
-        list.items,
-    );
-}
 
 test "normalizePathQuery: %20 becomes plus, tilde becomes %7E" {
     const testing = std.testing;
