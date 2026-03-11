@@ -6,7 +6,19 @@ const auth = @import("auth.zig");
 // Public types
 // ---------------------------------------------------------------------------
 
-/// Response returned by execute(). Caller must call deinit() to free memory.
+/// Owned HTTP response returned by `execute()`.
+///
+/// All string fields are heap-allocated using the allocator stored in the
+/// struct. The caller **must** call `deinit()` exactly once to release them.
+///
+/// Fields:
+/// - `status`       — HTTP status code of the final (non-retried) response.
+/// - `body`         — Decompressed response body. Always non-null; may be
+///                    empty (`""`). Owned by this struct.
+/// - `content_type` — Value of the first `Content-Type` response header, or
+///                    `null` if absent. Owned by this struct.
+/// - `link`         — Value of the first `Link` response header, or `null`
+///                    if absent. Used for pagination. Owned by this struct.
 pub const APIResponse = struct {
     allocator: std.mem.Allocator,
     status: std.http.Status,
@@ -17,6 +29,8 @@ pub const APIResponse = struct {
     /// Value of the Link header, if present. Allocated.
     link: ?[]u8,
 
+    /// Release all memory owned by this response.
+    /// Must be called exactly once. Do not use the struct after calling this.
     pub fn deinit(self: APIResponse) void {
         if (self.content_type) |ct| self.allocator.free(ct);
         if (self.link) |l| self.allocator.free(l);
@@ -24,12 +38,48 @@ pub const APIResponse = struct {
     }
 
     /// Returns 0 for 2xx status codes, 1 otherwise.
+    /// Suitable for use as a process exit code.
     pub fn exitCode(self: APIResponse) u8 {
         const s = @intFromEnum(self.status);
         return if (s >= 200 and s < 300) 0 else 1;
     }
 };
 
+/// Parameters for a single HTTP request dispatched by `execute()`.
+///
+/// `execute()` does not own any of the slices stored here — all borrowed
+/// memory must remain valid for the duration of the call.
+///
+/// Fields:
+/// - `allocator`   — Used for all internal allocations (header list, body
+///                   buffer, HMAC scratch buffers). The returned `APIResponse`
+///                   is also allocated with this allocator and must be freed
+///                   by the caller via `APIResponse.deinit()`.
+/// - `method`      — HTTP method (GET, POST, PUT, DELETE, …).
+/// - `url`         — Fully-qualified URL string, e.g.
+///                   `"https://openqa.example.com/api/v1/jobs"`.
+///                   Must be a valid absolute URL; parsing errors surface as
+///                   `error.InvalidUri`.
+/// - `headers`     — Caller-supplied HTTP headers appended verbatim before
+///                   the auto-injected `Accept` and `Accept-Encoding` headers.
+///                   If no `Accept` header is present, `application/json` is
+///                   added automatically.
+/// - `body`        — Optional request body bytes. For methods that require a
+///                   body (`requestHasBody()` returns true) but where `body`
+///                   is `null`, an empty body is sent.
+/// - `credentials` — If non-null, HMAC-SHA1 `X-API-Key` / `X-API-Hash` /
+///                   `X-API-Microtime` headers are computed from the path,
+///                   query string, and current Unix timestamp, then appended.
+///                   Body parameters are intentionally excluded from the HMAC
+///                   message per SPEC §5.3.
+/// - `retries`     — Maximum number of additional attempts after the first
+///                   failure. Retries are triggered by connection errors, send
+///                   errors, and 502/503 HTTP responses. Each retry sleeps for
+///                   an exponentially increasing interval (see `sleepForRetry`).
+/// - `quiet`       — When `true`, suppresses all diagnostic output to stderr
+///                   (connection errors, non-2xx status lines, read/decompress
+///                   errors). Useful in tests and when the caller handles
+///                   errors itself.
 pub const Request = struct {
     allocator: std.mem.Allocator,
     method: std.http.Method,
@@ -45,10 +95,11 @@ pub const Request = struct {
 // Normalize path+query for HMAC signing: %20 → +, ~ → %7E
 // ---------------------------------------------------------------------------
 
-/// Normalize a URL path+query string for HMAC-SHA1 signing.
+/// Normalize a URL path+query string for HMAC-SHA1 signing (SPEC §5.3).
 /// Rewrites %20 → + and ~ → %7E.
-/// Output is written to `writer`.
-pub fn normalizePathQuery(input: []const u8, writer: anytype) !void {
+/// Output is written to `writer`. Called internally by `execute()` before
+/// computing the HMAC digest; not part of the public API.
+fn normalizePathQuery(input: []const u8, writer: anytype) !void {
     var i: usize = 0;
     while (i < input.len) {
         if (i + 2 < input.len and std.mem.eql(u8, input[i .. i + 3], "%20")) {

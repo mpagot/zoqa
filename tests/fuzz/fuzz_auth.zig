@@ -1,5 +1,5 @@
-// Fuzz harness for HMAC-SHA1 authentication (src/auth.zig) and the URL
-// normalization logic from http_client.zig (§5.3: %20→+, ~→%7E).
+// Fuzz harness for HMAC-SHA1 authentication (src/auth.zig) and URL
+// normalization (src/http_client.zig §5.3: %20→+, ~→%7E).
 //
 // ---------------------------------------------------------------------------
 // Corpus format
@@ -24,11 +24,74 @@
 // The harness exercises:
 //   1. hmacSha1Hex      — raw HMAC-SHA1 with fuzzed key+message
 //   2. buildAuthHeaders — full header construction with fuzzed inputs
-//   3. URL normalization — %20→+, ~→%7E rewriting (same logic as http_client.zig)
+//   3. URL normalization + HMAC signing pipeline — via openQAReq with a mock
+//      HTTP client so that normalizePathQuery and buildAuthHeaders are both
+//      exercised end-to-end through the same code path used in production.
 //
 const std = @import("std");
 const zoqa = @import("zoqa");
 const auth = zoqa.auth;
+
+// ---------------------------------------------------------------------------
+// Minimal mock HTTP client — accepts any request, returns 200 OK with an
+// empty JSON body. Never performs real I/O.
+// ---------------------------------------------------------------------------
+
+const MockClient = struct {
+    const Self = @This();
+
+    const MockHead = struct {
+        status: std.http.Status = .ok,
+        content_type: ?[]const u8 = "application/json",
+
+        const HeaderIterator = struct {
+            done: bool = false,
+            pub fn next(self: *HeaderIterator) ?std.http.Header {
+                if (self.done) return null;
+                self.done = true;
+                return .{ .name = "Content-Type", .value = "application/json" };
+            }
+        };
+
+        pub fn iterateHeaders(_: *const MockHead) HeaderIterator {
+            return .{};
+        }
+    };
+
+    const MockReader = struct {
+        done: bool = false,
+        pub fn streamRemaining(self: *MockReader, w: anytype) anyerror!usize {
+            if (self.done) return 0;
+            self.done = true;
+            const body = "{}";
+            try w.writeAll(body);
+            return body.len;
+        }
+    };
+
+    const MockResponse = struct {
+        head: MockHead = .{},
+        mock_reader: MockReader = .{},
+
+        pub fn deinit(_: *MockResponse) void {}
+        pub fn sendBodiless(_: *MockResponse) !void {}
+        pub fn sendBodyComplete(_: *MockResponse, _: []u8) !void {}
+
+        pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+            return &self.mock_reader;
+        }
+        pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+            return self;
+        }
+    };
+
+    response: MockResponse = .{},
+
+    pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+        self.response = .{};
+        return &self.response;
+    }
+};
 
 export fn zig_fuzz_init() void {}
 
@@ -63,29 +126,60 @@ export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     auth.hmacSha1Hex(api_secret, raw_path_query, &out);
 
     // -------------------------------------------------------------------
-    // Target 2: URL normalization (%20 → +, ~ → %7E)
+    // Target 2: buildAuthHeaders with fuzzed inputs
     // -------------------------------------------------------------------
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var normalized: std.ArrayList(u8) = .{};
-    const w = normalized.writer(allocator);
-    zoqa.normalizePathQuery(raw_path_query, w) catch return;
-
-    // -------------------------------------------------------------------
-    // Target 3: buildAuthHeaders with normalized path+query
-    // -------------------------------------------------------------------
-    // Use a fixed timestamp so the harness is deterministic.
     const timestamp = "1234567890";
     var hash_buf: [40]u8 = undefined;
     _ = auth.buildAuthHeaders(
         api_key,
         api_secret,
-        normalized.items,
+        raw_path_query,
         timestamp,
         &hash_buf,
     );
 
-    normalized.deinit(allocator);
+    // -------------------------------------------------------------------
+    // Target 3: full normalization + HMAC signing pipeline via openQAReq
+    //
+    // Exercises the same normalizePathQuery → buildAuthHeaders code path
+    // that execute() uses in production. The mock client ensures no real
+    // I/O occurs. The path is constructed from the fuzz input so that
+    // AFL++ can drive the normalization logic (%20, ~, etc.).
+    // -------------------------------------------------------------------
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Build a valid path from the fuzz input; prefix with "/" to make it
+    // a plausible API path. Sanitize null bytes that would break URI parsing.
+    var path_buf: [512]u8 = undefined;
+    // Cast path_buf.len - 1 to usize explicitly: without this, @min infers a
+    // comptime-sized integer type (u9 for 511) and path_len + 1 overflows when
+    // path_len reaches the maximum value of 511.
+    const path_len: usize = @min(raw_path_query.len, @as(usize, path_buf.len - 1));
+    path_buf[0] = '/';
+    @memcpy(path_buf[1 .. path_len + 1], raw_path_query[0..path_len]);
+    // Replace null bytes — std.Uri.parse rejects them.
+    for (path_buf[1 .. path_len + 1]) |*c| {
+        if (c.* == 0) c.* = '_';
+    }
+    const fuzz_path = path_buf[0 .. path_len + 1];
+
+    const creds = zoqa.config.Credentials{
+        .key = api_key,
+        .secret = api_secret,
+    };
+
+    var mock: MockClient = .{};
+    const resp = zoqa.openQAReq(
+        "http://localhost",
+        fuzz_path,
+        .{
+            .allocator = allocator,
+            .credentials = creds,
+            .quiet = true,
+        },
+        &mock,
+    ) catch return;
+    resp.deinit();
 }

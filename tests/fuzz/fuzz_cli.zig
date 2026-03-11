@@ -1,5 +1,5 @@
 // Fuzz harness for the CLI argument parser and full request-building pipeline
-// (src/main.zig: parseArgs, buildRequest, mergeCredentials).
+// (src/main.zig: parseArgs, buildRequest).
 //
 // ---------------------------------------------------------------------------
 // Corpus format
@@ -212,20 +212,6 @@ export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     defer parsed.headers.deinit(allocator);
     defer parsed.param_files.deinit(allocator);
     defer parsed.kv_params.deinit(allocator);
-
-    // ------------------------------------------------------------------
-    // Exercise mergeCredentials (CLI-sourced key/secret only in harness)
-    // ------------------------------------------------------------------
-    const creds = main_mod.mergeCredentials(
-        allocator,
-        .{ .key = parsed.apikey, .secret = parsed.apisecret },
-        .{ .key = null, .secret = null },
-        null,
-    ) catch return;
-    if (creds) |c| {
-        allocator.free(c.key);
-        allocator.free(c.secret);
-    }
 
     // ------------------------------------------------------------------
     // Exercise buildRequest — this is the main coverage target.

@@ -46,7 +46,7 @@ export PATH="$AFL_DIR:$PATH"
 # Target definitions: name -> (corpus_dir, binary_name)
 # ---------------------------------------------------------------------------
 declare -A CORPUS_DIR=(
-	[ini]="corpus"
+	[ini]="corpus_ini"
 	[cli]="corpus_cli"
 	[http]="corpus_http"
 	[auth]="corpus_auth"

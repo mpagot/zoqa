@@ -6,10 +6,9 @@ pub const auth = @import("auth.zig");
 const http_client = @import("http_client.zig");
 
 // Re-export public types. Only types needed by external consumers are `pub`.
-// `Request` and `execute` are internal implementation details — external
-// callers must go through `openQAReq` instead.
+// `Request`, `execute`, and `normalizePathQuery` are internal implementation
+// details — external callers must go through `openQAReq` instead.
 pub const APIResponse = http_client.APIResponse;
-pub const normalizePathQuery = http_client.normalizePathQuery;
 
 // Internal aliases — NOT part of the public API.
 const Request = http_client.Request;
@@ -602,13 +601,8 @@ test "parseLinkHeader: quoted rel value" {
     try testing.expect(it.next() == null);
 }
 
-test "re-exports: APIResponse and normalizePathQuery accessible via zoqa" {
-    // Verify the re-exports compile and are accessible.
+test "re-exports: APIResponse accessible via zoqa" {
+    // Verify the re-export compiles and is accessible.
     const T = APIResponse;
     _ = T;
-
-    var buf: std.ArrayList(u8) = .{};
-    defer buf.deinit(testing.allocator);
-    try normalizePathQuery("/api/v1/jobs?name=hello%20world", buf.writer(testing.allocator));
-    try testing.expectEqualStrings("/api/v1/jobs?name=hello+world", buf.items);
 }

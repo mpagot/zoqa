@@ -79,7 +79,9 @@ fn addFuzzBinary(
     // use_system_afl = true: afl_kit will call whichever afl-cc is on PATH.
     // Add vendor/aflplusplus to PATH before invoking `zig build -Dfuzz`, e.g.:
     //   PATH=$PWD/vendor/aflplusplus:$PATH zig build -Dfuzz
-    if (afl.addInstrumentedExe(b, target, optimize, null, true, obj, &.{})) |afl_exe| {
+    // Pass -lm explicitly: afl-cc links with clang against system libs, and
+    // std.math.pow(f64, ...) pulls in log/exp from libm at link time.
+    if (afl.addInstrumentedExe(b, target, optimize, null, true, obj, &.{"-lm"})) |afl_exe| {
         b.getInstallStep().dependOn(&b.addInstallFile(afl_exe, name).step);
     }
 }

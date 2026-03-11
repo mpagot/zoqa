@@ -779,6 +779,10 @@ pub fn buildRequest(
     var path_buf: ?[]u8 = null;
     errdefer if (path_buf) |b| allocator.free(b);
 
+    // SAFETY: both variables are unconditionally assigned in every branch of the
+    // if/else below before any subsequent read. The `if (isAbsoluteUrl(...))` /
+    // `else` pair is exhaustive, so no branch can reach the code after the block
+    // without having written a valid slice into each variable.
     var resolved_host: []const u8 = undefined;
     var relative_path: []const u8 = undefined;
 
@@ -1234,9 +1238,42 @@ test "buildRequest: path with null byte returns error" {
     try std.testing.expectError(error.PathContainsNullByte, buildRequest(allocator, &parsed, null));
 }
 
-/// Logic for merging credentials from multiple sources with field-level priority.
-/// Priority: CLI > ENV > Config File.
-/// Returns allocated Credentials on success (caller owns fields).
+/// Resolve and merge API credentials from all possible sources according to priority.
+///
+/// Authentication to the openQA API requires two parts: a key and a secret.
+/// These can be provided through three mechanisms, evaluated independently
+/// for each field in the following priority order (highest to lowest):
+///
+/// 1. **CLI flags**: `--apikey` and `--apisecret`
+/// 2. **Environment variables**: `OPENQA_API_KEY` and `OPENQA_API_SECRET`
+/// 3. **Configuration file**: the `[<host>]` section in `client.conf`
+///
+/// Because priority is evaluated per-field, a user could theoretically provide
+/// the key via CLI flag and the secret via environment variable, though usually
+/// both come from the same source.
+///
+/// This function does **not** fetch the configuration file itself; it expects
+/// the already-parsed `conf` struct matching the target host, and simply applies
+/// the override logic.
+///
+/// Arguments:
+/// - `allocator`: Used to duplicate the final resolved key and secret strings.
+///   The caller will own these allocations.
+/// - `cli`: The key/secret optionally provided via command-line flags.
+/// - `env`: The key/secret optionally provided via environment variables.
+/// - `conf`: The key/secret optionally found in the parsed configuration file
+///   for the chosen host.
+///
+/// Returns:
+/// - `?config.Credentials`: A struct containing the fully resolved `key` and
+///   `secret`. The slices are newly allocated and **owned by the caller**, who
+///   must call `deinit()` or manually free both fields.
+/// - `null`: Returned if either the key or the secret (or both) are completely
+///   missing across all three sources. In this case, the request will proceed
+///   unauthenticated.
+///
+/// Errors:
+/// - `error.OutOfMemory`: If duplication of the resolved strings fails.
 fn mergeCredentials(
     allocator: std.mem.Allocator,
     cli: struct { key: ?[]const u8, secret: ?[]const u8 },
