@@ -1,0 +1,10 @@
+zoqa
+--host
+http://localhost
+--param-file
+BUILD=IGNORED
+---FILECONTENT---
+LATEST_SLE15_7
+---FILECONTENTEND---
+api
+isos

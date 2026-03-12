@@ -1,0 +1,5 @@
+
+---
+[openqa.suse.de]
+key = 1234ABCD1234ABCD
+secret = ABCD1234ABCD1234

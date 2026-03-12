@@ -1,0 +1,7 @@
+[localhost]
+key = LOCALHOST11111
+secret = LOCALHOST22222
+
+[openqa.suse.de]
+key = SUSE1111111111
+secret = SUSE2222222222

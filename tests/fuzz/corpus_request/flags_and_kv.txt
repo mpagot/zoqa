@@ -1,0 +1,8 @@
+zoqa
+--osd
+--verbose
+--quiet
+--links
+api
+jobs
+id=42

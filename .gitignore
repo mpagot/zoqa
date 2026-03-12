@@ -7,11 +7,15 @@ vendor/aflplusplus/
 
 # Fuzzing
 tests/fuzz/corpus*_min/
+tests/fuzz/corpus_distilled/
 tests/fuzz/out*/
 cases/
 crashes/
 queue/
 openQAclient-afl
+
+# Coverage
+coverage/
 
 # Temporary files and session logs
 *.tmp

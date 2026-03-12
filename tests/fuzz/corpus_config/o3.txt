@@ -1,0 +1,5 @@
+
+---
+[openqa.opensuse.org]
+key = AABBCCDD11223344
+secret = 11223344AABBCCDD

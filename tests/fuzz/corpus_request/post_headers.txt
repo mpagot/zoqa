@@ -1,0 +1,14 @@
+zoqa
+--host
+http://localhost
+--method
+POST
+--header
+X-Custom-Header: value
+--header
+Accept: application/json
+--json
+--data
+{"key":"value"}
+api
+jobs

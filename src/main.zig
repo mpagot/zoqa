@@ -784,6 +784,7 @@ pub fn buildRequest(
     // `else` pair is exhaustive, so no branch can reach the code after the block
     // without having written a valid slice into each variable.
     var resolved_host: []const u8 = undefined;
+    // SAFETY: Unconditionally assigned alongside resolved_host in all branches.
     var relative_path: []const u8 = undefined;
 
     if (isAbsoluteUrl(api_path)) {
@@ -1475,15 +1476,15 @@ fn printResponse(
 
     // SPEC §9.1 — verbose response headers
     if (verbose) {
-        stdout.print("HTTP/1.1 {d} {s}\n", .{
+        _ = stdout.print("HTTP/1.1 {d} {s}\n", .{
             @intFromEnum(resp.status),
             resp.status.phrase() orelse "Unknown",
         }) catch {}; // broken-pipe safe
         if (resp.content_type) |ct| {
-            stdout.print("Content-Type: {s}\n", .{ct}) catch {}; // broken-pipe safe
+            _ = stdout.print("Content-Type: {s}\n", .{ct}) catch {}; // broken-pipe safe
         }
-        stdout.print("\n", .{}) catch {}; // broken-pipe safe
-        stdout.flush() catch {}; // broken-pipe safe
+        _ = stdout.print("\n", .{}) catch {}; // broken-pipe safe
+        _ = stdout.flush() catch {}; // broken-pipe safe
     }
 
     // SPEC §9.2 — Link header parsing to stderr
@@ -1493,9 +1494,9 @@ fn printResponse(
             var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
             var it = zoqa.parseLinkHeader(lh);
             while (it.next()) |link| {
-                stderr_writer.interface.print("{s}: {s}\n", .{ link.rel, link.url }) catch {}; // broken-pipe safe
+                _ = stderr_writer.interface.print("{s}: {s}\n", .{ link.rel, link.url }) catch {}; // broken-pipe safe
             }
-            stderr_writer.interface.flush() catch {}; // broken-pipe safe
+            _ = stderr_writer.interface.flush() catch {}; // broken-pipe safe
         }
     }
 
@@ -1509,21 +1510,21 @@ fn printResponse(
             const parsed = std.json.parseFromSlice(std.json.Value, allocator, resp.body, .{}) catch null;
             if (parsed) |*p| {
                 defer p.deinit();
-                std.json.Stringify.value(p.value, .{ .whitespace = .indent_2 }, stdout) catch {}; // broken-pipe safe
-                stdout.writeByte('\n') catch {}; // broken-pipe safe
+                _ = std.json.Stringify.value(p.value, .{ .whitespace = .indent_2 }, stdout) catch {}; // broken-pipe safe
+                _ = stdout.writeByte('\n') catch {}; // broken-pipe safe
             } else {
-                stdout.writeAll(resp.body) catch {}; // broken-pipe safe
-                stdout.writeByte('\n') catch {}; // broken-pipe safe
+                _ = stdout.writeAll(resp.body) catch {}; // broken-pipe safe
+                _ = stdout.writeByte('\n') catch {}; // broken-pipe safe
             }
         } else {
-            stdout.writeAll(resp.body) catch {}; // broken-pipe safe
-            stdout.writeByte('\n') catch {}; // broken-pipe safe
+            _ = stdout.writeAll(resp.body) catch {}; // broken-pipe safe
+            _ = stdout.writeByte('\n') catch {}; // broken-pipe safe
         }
     } else {
-        stdout.writeAll(resp.body) catch {}; // broken-pipe safe
-        stdout.writeByte('\n') catch {}; // broken-pipe safe
+        _ = stdout.writeAll(resp.body) catch {}; // broken-pipe safe
+        _ = stdout.writeByte('\n') catch {}; // broken-pipe safe
     }
-    stdout.flush() catch {}; // broken-pipe safe
+    _ = stdout.flush() catch {}; // broken-pipe safe
 }
 
 // ---------------------------------------------------------------------------

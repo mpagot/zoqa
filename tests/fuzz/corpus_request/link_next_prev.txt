@@ -1,0 +1,6 @@
+zoqa
+api
+jobs
+---LINKHEADER---
+</api/v1/jobs?offset=10>; rel="next", </api/v1/jobs?offset=0>; rel="prev"
+---LINKHEADEREND---

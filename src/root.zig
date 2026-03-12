@@ -268,13 +268,13 @@ const TestMockClient = struct {
         }
     };
 
-    captured_url: [1024]u8 = undefined,
+    captured_url: [1024]u8 = [_]u8{0} ** 1024,
     captured_url_len: usize = 0,
-    captured_body: [1024]u8 = undefined,
+    captured_body: [1024]u8 = [_]u8{0} ** 1024,
     captured_body_len: usize = 0,
     captured_method: std.http.Method = .GET,
     captured_bodiless: bool = false,
-    response: MockResponse = undefined,
+    response: ?MockResponse = null,
 
     pub fn request(self: *Self, method: std.http.Method, uri: std.Uri, _: anytype) !*MockResponse {
         self.response = .{ .parent = self };
@@ -302,7 +302,7 @@ const TestMockClient = struct {
         const len = stream.pos;
         @memcpy(self.captured_url[0..len], buf[0..len]);
         self.captured_url_len = len;
-        return &self.response;
+        return &self.response.?;
     }
 
     fn getCapturedUrl(self: *const Self) []const u8 {

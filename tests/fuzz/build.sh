@@ -10,6 +10,20 @@
 # Requirements:
 #   - vendor/aflplusplus built (see README.md §Setup step 2)
 #   - afl-cc reachable via vendor/aflplusplus/ (added to PATH below)
+#
+# Targets built (all registered via -Dfuzz in build.zig):
+#
+#   Gen-2 (current):
+#     zoqa-fuzz-config   — INI parser + resolveHost (all 7 branches)
+#     zoqa-fuzz-request  — CLI arg parser + buildRequest + parseLinkHeader + JSON
+#     zoqa-fuzz-execute  — full pipeline: auth + retry + gzip + openQAReq
+#
+#   Gen-1 (deprecated, pending removal):
+#     zoqa-fuzz-ini      — superseded by zoqa-fuzz-config
+#     zoqa-fuzz-cli      — superseded by zoqa-fuzz-request
+#     zoqa-fuzz-http     — superseded by zoqa-fuzz-request
+#     zoqa-fuzz-auth     — superseded by zoqa-fuzz-execute
+#     zoqa-fuzz-gzip     — superseded by zoqa-fuzz-execute
 
 set -euo pipefail
 

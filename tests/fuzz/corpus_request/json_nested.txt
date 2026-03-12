@@ -1,0 +1,6 @@
+zoqa
+api
+jobs/1
+---JSON---
+{"id":1,"assets":{"iso":["SLE-15.iso"]},"settings":{"DISTRI":"sle","VERSION":"15"}}
+---JSONEND---

@@ -1,0 +1,5 @@
+
+---
+[openqa.debian.net]
+key = DDCCBBAA44332211
+secret = 44332211DDCCBBAA
