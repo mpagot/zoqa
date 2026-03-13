@@ -81,7 +81,7 @@ declare -A BINARY=(
 # Optional dictionary per target; empty string means no -x flag.
 declare -A DICT=(
 	# Gen-2 (current)
-	[config]="ini.dict"
+	[config]="config.dict"
 	[request]="cli.dict"
 	[execute]=""
 	# Gen-1 (deprecated)

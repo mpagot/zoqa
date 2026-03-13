@@ -1,0 +1,43 @@
+# AFL++ token dictionary for the openQAclient config parser fuzzer.
+# This seeds the fuzzer with keywords used in both resolveHost and parseIni.
+
+# Section separator for fuzz_config.zig
+"\n---\n"
+
+# INI syntax tokens
+"["
+"]"
+"="
+"#"
+";"
+" "
+"\t"
+"\r"
+"\n"
+
+# INI keys
+"key"
+"secret"
+
+# resolveHost protocol markers
+"://"
+"http://"
+"https://"
+"/"
+
+# Known hostnames (used for resolveHost shortcuts and INI section matching)
+"localhost"
+"openqa.suse.de"
+"openqa.opensuse.org"
+"openqa.debian.net"
+
+# resolveHost flag bits (Section 1 first byte)
+"\x01"
+"\x02"
+"\x04"
+"\x00"
+
+# Sample credentials and section names
+"MYPUBLICKEY"
+"MYPRIVATESECRET"
+"openqa.example.com"

@@ -263,11 +263,15 @@ seeds.
 ## Coverage
 
 Source-level coverage uses [kcov](https://github.com/SimonKagstrom/kcov) with
-the Zig self-hosted backend. The LLVM backend must **not** be used for coverage
-binaries — kcov reports 0% on x86_64-linux when Zig compiles via LLVM due to
-missing DWARF line information (see [ziglang/zig#25368](https://github.com/ziglang/zig/issues/25368)).
-`cov_build.zig` leaves `use_llvm` unset (null) so Zig automatically selects the
-self-hosted backend for native Debug builds.
+the LLVM backend (`use_llvm = true`). The LLVM backend emits DWARF 4 debug
+info, which kcov v42 can parse correctly. The Zig self-hosted backend emits
+DWARF 5, which kcov v42 cannot parse on x86_64-linux — it builds an empty
+address table and reports 0% coverage (see
+[kcov#423](https://github.com/SimonKagstrom/kcov/issues/423),
+[ziglang/zig#25368](https://github.com/ziglang/zig/issues/25368)).
+`cov_build.zig` sets `use_llvm = true` to force the LLVM backend and ensure
+DWARF 4 compatibility. Once kcov ships Linux DWARF 5 support, this workaround
+can be removed.
 
 ### Install kcov
 
@@ -277,6 +281,22 @@ sudo zypper install kcov
 ```
 
 ### Run coverage
+
+The easiest way to build, run, and analyse coverage in one step is the
+`coverage.sh` wrapper (see [Helper Scripts](#coveragesh--build-run-and-analyse-coverage)):
+
+```sh
+# Build + run kcov + print analysis for all gen-2 targets
+./tests/fuzz/coverage.sh
+
+# Analyse existing coverage data without rebuilding
+./tests/fuzz/coverage.sh --skip-build
+
+# Run only specific targets
+./tests/fuzz/coverage.sh config request
+```
+
+The underlying `zig build` commands can also be invoked directly:
 
 ```sh
 # Coverage for a single gen-2 target (seeds from corpus_config/)
@@ -289,7 +309,7 @@ zig build -p . --build-file tests/fuzz/cov_build.zig coverage
 xdg-open coverage/config/index.html
 ```
 
-Reports are written to `zig-out/coverage/{config,request,execute}/`.
+Reports are written to `coverage/{config,request,execute}/`.
 
 ### How it works
 
