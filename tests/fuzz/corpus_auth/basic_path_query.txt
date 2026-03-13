@@ -1,3 +1,0 @@
-1234ABCD1234ABCD
-ABCD1234ABCD1234
-/api/v1/jobs?limit=100&offset=0

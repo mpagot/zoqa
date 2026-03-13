@@ -94,6 +94,31 @@ export AFL_TMPDIR=/tmp/afl_fuzz
 ./tests/fuzz/run.sh request
 ```
 
+### Distill and promote the queue
+
+After a fuzzing campaign, use `distill.sh` to distill the machine-generated
+queue into an optimised seed corpus and promote it into the tracked
+`corpus_<target>/` directory. This replaces the old seeds with the smallest
+set of files that covers every execution path discovered by the fuzzer, with
+each file individually minimised by `afl-tmin`.
+
+```sh
+# Distill all targets that have queue output
+./tests/fuzz/distill.sh
+
+# Distill a single target
+./tests/fuzz/distill.sh config
+
+# Skip creating a backup of the old corpus
+./tests/fuzz/distill.sh --no-backup config
+```
+
+The script performs five steps per target: corpus distillation (`afl-cmin`),
+individual file minimisation (`afl-tmin`), backup of the old corpus, promotion
+of the distilled corpus, and regeneration of `corpus_<target>_min/` via
+`cmin.sh`. See [Helper Scripts](#distillsh--distill-and-promote-the-queue)
+for full details.
+
 ### Crash Triage
 
 After a fuzzing session, any inputs that triggered a crash or hang are saved
@@ -202,18 +227,36 @@ permanently encodes the new coverage into future fuzzing campaigns.
 
 ### 5. Corpus Distillation & Seed Promotion
 
-As the fuzzer runs, it discovers new interesting inputs in `tests/fuzz/out_*/main-node/queue/`.
+As the fuzzer runs, it discovers new interesting inputs in `out_<target>/main-node/queue/`.
+The `distill.sh` script automates the full post-fuzzing promotion cycle:
 
-1. **Distillation:** Periodically minimize the machine-generated queue back into a temporary directory:
-   ```sh
-   rm -rf tests/fuzz/corpus_distilled
-   PATH="$PWD/vendor/aflplusplus:$PATH" \
-     vendor/aflplusplus/afl-cmin \
-       -i tests/fuzz/out_config/main-node/queue \
-       -o tests/fuzz/corpus_distilled \
-       -- ./zig-out/zoqa-fuzz-config
-   ```
-2. **Promotion:** If the fuzzer finds an input that covers a significantly new area of code, copy it from `corpus_distilled` into your tracked `tests/fuzz/corpus_<target>/` directory. This preserves the "machine-learned" knowledge permanently in source control.
+```sh
+# Distill and promote a single target
+./tests/fuzz/distill.sh config
+
+# Distill all targets that have queue output, skip backup
+./tests/fuzz/distill.sh --no-backup
+```
+
+For each target, `distill.sh` performs five steps:
+
+1. **Distillation (`afl-cmin`):** Extract the smallest subset of queue
+   entries that triggers 100% of the accumulated edge coverage.
+2. **File minimisation (`afl-tmin`):** Shrink every distilled file to the
+   smallest byte sequence that still triggers the same execution path.
+   This dramatically improves fuzzing speed in future campaigns.
+3. **Backup:** Move `corpus_<target>/` → `corpus_<target>_backup/`
+   (pass `--no-backup` to skip this and delete the old corpus instead).
+4. **Promotion:** Move the distilled corpus into `corpus_<target>/`.
+   The distilled queue is a strict superset of the original corpus in
+   terms of code coverage, so there is no need to merge — it replaces
+   the old seeds entirely.
+5. **Regeneration:** Re-run `cmin.sh <target>` to produce a fresh
+   `corpus_<target>_min/` for the next fuzzing campaign.
+
+After promotion, the updated `corpus_<target>/` should be committed to
+Git so that other developers and CI benefit from the machine-discovered
+seeds.
 
 ---
 
@@ -264,6 +307,8 @@ Three convenience scripts in `tests/fuzz/` wrap the most common operations. All
 can be run from the project root or from `tests/fuzz/`; they locate the project
 root automatically.
 
+A fourth script, `distill.sh`, handles the post-fuzzing promotion workflow.
+
 ### `build.sh` — build all instrumented binaries
 
 Equivalent to `PATH="$PWD/vendor/aflplusplus:$PATH" zig build -Dfuzz`, with
@@ -308,3 +353,28 @@ Launches `afl-fuzz` for exactly one named target.
 ```
 
 Valid target names: same as `cmin.sh`.
+
+### `distill.sh` — distill and promote the queue
+
+After a fuzzing campaign, distills the machine-generated queue into an
+optimised seed corpus and promotes it into the tracked `corpus_<target>/`
+directory. Runs `afl-cmin` (corpus distillation), then `afl-tmin` (individual
+file minimisation), then backs up and replaces the old corpus, and finally
+regenerates the `_min/` directory via `cmin.sh`.
+
+```sh
+# Distill all targets that have queue output
+./tests/fuzz/distill.sh
+
+# Distill a single target
+./tests/fuzz/distill.sh config
+
+# Distill multiple specific targets
+./tests/fuzz/distill.sh config request
+
+# Skip creating a backup of the old corpus
+./tests/fuzz/distill.sh --no-backup config
+```
+
+Valid target names: same as `cmin.sh`. When no targets are specified, all
+targets with a non-empty `out_<target>/main-node/queue/` are processed.

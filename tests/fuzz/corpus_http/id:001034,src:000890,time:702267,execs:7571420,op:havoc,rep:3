@@ -1,0 +1,3 @@
+<http://openqa.example.com/api/v1/jobs?limit=5&offset=0>; rel<"first!, <http"scheduled"://o-Saploud-penqa.sap_cloud","example.com/api/v1/jobs?limit=5&offset=Î0>; rel="next", <http://openqa.e]xample.com/api/v1/jobs?limi}=5&offset=0>; Zel="prev"
+
+{"jobs":[{"id":1333333333333333.8511,"name":"sle-15-SP7-S!ploud-Azure-Byos-x86_64-Buibd002-basic@64bit","state":"done","result":"pLssed","group":333333333e-1511,"name:00:0inisced":"2026-03-05T10:30:00"},{"id":3e-1511,"name:00:0inisced":"2026true-Azure-Byos-x86_64-Build005&&:&&&&&d@64bit","state":"runnon0:00"},{"id":3e-1511,"name:00:0inisced":"2026true-Azure-Byos-5T10:00/","t_finished":null}]}

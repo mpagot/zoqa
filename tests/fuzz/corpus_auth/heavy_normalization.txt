@@ -1,3 +1,0 @@
-AAAA
-BBBB
-/path%20with%20spaces/and~tildes?q=%20~%20

@@ -1,0 +1,8 @@
+/home/michelepa/draft/zig_xg/openQAclient/tests/fuzz/corpus_ini/id:000124,src:000115,time:603948,execs:10398284,op:havoc,rep:13
+/home/michelepa/draft/zig_xg/openQAclient/tests/fuzz/corpus_ini/id:000127,src:000121,time:605343,execs:10409090,op:havoc,rep:25
+/home/michelepa/draft/zig_xg/openQAclient/tests/fuzz/corpus_ini/id:000129,src:000113,time:607519,execs:10425052,op:havoc,rep:12
+/home/michelepa/draft/zig_xg/openQAclient/tests/fuzz/corpus_ini/id:000130,src:000113,time:607551,execs:10425278,op:havoc,rep:11
+/home/michelepa/draft/zig_xg/openQAclient/tests/fuzz/corpus_ini/id:000131,src:000125,time:612016,execs:10448454,op:havoc,rep:6
+/home/michelepa/draft/zig_xg/openQAclient/tests/fuzz/corpus_ini/id:000138,src:000137,time:637300,execs:10551006,op:havoc,rep:55
+/home/michelepa/draft/zig_xg/openQAclient/tests/fuzz/corpus_ini/id:000140,src:000138,time:642804,execs:10576220,op:havoc,rep:2
+/home/michelepa/draft/zig_xg/openQAclient/tests/fuzz/corpus_ini/id:000141,src:000140,time:643551,execs:10581852,op:havoc,rep:8

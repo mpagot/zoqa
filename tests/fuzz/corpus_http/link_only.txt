@@ -1,2 +1,0 @@
-<http://openqa.example.com/api/v1/jobs?limit=5&offset=0>; rel="first", <http://openqa.example.com/api/v1/jobs?limit=5&offset=5>; rel="next"
-

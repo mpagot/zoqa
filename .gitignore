@@ -7,7 +7,8 @@ vendor/aflplusplus/
 
 # Fuzzing
 tests/fuzz/corpus*_min/
-tests/fuzz/corpus_distilled/
+tests/fuzz/corpus*_distilled/
+tests/fuzz/corpus*_backup/
 tests/fuzz/out*/
 cases/
 crashes/

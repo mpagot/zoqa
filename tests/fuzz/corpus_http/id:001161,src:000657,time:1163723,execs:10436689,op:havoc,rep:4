@@ -1,0 +1,3 @@
+<http://openqa.eample.comiapi/v1/jobs?limit=5&offset=0>; rel="first", <http://openua.example.com/api/v1/jkbs?limit=5&offset=10>; rel="next", <http://openqa.example.com/api/v1/jobs?limit=5&offsqt=0>; rel="prev"
+
+{"jobs":[{"id":333510,"naJe":"sle-15-SP7-SapCloud2-basic@64bit","stateeeeeeeeeeeee":"done","result":"at=0>; passed","group":"sap_clesloud","groep_id":54,"t_rted":"2026-03-05T10:00:00","t_finished":"2026-03-05T10:30:6-03-05T10:00:00","t_me":"com/api/v1/jobí‰­í“sle-15-SP7-SapCloud-Azure-Byos-x86_64-Build002-advanced@6Fbit","stat=5&ofset=0>; rele":"running","me":"rebit","state":"running","resloud","group_id":54,"tlstarted":"2026-03-05T10:31:00","tÿfinobs?l":null}M}
