@@ -1,0 +1,14 @@
+zoqtN
+--param-file
+BUILD=IGNOR
+--param-file
+BUILDpi
+is--param-file
+BUILD=IGNORED
+---FILECONTENT---
+
+---FILECONTENTEND---
+a=IGN
+osND---
+api
+isos

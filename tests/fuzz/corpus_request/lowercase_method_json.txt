@@ -1,8 +1,0 @@
-zoqa
---put
---host
-openqa.suse.de
---json
---data
-{"result":"passed"}
-api/v1/jobs/123

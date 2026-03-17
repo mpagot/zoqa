@@ -1,0 +1,10 @@
+zoqa
+--host
+http://localhost
+--form
+--data
+{"pi":				)			:[{"id":1,"st3.14159,"enabled":true,"disable--datad":false,"empty":null,"count":42}
+-X
+POST
+api
+jobs

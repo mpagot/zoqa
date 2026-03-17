@@ -1,0 +1,12 @@
+0000
+--host
+0000://00000
+--form
+--data
+{"ipty":null,"count":40}
+-X
+0
+-X
+POST
+000
+0000

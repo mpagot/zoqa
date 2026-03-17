@@ -1,0 +1,13 @@
+zoqa
+--host
+http://localhost
+--param-file
+b
+http://localhost
+--param-file
+bUILDIGNORED
+---FILECONTENT---
+LATEST_SLE15_7
+---FILECONTENTEND---
+api
+isos

@@ -1,6 +1,0 @@
-zoqa
---host
-http://openqa.suse.de
-api
-jobs/overview
-state=running

@@ -1,0 +1,13 @@
+0
+--host
+00000000000
+--data-file
+0
+--data-file=---DATAFILECONTENT---
+000000000000
+---DATAFILECONTENTEND---
+--apikey
+0
+--apisecret
+0
+000000000

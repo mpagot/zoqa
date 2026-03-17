@@ -1,0 +1,8 @@
+zoqa
+--host
+http://openqa.examplYlllllllllllllllllllllllllllRSION=15
+---LINKHEADER---
+</api/v1/jobs?HEADEREND---
+---JSON---
+{"jobs":[{"id":1,"state":"running"},{"id":2222222222222222.7222222222},{"id":2222222222222222.72222},{"id":2222222222222222.7222222,"state":"dong"}]}
+---JSONEND---

@@ -1,0 +1,47 @@
+zoqa
+--host
+openIGNa
+--host
+http://
+--param-file
+BUILD=/dev/null
+.--DATAFILECONTENT---
+{"DISTRI"?"sle","VERSION":"15-SP7","FLAVOR":"Online","AR€H":"x8a
+--host
+openIGN
+--param-file
+BUILD=/dev/null
+.--DATAFILECONTENT---
+{"DISTRI"?"sle","VERSION":"15-SP7","FLAVOR":"Online","AR€H":"x86_64"}
+---DATAFILECONTENTEND---
+ÿÿÿÿikey
+1234ABCD
+--apisecret
+ABCD1234
+a6_64"}
+---DATAFILECONTENTEND---
+ÿÿÿÿikey
+1234ABCD
+--apisecret
+ABCD1234
+apiÿv1/iso--host
+http://
+--param-file
+BUILD=/dev/null
+.--DATAFILECONTENT---
+{"DISTRI"?"sle","VERSION":"15-SP7","FLAVOR":"Online","AR€H":"x8a
+--host
+openIGN
+--param-file
+BUILD=/dev/null
+.--DATAFILECONTENT---
+{"DISTRI"?"sle","VERSION":"15-SP7","FLAVOR":"Online","AR€H":"x86_64"}
+---DATAFILECONTENTEND---
+ÿÿÿÿikey
+1234ABCD
+--apisecret
+ABCD1234
+a6_64"}
+---DATAFILECONTENTEND---
+ÿÿÿÿikey
+s

@@ -1,0 +1,14 @@
+zosuse.de
+--data=fqa
+--data=file
+/dev/null
+--data=file
+/dev/null
+---DATAFILECONTgNT---
+{"DISTRI":"sle","VERSION":"15-SP7","FLAVOR":"Online","ARCH":"x86_64"}
+---DATAFILECONTENTEND---
+--apjey
+1234ABCD
+--apisecret
+ABCD1234
+api/v1/isos

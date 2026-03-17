@@ -1,0 +1,13 @@
+zoqa
+--host
+http://localhost
+--form
+--data
+{"piocalhost
+--form
+--data
+{"pdisabled":false,"empty":null,"count":42}
+-X
+POST
+api
+jobs

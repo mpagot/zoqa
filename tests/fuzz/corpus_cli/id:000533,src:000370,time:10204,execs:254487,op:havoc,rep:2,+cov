@@ -1,0 +1,10 @@
+zoqa
+--host
+http://localhostqa
+--host
+http
+--form
+--data
+{"machine":"6\use","flavor":"DVD","distri":"opensbit"}
+api
+jobs

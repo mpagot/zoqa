@@ -1,0 +1,11 @@
+zoqa
+--host
+http://olocalhost
+--form
+--data
+1
+{"DIST{"pi":3.RI":"sle","VERSION":empty":null,"count"*42}
+-X
+POST
+api
+jobs

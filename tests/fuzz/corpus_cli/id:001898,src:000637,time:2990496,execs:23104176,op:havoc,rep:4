@@ -1,0 +1,10 @@
+zoqa
+--host
+":alhost
+--form
+--data
+{"pi":-3514159,"enbTpi":-3514159,"enbTed":true,"disaoooo":42}
+-X
+POST
+api
+jobs

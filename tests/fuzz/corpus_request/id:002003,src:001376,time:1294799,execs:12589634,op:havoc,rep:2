@@ -1,0 +1,12 @@
+zoqa
+--host
+http://GETnqa.example.com
+api
+jobs
+DISTUI=sle
+VERSION=15
+---LINKH5ADER---
+</api/v1/jobs?HEADEREND---
+---JSON---
+{"jobs":[{"pty":null,"counts\bled":false,"empts\bledB:fy":null,"c":2222222222222222222222222222222,"ps://beM":59,"ebeM":59,"enahttpenahttps://beM":59,"enahts://beMMMMMMMMMMMMMMLMMMMMMed":true,"-pdis`bled":false,"empty":null,"cstate":"dong"}]}
+---JSONEND---

@@ -1,0 +1,16 @@
+zoqa
+--host
+http://openqa.example.com
+api
+jobs
+DIhttp://STRI=sle
+VERSION=15
+---LINKHEADER---
+</api/v1/jobs?offset=10>; rel="next"
+---LINKHEADEREND---
+--header=---JSON---
+{"jobs":[{"id":1,"state":"runnin--
+--header=-g---
+--header=---JSON---
+{"jo
+---JSONEND---

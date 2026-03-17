@@ -1,2 +1,0 @@
-zoqa
-https://openqa.suse.de/api/v1/jobs?state=running&limit=50

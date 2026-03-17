@@ -1,0 +1,13 @@
+zoqa
+--host
+http://openqa.example.com
+api
+jobs
+DISTUI=sle
+VERSION=15
+---LINKHEADER---
+</api/v1/jobs?HEADEREND---
+---JSON---
+{"jobs":[{"id":1,"state":"running"},{"id":22222       rel="last"
+---LINKHEADEREE2222222222222222222222222,"state":"dong"}]}
+---JSONEND---

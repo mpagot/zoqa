@@ -1,0 +1,11 @@
+zoqa
+--osd
+--links
+api
+jobs
+i-verbose
+--quiet
+--links
+api
+jobs
+ic=42

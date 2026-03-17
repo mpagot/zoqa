@@ -1,0 +1,8 @@
+zoqa
+--host
+http://localhost
+--form
+--data
+{"maclocalhoshine":"6\fit","flavor":"DVD","distri":"opensuse"}
+api
+jobs

@@ -1,0 +1,20 @@
+zoqa
+--hosERSION=15
+---LINKHt
+http://openqa.example.cocalhost
+--form
+--data
+{"pi":oÿÿÿi
+jobs
+DISTRI=sle
+VERSION=15
+---LINKHEADER---
+</api/v1i
+jGET
+DISTRI=sle
+VERS"next"
+---LINKHEA€EREND---
+---JSON---
+{"jobs":[[[[[[[[[[[[[[[[[[{"jobs":[[[[[[[[[[[[[[[[[[[[[[[[[[---JSONEND---
+[[[[[[[[c":2,"state":"done"}]}
+---JSONEND---

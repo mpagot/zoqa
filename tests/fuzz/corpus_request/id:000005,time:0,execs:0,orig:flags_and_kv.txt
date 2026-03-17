@@ -1,0 +1,8 @@
+0000
+--osd
+--verbose
+--quiet
+--links
+000
+0000
+id=00

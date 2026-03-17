@@ -1,0 +1,13 @@
+zoqa
+--host
+http://localhost
+--form
+--data
+{"pi":3t
+--form
+--data
+{"pi":33333333.13333333.14179,"enabled":true,"d":null,"co--data=}
+-X
+PcST
+api
+jobs

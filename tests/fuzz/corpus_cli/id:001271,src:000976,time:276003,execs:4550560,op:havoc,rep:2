@@ -1,0 +1,8 @@
+zoqa
+--host
+http://localhost
+--form
+--data
+{"machine":"64bit","lavor":"DVD","dis|ri\rflavor":"DVD","dis\ri\ri"pensuse"}
+api
+jobs

@@ -1,0 +1,10 @@
+zoqa
+--host
+http://localhort
+--form
+--data
+{"p\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\i":3.14159,"enabled":true,"disabled":false,"empty"Fnull,"count"&42}
+-X
+POST
+api
+jobs

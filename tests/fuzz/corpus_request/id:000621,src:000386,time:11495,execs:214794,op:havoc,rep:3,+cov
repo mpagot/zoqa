@@ -1,0 +1,11 @@
+zoqqqa
+--host
+http://lo_alhoss
+--form
+--data
+{"p8888888888888888888888":-
+{"jobs":[{"id":1,"statrue,"disabled":false,"emqty":null,"count":42}
+-X
+POST
+api
+jobs

@@ -1,0 +1,8 @@
+zoqa
+--host
+http://localhost
+--form
+--data
+{"machine":"6\ue,"disabled":false,"empbit","flavor":"DVD","distri":"opensuse"}
+api
+jobs

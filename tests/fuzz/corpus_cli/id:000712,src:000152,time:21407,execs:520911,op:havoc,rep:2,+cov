@@ -1,0 +1,16 @@
+zoqa
+@-host
+openqa.suse.dftp://@
+--data-file
+/dev/null
+---DATAFILECONTENT---
+ret
+AB-host
+open"VERSION":"15-SP7","FLAVOR":"Onlinobs?state=running&limit=e","ARCH":"x86_64"}
+---DATAFILECONTENTEND---
+--apikey
+1234ABCD
+--apisecret
+AB-host
+opennnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnqCD1234
+api/v1/iso/d

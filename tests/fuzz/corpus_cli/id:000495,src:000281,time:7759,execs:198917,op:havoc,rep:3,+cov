@@ -1,0 +1,12 @@
+zoqa
+--host
+http:/0localhost
+--form
+--data
+{"piocalhost
+--form
+--data
+{"pdisabled":false,"empty"--apisecret=":42}
+-X
+POST
+--retries

@@ -1,0 +1,12 @@
+zoqa
+--host
+http---LINKHEADEREND---
+---JSON---
+NKHEADER---
+</api/v15
+---LINKHEADER---
+</api/v1/jobs?offset=10>; rel="next"
+---LINKHEADEREND---
+---JSON---
+{"jobs":[{"id":1,"state":"running"},{"id":2,"state":"done"}]}
+---JSONEND---

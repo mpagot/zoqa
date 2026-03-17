@@ -1,0 +1,10 @@
+zoqa
+--host
+http://lokey
+1234Aost
+http://lBCD
+=
+--data
+{"machine":"64bit","flavor":"DVD","distri":"opensuse"}
+api
+jobs

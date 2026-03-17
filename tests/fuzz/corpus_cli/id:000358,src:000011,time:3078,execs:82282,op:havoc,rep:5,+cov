@@ -1,0 +1,14 @@
+zoqa
+--host
+http://localhost
+--method
+POST
+--header
+X-t: applicader: value
+--header
+Accept: application=json
+--json
+--data
+{"key":"varlue
+--header
+

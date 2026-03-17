@@ -1,0 +1,12 @@
+zoq|p’//localhost
+--form
+--data
+{"pi#:X-Custom:value3.14ÿ59,"":fTENTEEEfEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEND---
+--apikey
+Œ23@lse,"empty":3335351411111111"pf{rm
+--data
+{"pi":3.111111141E9,"e":3.111111141E9,"enne":3.111111141E9,"enpi":3.111111141E9,"oom":42}
+-X
+POST
+api
+jobs

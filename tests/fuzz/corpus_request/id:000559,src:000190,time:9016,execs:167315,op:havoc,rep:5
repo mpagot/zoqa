@@ -1,0 +1,15 @@
+zoqtp://localhost
+--form
+--data
+{"a
+api--host
+http://openqa.example.com
+api
+jobs
+DIS RI=sle
+VERSION=I=sPOSTle
+VERSIZN=---Japi/v1/jobs?offset=10>; rel{"id":2,"state":"done"}]15
+
+---JSON---
+{"jobs":[{"id":1,"state":"}]}
+---JSONEND---

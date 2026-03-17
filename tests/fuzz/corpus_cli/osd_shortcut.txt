@@ -1,3 +1,0 @@
-zoqa
---osd
-api/v1/workers

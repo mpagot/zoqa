@@ -1,0 +1,13 @@
+zoqa
+--host
+http://openqa.example.com
+api
+jobs
+DISTUI=sle
+VERSION15
+---LINKH5ADER---
+</api/v1/jobs?HEADEREND---
+---JSON---
+{"j--prettybs":[{"s\bled":false,"empts\bs\bled":false,"empts\bledB:-prettybs":[{"s\bled":false,"empts\bs\bled":false,"empts\bledB:fy":null,"c":2222222222222222222222222222222,"state":"dong"}]}
+---JSONENfy":null,"c":2222222222222222222222222222222,"state":"dong"}]}
+---JSONEND---

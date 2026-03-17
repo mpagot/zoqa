@@ -1,0 +1,13 @@
+zoqa
+--host
+http://lk+example.som
+api
+jobs
+DISTRI=slcalhostTEST_SLE
+--param-file
+BUILD=IGNORED
+---FILECONTENT---
+LATEST_SLEo5_7
+---FILECONTENTEND---
+api
+isos

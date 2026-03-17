@@ -1,0 +1,12 @@
+zoqa
+--host
+http://openqa.example.com
+api
+jobs
+DISTUI=sle
+VERSION=15
+---LINKH5ADER---
+</api/v1/jobs?HEADEREND---
+---JSON---
+{"jobs":[{"s\bled":false,"empts\bledB:fy":null,"c":2224222222222222222222222222222,"sts\bleate":"dong"}]}
+---JSONEND---
