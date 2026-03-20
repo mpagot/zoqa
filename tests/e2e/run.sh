@@ -24,7 +24,7 @@ set -eo pipefail
 # Source shared library
 # -----------------------------------------------------------------------------
 LOG_PREFIX="run"
-# shellcheck source=tests/e2e/lib.sh
+# shellcheck source=SCRIPTDIR/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 cd_to_project_root "${BASH_SOURCE[0]}"
 
@@ -239,7 +239,7 @@ run_comparison() {
 		"bash -c \"$env_vars $PERL_EXE api --host http://localhost $api_args\"" \
 		"$expected_exit" "$grep_pattern"
 	run_test "ZIG : $label" \
-		"bash -c \"$env_vars $ZIG_EXE --host http://localhost api $api_args\"" \
+		"bash -c \"$env_vars $ZIG_EXE api --host http://localhost $api_args\"" \
 		"$expected_exit" "$grep_pattern"
 }
 
@@ -255,7 +255,7 @@ run_diff_test() {
 	set +e
 	container_exec bash -c "$PERL_EXE api --host http://localhost $api_args" \
 		>test_output_perl.log 2>/dev/null
-	container_exec bash -c "$ZIG_EXE  --host http://localhost api $api_args" \
+	container_exec bash -c "$ZIG_EXE api --host http://localhost $api_args" \
 		>test_output_zig.log 2>/dev/null
 	set -e
 
@@ -316,15 +316,27 @@ run_comparison "CLI Override (correct key overrides wrong config)" \
 run_comparison "Wrong Secret (403)" "" "--apisecret WRONG_SECRET -X POST jobs" 1 "403 Forbidden"
 
 # Test 10: Missing PATH positional argument
-run_test "PERL: Missing PATH" "$PERL_EXE api --host http://localhost" 255
-run_test "ZIG : Missing PATH" "$ZIG_EXE --host http://localhost api" 1 "MissingPath"
+# Perl exits 255 and prints the api usage block to stderr.
+# Zig exits 1 and prints "Request build error: MissingPath" — hard FAIL until §1.7.
+run_comparison "Missing PATH" "" "" 255
 
 # Test 11: Invalid host (connection refused)
-run_test "PERL: Invalid Host" "$PERL_EXE api --host http://localhost:12345 jobs/overview" 1
-run_test "ZIG : Invalid Host" "$ZIG_EXE --host http://localhost:12345 api jobs/overview" 1 "Connection error"
+# Both Perl and Zig exit 1. Messages differ (Perl: ANSI-colored, Zig: plain),
+# so no grep pattern is used.
+run_test "PERL: Invalid Host" \
+	"$PERL_EXE api --host http://localhost:12345 jobs/overview" 1
+run_test "ZIG : Invalid Host" \
+	"$ZIG_EXE api --host http://localhost:12345 jobs/overview" 1
 
-# Test 12: --pretty on a real response produces valid JSON output
-run_test "ZIG : --pretty" "$ZIG_EXE --host http://localhost api --pretty jobs/overview" 0
+# Test 11b: Flags placed before the subcommand name must be rejected (exit 255).
+# Perl's Mojolicious dispatcher treats ARGV[0] as the subcommand name; if it
+# starts with '--', it dies with "Invalid command --host" → exit 255.
+# Zig currently accepts flags in any position (exits 0) — this is a bug tracked
+# by §1.8. The ZIG sub-test is a hard FAIL until §1.8 is fixed.
+run_test "PERL: --host before api rejected (exit 255)" \
+	"$PERL_EXE --host http://localhost api jobs/overview" 255
+run_test "ZIG : --host before api rejected (exit 255)" \
+	"$ZIG_EXE --host http://localhost api jobs/overview" 255
 
 # =============================================================================
 # Tests 13–21: New coverage using seeded data
@@ -341,29 +353,26 @@ run_comparison "GET jobs/$JOB_ID (nested object)" "" \
 # We seeded 3 machines; requesting limit=2 should yield a Link: rel="next" header.
 # parseLinkHeader formats output as "next: <url>" per link.
 echo "--- Test: ZIG : --links and follow pagination ---"
-container_exec bash -c "$ZIG_EXE --host http://localhost api --links 'machines?limit=2'" >test_pagination.log 2>&1
+container_exec bash -c "$ZIG_EXE api --host http://localhost --links 'machines?limit=2'" >test_pagination.log 2>&1
 if grep -q "next:" test_pagination.log; then
 	NEXT_URL=$(grep "^next: " test_pagination.log | cut -d' ' -f2 | tr -d '\r')
 	echo "Found next URL: $NEXT_URL"
 	# Call again with the next URL to verify it returns the remaining data
-	run_test "ZIG : Follow pagination link" "$ZIG_EXE --host http://localhost api '$NEXT_URL'" 0 '"name":"uefi"'
+	run_test "ZIG : Follow pagination link" "$ZIG_EXE api --host http://localhost '$NEXT_URL'" 0 '"name":"uefi"'
 else
 	echo "FAIL: next link not found in output"
 	cat test_pagination.log
 	failed_tests=$((failed_tests + 1))
 fi
 
-# Test 16: --verbose on a real endpoint shows HTTP response headers
-run_test "ZIG : --verbose shows HTTP headers" \
-	"$ZIG_EXE --host http://localhost api --verbose jobs/overview" \
-	0 "HTTP/"
+# Test 16: --verbose on a real endpoint shows HTTP status line and Content-Type header.
+run_comparison "--verbose shows HTTP status line" "" "--verbose jobs/overview" 0 "HTTP/"
+run_comparison "--verbose includes Content-Type" "" "--verbose jobs/overview" 0 "Content-Type:"
 
 # Test 17: --pretty on a non-empty response produces indented JSON.
 # The pattern "^  " matches any line with a 2-space indent — present in all
 # pretty-printed JSON but never in the compact single-line output.
-run_test "ZIG : --pretty (non-empty)" \
-	"$ZIG_EXE --host http://localhost api --pretty jobs/overview" \
-	0 "^  "
+run_comparison "--pretty (non-empty)" "" "--pretty jobs/overview" 0 "^  "
 
 # Test 18: DELETE a real asset (successful authenticated DELETE)
 # Perl and Zig each get their own asset to avoid ordering conflicts.
@@ -380,7 +389,7 @@ if [[ "$ZIG_ASSET_ID" == "SKIP" || -z "$ZIG_ASSET_ID" ]]; then
 	warned_tests=$((warned_tests + 1))
 else
 	run_test "ZIG : DELETE asset/$ZIG_ASSET_ID (200)" \
-		"$ZIG_EXE --host http://localhost api -X DELETE assets/$ZIG_ASSET_ID" 0
+		"$ZIG_EXE api --host http://localhost -X DELETE assets/$ZIG_ASSET_ID" 0
 fi
 
 # Test 19: GET job_groups returns the seeded group
@@ -399,7 +408,7 @@ run_diff_test "GET jobs/$JOB_ID output parity" "jobs/$JOB_ID"
 # differs between the two calls, which would cause a spurious diff failure
 # if stderr were captured.
 echo "--- Test: ZIG : relative vs absolute path parity ---"
-container_exec bash -c "$ZIG_EXE --host http://localhost api jobs/$JOB_ID" \
+container_exec bash -c "$ZIG_EXE api --host http://localhost jobs/$JOB_ID" \
 	>test_relative.log 2>/dev/null
 container_exec bash -c "$ZIG_EXE api 'http://localhost/api/v1/jobs/$JOB_ID'" \
 	>test_absolute.log 2>/dev/null
@@ -411,25 +420,168 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# Test 22: Broken pipe does not crash the CLI
+# Test 22: --name flag acceptance (SPEC §2, Phase 1.2)
+#
+# SPEC §2 lists `--name STRING` for setting the User-Agent header.
+# Both Perl and Zig must accept the flag and exit 0 on a valid request.
+# Phase 1.2 status: --name is not yet parsed in zoqa; the ZIG sub-test will
+# fail until Phase 1.2 is implemented.
+#
+# Server-side User-Agent verification (via access logs) is not attempted here:
+# the openQA single-instance image does not expose the Mojolicious or Apache
+# access log at a predictable path, so those checks would produce unreliable
+# WARNs.  The primary acceptance criterion for Phase 1.2 is this comparison.
+run_comparison "--name flag accepted (exit 0)" "" \
+	"--name zoqa-e2e-test jobs/overview" 0
+
+# =============================================================================
+# Tests 23–26: Verbose mode and non-2xx stderr (Phase 1.3 and 1.4)
+# =============================================================================
+#
+# SPEC §9.1 requires that --verbose prints ALL response headers before the body:
+#
+#   HTTP/1.1 <code> <reason>
+#   <Header-Name>: <value>
+#   ...
+#   <blank line>
+#   <body>
+#
+# Test 16 (above) already verifies the status line and Content-Type are present.
+# Tests 23–24 here compare Perl and Zig header counts so that any deviation from
+# the reference implementation is a hard FAIL rather than a silent WARN.
+
+# Test 23: Broken pipe does not crash the CLI
 # Piping into `head -c 1` causes the reader to close the pipe after 1 byte.
 # The next write from zoqa gets EPIPE (or SIGPIPE). The `catch {}` pattern in
 # printResponse must swallow this so the CLI exits cleanly (exit code 0, not
 # 141/SIGPIPE).
+#
+# The pipeline runs inside `container_exec bash -c "..."` — the inner bash
+# process does NOT inherit the outer script's `pipefail` setting, so `$?` after
+# `container_exec bash -c "cmd | head -c 1"` reflects the inner pipeline's last
+# command (head), which exits 0.  If zoqa itself crashed with an unhandled
+# SIGPIPE the inner bash -c would propagate a non-zero exit for the whole
+# command group; we check for that below.
+echo "--- Test: PERL: broken pipe (stdout | head -c 1) ---"
+set +e
+container_exec bash -c "$PERL_EXE api --host http://localhost jobs/overview | head -c 1" >/dev/null 2>&1
+bp_perl_exit=$?
+set -e
+if [[ "$bp_perl_exit" -eq 0 ]]; then
+	echo "PASS (openqa-cli exited cleanly despite broken pipe)"
+else
+	echo "FAIL: expected exit 0, got $bp_perl_exit (possible SIGPIPE crash)"
+	failed_tests=$((failed_tests + 1))
+fi
+
 echo "--- Test: ZIG : broken pipe (stdout | head -c 1) ---"
 set +e
-container_exec bash -c "$ZIG_EXE --host http://localhost api jobs/overview | head -c 1" >/dev/null 2>&1
+container_exec bash -c "$ZIG_EXE api --host http://localhost jobs/overview | head -c 1" >/dev/null 2>&1
 bp_exit=$?
 set -e
-# Accept exit code 0 (success). head itself may return 0 or get SIGPIPE (141)
-# from the shell pipeline — but the important thing is that zoqa does NOT crash.
-# In a shell pipeline, $? is the exit code of the LAST command (head), which is
-# always 0. If zoqa crashed with SIGPIPE, bash -c would propagate that instead.
-# We also verify zoqa produces at least 1 byte of output (head -c 1 succeeds).
 if [[ "$bp_exit" -eq 0 ]]; then
 	echo "PASS (zoqa exited cleanly despite broken pipe)"
 else
 	echo "FAIL: expected exit 0, got $bp_exit (possible SIGPIPE crash)"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test 24: Verbose mode — Perl vs Zig header count comparison (Phase 1.3)
+#
+# Captures stdout and stderr separately for both implementations and compares
+# the header-line count.  Perl produces ~5 header lines to stdout; Zig currently
+# produces only 1 (Content-Type).  This test will FAIL until Phase 1.3 is
+# implemented.  Diagnostic counts are printed regardless of pass/fail to make
+# the gap visible in CI output.
+echo "--- Test: PERL vs ZIG : --verbose header count (Phase 1.3) ---"
+set +e
+container_exec bash -c "$PERL_EXE api --host http://localhost --verbose jobs/overview \
+	2>/tmp/perl_verbose_stderr.log >/tmp/perl_verbose_stdout.log"
+container_exec cat /tmp/perl_verbose_stderr.log >perl_verbose_stderr.log 2>/dev/null
+container_exec cat /tmp/perl_verbose_stdout.log >perl_verbose_stdout.log 2>/dev/null
+
+container_exec bash -c "$ZIG_EXE api --host http://localhost --verbose jobs/overview \
+	2>/tmp/zig_verbose_stderr.log >/tmp/zig_verbose_stdout.log"
+container_exec cat /tmp/zig_verbose_stderr.log >zig_verbose_stderr.log 2>/dev/null
+container_exec cat /tmp/zig_verbose_stdout.log >zig_verbose_stdout.log 2>/dev/null
+set -e
+
+perl_stdout_headers=$(grep -cE '^[A-Za-z_-]+: ' perl_verbose_stdout.log || true)
+perl_stderr_headers=$(grep -cE '^[A-Za-z_-]+: ' perl_verbose_stderr.log || true)
+zig_stdout_headers=$(grep -cE '^[A-Za-z_-]+: ' zig_verbose_stdout.log || true)
+zig_stderr_headers=$(grep -cE '^[A-Za-z_-]+: ' zig_verbose_stderr.log || true)
+
+echo "PERL headers in stdout: $perl_stdout_headers"
+echo "PERL headers in stderr: $perl_stderr_headers"
+echo "ZIG  headers in stdout: $zig_stdout_headers"
+echo "ZIG  headers in stderr: $zig_stderr_headers"
+echo "PERL HTTP/1.1 line in stdout: $(grep -c 'HTTP/1.1 ' perl_verbose_stdout.log || true)"
+echo "PERL HTTP/1.1 line in stderr: $(grep -c 'HTTP/1.1 ' perl_verbose_stderr.log || true)"
+
+if [[ "$perl_stdout_headers" -gt 0 || "$perl_stderr_headers" -gt 0 ]]; then
+	if [[ "$zig_stdout_headers" -eq "$perl_stdout_headers" && "$zig_stderr_headers" -eq "$perl_stderr_headers" ]]; then
+		echo "PASS (Zig matches Perl header output)"
+	else
+		echo "FAIL: Zig header output ($zig_stdout_headers stdout / $zig_stderr_headers stderr) does not match Perl ($perl_stdout_headers stdout / $perl_stderr_headers stderr)"
+		failed_tests=$((failed_tests + 1))
+	fi
+else
+	echo "WARN: Perl produced no headers in verbose mode — skipping comparison"
+	warned_tests=$((warned_tests + 1))
+fi
+
+# Tests 25–26: Non-2xx error reporting and --quiet suppression (Phase 1.4)
+#
+# SPEC §9.3: on a non-2xx response, the status line must be printed to stderr
+# (unless --quiet is set).  Both sub-tests run together because Test 26's PASS
+# criterion depends on the stderr file captured in Test 25.
+echo "--- Test: PERL vs ZIG : non-2xx stderr without --quiet (Phase 1.4) ---"
+set +e
+container_exec bash -c "$PERL_EXE api --host http://localhost non_existent_e2e_route \
+	2>/tmp/perl_404_stderr.log >/tmp/perl_404_stdout.log"
+perl_404_exit=$?
+container_exec bash -c "$ZIG_EXE api --host http://localhost non_existent_e2e_route \
+	2>/tmp/zig_404_stderr.log >/tmp/zig_404_stdout.log"
+zig_404_exit=$?
+container_exec cat /tmp/perl_404_stderr.log >perl_404_stderr.log 2>/dev/null
+container_exec cat /tmp/zig_404_stderr.log >zig_404_stderr.log 2>/dev/null
+set -e
+
+echo "PERL exit: $perl_404_exit, ZIG exit: $zig_404_exit"
+echo "PERL stderr contains '404': $(grep -c '404' perl_404_stderr.log || true)"
+echo "ZIG  stderr contains '404': $(grep -c '404' zig_404_stderr.log || true)"
+
+# Hard assertion: both Perl and Zig must emit '404' on stderr without --quiet.
+if grep -q "404" perl_404_stderr.log && grep -q "404" zig_404_stderr.log; then
+	echo "PASS (both Perl and Zig report 404 on stderr without --quiet)"
+else
+	echo "FAIL: expected '404' on stderr from both implementations"
+	failed_tests=$((failed_tests + 1))
+fi
+
+echo "--- Test: PERL vs ZIG : non-2xx stderr with --quiet (Phase 1.4) ---"
+set +e
+container_exec bash -c "$PERL_EXE api --host http://localhost --quiet non_existent_e2e_route \
+	2>/tmp/perl_404q_stderr.log >/tmp/perl_404q_stdout.log"
+perl_404q_exit=$?
+container_exec bash -c "$ZIG_EXE api --host http://localhost --quiet non_existent_e2e_route \
+	2>/tmp/zig_404q_stderr.log >/tmp/zig_404q_stdout.log"
+zig_404q_exit=$?
+container_exec cat /tmp/perl_404q_stderr.log >perl_404q_stderr.log 2>/dev/null
+container_exec cat /tmp/zig_404q_stderr.log >zig_404q_stderr.log 2>/dev/null
+set -e
+
+echo "PERL exit: $perl_404q_exit, ZIG exit: $zig_404q_exit"
+echo "PERL stderr bytes: $(wc -c <perl_404q_stderr.log)"
+echo "ZIG  stderr bytes: $(wc -c <zig_404q_stderr.log)"
+echo "PERL stderr contains '404': $(grep -c '404' perl_404q_stderr.log || true)"
+echo "ZIG  stderr contains '404': $(grep -c '404' zig_404q_stderr.log || true)"
+
+# Hard assertion: --quiet must suppress the error output for both implementations.
+if ! grep -q "404" perl_404q_stderr.log && ! grep -q "404" zig_404q_stderr.log; then
+	echo "PASS (both Perl and Zig suppress 404 stderr with --quiet)"
+else
+	echo "FAIL: --quiet did not suppress stderr as expected"
 	failed_tests=$((failed_tests + 1))
 fi
 

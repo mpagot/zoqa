@@ -21,7 +21,7 @@ set -eo pipefail
 # Source shared library (container path)
 # -----------------------------------------------------------------------------
 LOG_PREFIX="seed"
-# shellcheck source=tests/e2e/lib.sh
+# shellcheck source=SCRIPTDIR/lib.sh
 # shellcheck disable=SC1091  # lib.sh is only reachable at the container path /app/...
 source /app/tests/e2e/lib.sh
 

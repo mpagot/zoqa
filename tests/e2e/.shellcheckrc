@@ -1,0 +1,12 @@
+# shellcheck configuration for the E2E test suite.
+#
+# source-path=SCRIPTDIR — resolve relative `source=` paths from the directory
+# of the script being checked, not from the shellcheck invocation CWD.
+# This makes `# shellcheck source=SCRIPTDIR/lib.sh` annotations work regardless
+# of where shellcheck is run from.
+#
+# external-sources=true — follow source directives into external files so that
+# variables set in a calling script and consumed in lib.sh are recognised as
+# used (suppresses false-positive SC2034 warnings for LOG_PREFIX etc.).
+source-path=SCRIPTDIR
+external-sources=true

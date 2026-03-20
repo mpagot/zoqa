@@ -33,7 +33,7 @@ set -eo pipefail
 # Source shared library
 # -----------------------------------------------------------------------------
 LOG_PREFIX="setup"
-# shellcheck source=tests/e2e/lib.sh
+# shellcheck source=SCRIPTDIR/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 cd_to_project_root "${BASH_SOURCE[0]}"
 
