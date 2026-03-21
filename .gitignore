@@ -24,7 +24,6 @@ coverage/
 session-*.md
 tests/e2e/entrypoint-wrapper.sh
 client.conf.e2e
-test_output.log
 
 # IDEs / Editors
 .vscode/
