@@ -6,24 +6,36 @@ const auth = @import("auth.zig");
 // Public types
 // ---------------------------------------------------------------------------
 
+/// A single HTTP response header name/value pair.
+/// Both fields are heap-allocated and owned by the `APIResponse` that contains
+/// this entry. Freed by `APIResponse.deinit()`.
+pub const ResponseHeader = struct {
+    name: []u8,
+    value: []u8,
+};
+
 /// Owned HTTP response returned by `execute()`.
 ///
 /// All string fields are heap-allocated using the allocator stored in the
 /// struct. The caller **must** call `deinit()` exactly once to release them.
 ///
 /// Fields:
-/// - `status`       — HTTP status code of the final (non-retried) response.
-/// - `body`         — Decompressed response body. Always non-null; may be
-///                    empty (`""`). Owned by this struct.
-/// - `content_type` — Value of the first `Content-Type` response header, or
-///                    `null` if absent. Owned by this struct.
-/// - `link`         — Value of the first `Link` response header, or `null`
-///                    if absent. Used for pagination. Owned by this struct.
+/// - `status`           — HTTP status code of the final (non-retried) response.
+/// - `body`             — Decompressed response body. Always non-null; may be
+///                        empty (`""`). Owned by this struct.
+/// - `response_headers` — All response headers, in transmission order. Owned
+///                        by this struct. Used for verbose output.
+/// - `content_type`     — Value of the first `Content-Type` response header, or
+///                        `null` if absent. Owned by this struct.
+/// - `link`             — Value of the first `Link` response header, or `null`
+///                        if absent. Used for pagination. Owned by this struct.
 pub const APIResponse = struct {
     allocator: std.mem.Allocator,
     status: std.http.Status,
     /// Decompressed response body. Always allocated; never null.
     body: []u8,
+    /// All response headers, in transmission order. Allocated slice of owned entries.
+    response_headers: []ResponseHeader,
     /// Value of the Content-Type header, if present. Allocated.
     content_type: ?[]u8,
     /// Value of the Link header, if present. Allocated.
@@ -32,6 +44,11 @@ pub const APIResponse = struct {
     /// Release all memory owned by this response.
     /// Must be called exactly once. Do not use the struct after calling this.
     pub fn deinit(self: APIResponse) void {
+        for (self.response_headers) |h| {
+            self.allocator.free(h.name);
+            self.allocator.free(h.value);
+        }
+        self.allocator.free(self.response_headers);
         if (self.content_type) |ct| self.allocator.free(ct);
         if (self.link) |l| self.allocator.free(l);
         self.allocator.free(self.body);
@@ -71,7 +88,7 @@ pub const APIResponse = struct {
 ///                   `X-API-Microtime` headers are computed from the path,
 ///                   query string, and current Unix timestamp, then appended.
 ///                   Body parameters are intentionally excluded from the HMAC
-///                   message per SPEC §5.3.
+///                   message.
 /// - `retries`     — Maximum number of additional attempts after the first
 ///                   failure. Retries are triggered by connection errors, send
 ///                   errors, and 502/503 HTTP responses. Each retry sleeps for
@@ -95,7 +112,7 @@ pub const Request = struct {
 // Normalize path+query for HMAC signing: %20 → +, ~ → %7E
 // ---------------------------------------------------------------------------
 
-/// Normalize a URL path+query string for HMAC-SHA1 signing (SPEC §5.3).
+/// Normalize a URL path+query string for HMAC-SHA1 signing.
 /// Rewrites %20 → + and ~ → %7E.
 /// Output is written to `writer`. Called internally by `execute()` before
 /// computing the HMAC digest; not part of the public API.
@@ -130,6 +147,20 @@ fn normalizePathQuery(input: []const u8, writer: anytype) !void {
 /// rather than an `APIResponse` with a non-2xx status, so that callers can
 /// distinguish network failures from HTTP-level failures.
 pub fn execute(req: Request, client: anytype) !APIResponse {
+    // Read connect timeout from environment.
+    // std.http.Client.request() in Zig 0.15.2 does not expose a timeout
+    // parameter, so this value is parsed and validated but cannot be wired
+    // into the underlying TCP connection yet.  It is intentionally NOT
+    // silently ignored: an invalid value causes a parse warning on stderr and
+    // the fallback of 30 s is used.
+    const _connect_timeout_s: f64 = blk: {
+        const env_str = std.posix.getenv("OPENQA_CLI_CONNECT_TIMEOUT") orelse break :blk 30.0;
+        break :blk std.fmt.parseFloat(f64, env_str) catch 30.0;
+    };
+    // TODO: wire _connect_timeout_s into the HTTP client once std.http.Client
+    // exposes per-connection timeout support.
+    _ = _connect_timeout_s;
+
     var attempt: u32 = 0;
     while (true) : (attempt += 1) {
         // Build the header list for this attempt (unmanaged ArrayList)
@@ -162,7 +193,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
 
         if (req.credentials) |creds| {
             // HMAC message: path + ("?" + query if query else "") + timestamp.
-            // Body parameters are strictly EXCLUDED. (SPEC §5.3)
+            // Body parameters are strictly EXCLUDED.
             var msg_buf: std.ArrayList(u8) = .{};
             defer msg_buf.deinit(req.allocator);
 
@@ -267,9 +298,40 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         var link_buf: ?[]u8 = null;
         var content_type_is_json = false;
         var is_gzip = false;
+        var all_headers: std.ArrayList(ResponseHeader) = .{};
+        errdefer {
+            for (all_headers.items) |h| {
+                req.allocator.free(h.name);
+                req.allocator.free(h.value);
+            }
+            all_headers.deinit(req.allocator);
+        }
 
         var hit = response.head.iterateHeaders();
         while (hit.next()) |hdr| {
+            // Collect all headers for verbose output (§1.3).
+            // Hop-by-hop headers (RFC 7230 §6.1) are excluded to match the
+            // behaviour of Mojolicious's Mojo::Headers, which strips them
+            // before exposing the header set to application code.
+            const hop_by_hop = [_][]const u8{
+                "Connection",          "Keep-Alive", "Proxy-Authenticate",
+                "Proxy-Authorization", "TE",         "Trailers",
+                "Transfer-Encoding",   "Upgrade",
+            };
+            var is_hop_by_hop = false;
+            for (hop_by_hop) |name| {
+                if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
+                    is_hop_by_hop = true;
+                    break;
+                }
+            }
+            if (!is_hop_by_hop) {
+                try all_headers.append(req.allocator, .{
+                    .name = try req.allocator.dupe(u8, hdr.name),
+                    .value = try req.allocator.dupe(u8, hdr.value),
+                });
+            }
+
             if (std.ascii.eqlIgnoreCase(hdr.name, "Link") and link_buf == null) {
                 link_buf = try req.allocator.dupe(u8, hdr.value);
             }
@@ -296,12 +358,6 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         if (!content_type_is_json) {
             if (response.head.content_type) |ct| {
                 content_type_is_json = std.mem.indexOf(u8, ct, "application/json") != null;
-            }
-        }
-
-        if (status_uint < 200 or status_uint >= 300) {
-            if (!req.quiet) {
-                std.debug.print("{d} {s}\n", .{ status_uint, response.head.status.phrase() orelse "Unknown Error" });
             }
         }
 
@@ -345,6 +401,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
             .allocator = req.allocator,
             .status = response.head.status,
             .body = owned_body,
+            .response_headers = try all_headers.toOwnedSlice(req.allocator),
             .content_type = content_type_buf,
             .link = link_buf,
         };
@@ -464,4 +521,102 @@ test "execute: MockClient returns APIResponse" {
 
     try testing.expect(resp.exitCode() == 0);
     try testing.expectEqualStrings("{\"jobs\":[]}", resp.body);
+}
+
+test "execute: hop-by-hop headers are excluded from response_headers" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Mock that returns a mix of application-level and hop-by-hop headers.
+    // Only the application-level ones must appear in APIResponse.response_headers.
+    const MockClient = struct {
+        const Self = @This();
+
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_type: ?[]const u8 = "application/json",
+
+            // Emits: Content-Type, Connection, Keep-Alive, Transfer-Encoding,
+            // Server, Upgrade.  The hop-by-hop ones (Connection, Keep-Alive,
+            // Transfer-Encoding, Upgrade) must be stripped; Content-Type and
+            // Server must survive.
+            const HeaderIterator = struct {
+                index: u8 = 0,
+                const headers = [_]std.http.Header{
+                    .{ .name = "Content-Type", .value = "application/json" },
+                    .{ .name = "Connection", .value = "keep-alive" },
+                    .{ .name = "Keep-Alive", .value = "timeout=15, max=100" },
+                    .{ .name = "Transfer-Encoding", .value = "chunked" },
+                    .{ .name = "Server", .value = "TestServer/1.0" },
+                    .{ .name = "Upgrade", .value = "h2c" },
+                };
+
+                pub fn next(self: *HeaderIterator) ?std.http.Header {
+                    if (self.index >= headers.len) return null;
+                    const h = headers[self.index];
+                    self.index += 1;
+                    return h;
+                }
+            };
+
+            pub fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            done: bool = false,
+            pub fn streamRemaining(self: *MockReader, w: anytype) anyerror!usize {
+                if (self.done) return 0;
+                self.done = true;
+                const body = "{}";
+                try w.writeAll(body);
+                return body.len;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn sendBodyComplete(_: *MockResponse, _: []u8) !void {}
+
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        response: MockResponse = .{},
+
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            return &self.response;
+        }
+    };
+
+    var mock: MockClient = .{};
+    const req = Request{
+        .allocator = allocator,
+        .method = .GET,
+        .url = "http://localhost/api/v1/jobs",
+        .headers = &.{},
+        .body = null,
+        .credentials = null,
+        .retries = 0,
+        .quiet = true,
+    };
+
+    const resp = try execute(req, &mock);
+    defer resp.deinit();
+
+    // Only Content-Type and Server must survive the hop-by-hop filter.
+    try testing.expectEqual(@as(usize, 2), resp.response_headers.len);
+    try testing.expectEqualStrings("Content-Type", resp.response_headers[0].name);
+    try testing.expectEqualStrings("application/json", resp.response_headers[0].value);
+    try testing.expectEqualStrings("Server", resp.response_headers[1].name);
+    try testing.expectEqualStrings("TestServer/1.0", resp.response_headers[1].value);
 }

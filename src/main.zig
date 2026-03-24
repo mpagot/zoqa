@@ -72,14 +72,67 @@ pub const Args = struct {
     retries: ?u32 = null,
     // positionals: args.path holds the subcommand token; kv_params holds PATH + KV pairs
     path: ?[]const u8 = null,
+    // Positional arguments collected after the subcommand token, stored in order
+    // of appearance on the command line. The layout is fixed by convention:
+    //   [0]   — the API path (relative, e.g. "jobs/1234", or an absolute URL).
+    //           Mandatory; buildRequest returns error.MissingPath when absent.
+    //   [1..] — zero or more KEY=VALUE request-parameter strings
+    //           (e.g. "DISTRI=sle", "state=running"). buildRequest
+    //           percent-encodes these and places the result in
+    //           RequestConfig.params_encoded, which openQAReq then routes
+    //           as a URL query string (GET/DELETE) or request body
+    //           (POST/PUT/PATCH) depending on the HTTP method.
+    // All slices borrow directly from argv — no copies are made during parsing.
     kv_params: std.ArrayList([]const u8),
     // help requested
     help: bool = false,
+    // User-Agent name (--name)
+    name: []const u8 = "openQAclient",
+
+    /// Release the three owned ArrayLists.  Call this (via `defer`) immediately
+    /// after a successful `parseArgs` return.
+    pub fn deinit(self: *Args, allocator: std.mem.Allocator) void {
+        self.headers.deinit(allocator);
+        self.param_files.deinit(allocator);
+        self.kv_params.deinit(allocator);
+    }
 };
+
+/// Return the value for a flag that takes a single argument, handling both
+/// the space form (`--flag VALUE`, which advances `i`) and the equals form
+/// (`--flag=VALUE`, which slices the current token).  Returns `null` when
+/// `arg` does not match `flag` at all.
+///
+/// `flag` must be the long-form name including the leading dashes, e.g.
+/// `"--host"`.  Short aliases (e.g. `-X`) are handled by the caller as a
+/// plain `eql` check before this function is called.
+///
+/// Errors:
+///   - `error.MissingValue` — space form was matched but no next token exists.
+fn flagValue(
+    arg: []const u8,
+    i: *usize,
+    argv: []const []const u8,
+    flag: []const u8,
+) !?[]const u8 {
+    if (std.mem.eql(u8, arg, flag)) {
+        i.* += 1;
+        if (i.* >= argv.len) return error.MissingValue;
+        return argv[i.*];
+    }
+    // Equals form: arg must start with "flag=" and have at least one more byte.
+    if (arg.len > flag.len + 1 and
+        std.mem.startsWith(u8, arg, flag) and
+        arg[flag.len] == '=')
+    {
+        return arg[flag.len + 1 ..];
+    }
+    return null;
+}
 
 /// Parse command-line arguments into an `Args` struct.
 ///
-/// This function implements a manual CLI parser that handles:
+/// This function implements a CLI parser that handles:
 /// - Global options (host, osd, o3, etc.)
 /// - Subcommand identification (currently only "api")
 /// - API-specific options (method, data, data-file, etc.)
@@ -99,6 +152,19 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
         .param_files = .{},
         .kv_params = .{},
     };
+
+    // The first argument (after argv[0]) must be the subcommand token.
+    // If it starts with '-' (other than -h/--help or the stop-flag '--'),
+    // reject with InvalidCommand to match Perl's Mojolicious dispatcher.
+    if (argv.len > 1) {
+        const first = argv[1];
+        const is_help = std.mem.eql(u8, first, "-h") or std.mem.eql(u8, first, "--help");
+        const is_stop = std.mem.eql(u8, first, "--");
+        if (!is_help and !is_stop and std.mem.startsWith(u8, first, "-")) {
+            std.debug.print("Invalid command \"{s}\".\n", .{first});
+            return error.InvalidCommand;
+        }
+    }
 
     var i: usize = 1; // skip argv[0]
     var past_subcmd = false;
@@ -167,106 +233,87 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
         }
 
         // ---- flags that take a value (space or = form) ----
-        if (std.mem.eql(u8, arg, "--host")) {
-            i += 1;
-            if (i >= argv.len) return error.MissingValue;
-            args.host = argv[i];
+        if (try flagValue(arg, &i, argv, "--host")) |v| {
+            args.host = v;
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--host=")) {
-            args.host = arg["--host=".len..];
+        if (try flagValue(arg, &i, argv, "--apikey")) |v| {
+            args.apikey = v;
             continue;
         }
-
-        if (std.mem.eql(u8, arg, "--apikey")) {
-            i += 1;
-            if (i >= argv.len) return error.MissingValue;
-            args.apikey = argv[i];
-            continue;
-        }
-        if (std.mem.startsWith(u8, arg, "--apikey=")) {
-            args.apikey = arg["--apikey=".len..];
+        if (try flagValue(arg, &i, argv, "--apisecret")) |v| {
+            args.apisecret = v;
             continue;
         }
 
-        if (std.mem.eql(u8, arg, "--apisecret")) {
-            i += 1;
-            if (i >= argv.len) return error.MissingValue;
-            args.apisecret = argv[i];
-            continue;
-        }
-        if (std.mem.startsWith(u8, arg, "--apisecret=")) {
-            args.apisecret = arg["--apisecret=".len..];
-            continue;
-        }
-
-        if (std.mem.eql(u8, arg, "-X") or std.mem.eql(u8, arg, "--method")) {
+        if (std.mem.eql(u8, arg, "-X")) {
             i += 1;
             if (i >= argv.len) return error.MissingValue;
             args.method = argv[i];
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--method=")) {
-            args.method = arg["--method=".len..];
+        if (try flagValue(arg, &i, argv, "--method")) |v| {
+            args.method = v;
             continue;
         }
 
-        if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--data")) {
+        if (std.mem.eql(u8, arg, "-d")) {
             i += 1;
             if (i >= argv.len) return error.MissingValue;
             args.data = argv[i];
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--data=")) {
-            args.data = arg["--data=".len..];
+        if (try flagValue(arg, &i, argv, "--data")) |v| {
+            args.data = v;
             continue;
         }
 
-        if (std.mem.eql(u8, arg, "-D") or std.mem.eql(u8, arg, "--data-file")) {
+        if (std.mem.eql(u8, arg, "-D")) {
             i += 1;
             if (i >= argv.len) return error.MissingValue;
             args.data_file = argv[i];
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--data-file=")) {
-            args.data_file = arg["--data-file=".len..];
+        if (try flagValue(arg, &i, argv, "--data-file")) |v| {
+            args.data_file = v;
             continue;
         }
 
-        if (std.mem.eql(u8, arg, "-a") or std.mem.eql(u8, arg, "--header")) {
+        if (std.mem.eql(u8, arg, "-a")) {
             i += 1;
             if (i >= argv.len) return error.MissingValue;
             try args.headers.append(allocator, argv[i]);
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--header=")) {
-            try args.headers.append(allocator, arg["--header=".len..]);
+        if (try flagValue(arg, &i, argv, "--header")) |v| {
+            try args.headers.append(allocator, v);
             continue;
         }
 
-        if (std.mem.eql(u8, arg, "--param-file")) {
-            i += 1;
-            if (i >= argv.len) return error.MissingValue;
-            try args.param_files.append(allocator, argv[i]);
-            continue;
-        }
-        if (std.mem.startsWith(u8, arg, "--param-file=")) {
-            try args.param_files.append(allocator, arg["--param-file=".len..]);
+        if (try flagValue(arg, &i, argv, "--param-file")) |v| {
+            try args.param_files.append(allocator, v);
             continue;
         }
 
-        if (std.mem.eql(u8, arg, "-r") or std.mem.eql(u8, arg, "--retries")) {
+        if (std.mem.eql(u8, arg, "-r")) {
             i += 1;
             if (i >= argv.len) return error.MissingValue;
             args.retries = std.fmt.parseInt(u32, argv[i], 10) catch return error.InvalidRetries;
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--retries=")) {
-            args.retries = std.fmt.parseInt(u32, arg["--retries=".len..], 10) catch return error.InvalidRetries;
+        if (try flagValue(arg, &i, argv, "--retries")) |v| {
+            args.retries = std.fmt.parseInt(u32, v, 10) catch return error.InvalidRetries;
             continue;
         }
 
-        // ---- positionals ----
+        if (try flagValue(arg, &i, argv, "--name")) |v| {
+            args.name = v;
+            continue;
+        }
+
+        // ---- positionals / unrecognized flags ----
+
+        // Any unrecognized flag after the subcommand is an error.
         if (std.mem.startsWith(u8, arg, "-")) {
             std.debug.print("Unknown flag: {s}\n", .{arg});
             return error.UnknownFlag;
@@ -290,13 +337,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
 test "parseArgs: basic flags" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--host",        "http://example.com", "-v", "-q",
-        "api",  "jobs/overview", "state=running",
+        "zoqa", "api", "--host", "http://example.com", "-v", "-q", "jobs/overview", "state=running",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     try std.testing.expectEqualStrings("http://example.com", parsed.host.?);
     try std.testing.expect(parsed.verbose);
@@ -311,21 +355,17 @@ test "parseArgs: --method long and short" {
 
     // Test short form: -X
     {
-        const argv: []const []const u8 = &.{ "zoqa", "-X", "POST", "api", "jobs" };
+        const argv: []const []const u8 = &.{ "zoqa", "api", "-X", "POST", "jobs" };
         var parsed = try parseArgs(allocator, argv);
-        defer parsed.headers.deinit(allocator);
-        defer parsed.param_files.deinit(allocator);
-        defer parsed.kv_params.deinit(allocator);
+        defer parsed.deinit(allocator);
         try std.testing.expectEqualStrings("POST", parsed.method);
     }
 
     // Test long form: --method
     {
-        const argv: []const []const u8 = &.{ "zoqa", "--method", "PUT", "api", "jobs" };
+        const argv: []const []const u8 = &.{ "zoqa", "api", "--method", "PUT", "jobs" };
         var parsed = try parseArgs(allocator, argv);
-        defer parsed.headers.deinit(allocator);
-        defer parsed.param_files.deinit(allocator);
-        defer parsed.kv_params.deinit(allocator);
+        defer parsed.deinit(allocator);
         try std.testing.expectEqualStrings("PUT", parsed.method);
     }
 }
@@ -333,12 +373,10 @@ test "parseArgs: --method long and short" {
 test "parseArgs: repeatable --header" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--header", "X-Foo: bar", "-a", "X-Baz: qux", "api", "jobs",
+        "zoqa", "api", "--header", "X-Foo: bar", "-a", "X-Baz: qux", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), parsed.headers.items.len);
     try std.testing.expectEqualStrings("X-Foo: bar", parsed.headers.items[0]);
     try std.testing.expectEqualStrings("X-Baz: qux", parsed.headers.items[1]);
@@ -346,11 +384,9 @@ test "parseArgs: repeatable --header" {
 
 test "parseArgs: --retries" {
     const allocator = std.testing.allocator;
-    const argv: []const []const u8 = &.{ "zoqa", "--retries", "3", "api", "jobs" };
+    const argv: []const []const u8 = &.{ "zoqa", "api", "--retries", "3", "jobs" };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 3), parsed.retries.?);
 }
 
@@ -358,6 +394,7 @@ test "parseArgs: equals-form flags" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
         "zoqa",
+        "api",
         "--host=http://ex.com",
         "--apikey=K1",
         "--apisecret=S1",
@@ -367,13 +404,10 @@ test "parseArgs: equals-form flags" {
         "--header=X-A: B",
         "--param-file=K=V",
         "--retries=5",
-        "api",
         "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     try std.testing.expectEqualStrings("http://ex.com", parsed.host.?);
     try std.testing.expectEqualStrings("K1", parsed.apikey.?);
@@ -390,20 +424,44 @@ test "parseArgs: equals-form flags" {
 
 test "parseArgs: unknown flag returns error" {
     const allocator = std.testing.allocator;
+    // Flag before subcommand → InvalidCommand (§1.8)
     const argv: []const []const u8 = &.{ "zoqa", "--nonexistent" };
+    try std.testing.expectError(error.InvalidCommand, parseArgs(allocator, argv));
+}
+
+test "parseArgs: unknown flag after subcommand returns UnknownFlag" {
+    const allocator = std.testing.allocator;
+    // Unknown flag after subcommand → UnknownFlag
+    const argv: []const []const u8 = &.{ "zoqa", "api", "--nonexistent" };
     try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
 }
 
 test "parseArgs: missing value after flag returns error" {
     const allocator = std.testing.allocator;
-    const argv: []const []const u8 = &.{ "zoqa", "--host" };
+    const argv: []const []const u8 = &.{ "zoqa", "api", "--host" };
     try std.testing.expectError(error.MissingValue, parseArgs(allocator, argv));
 }
 
 test "parseArgs: invalid retries returns error" {
     const allocator = std.testing.allocator;
-    const argv: []const []const u8 = &.{ "zoqa", "--retries", "abc" };
+    const argv: []const []const u8 = &.{ "zoqa", "api", "--retries", "abc" };
     try std.testing.expectError(error.InvalidRetries, parseArgs(allocator, argv));
+}
+
+test "parseArgs: flag before subcommand returns InvalidCommand" {
+    const allocator = std.testing.allocator;
+    // --host before the subcommand token → InvalidCommand (§1.8)
+    const argv: []const []const u8 = &.{ "zoqa", "--host", "http://example.com", "api", "jobs" };
+    try std.testing.expectError(error.InvalidCommand, parseArgs(allocator, argv));
+}
+
+test "parseArgs: -h before subcommand is allowed" {
+    const allocator = std.testing.allocator;
+    // -h/--help are exempt from the pre-subcommand restriction
+    const argv: []const []const u8 = &.{ "zoqa", "-h" };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+    try std.testing.expect(parsed.help);
 }
 
 test "parseArgs: stop flag --" {
@@ -412,9 +470,7 @@ test "parseArgs: stop flag --" {
         "zoqa", "--", "--osd", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     // --osd after -- is treated as subcmd, not flag
     try std.testing.expect(!parsed.osd);
@@ -425,12 +481,10 @@ test "parseArgs: stop flag --" {
 test "parseArgs: short flags and aliases" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--osd", "-f", "-j", "-p", "-d", "raw_data", "-D", "file.txt", "api", "path",
+        "zoqa", "api", "--osd", "-f", "-j", "-p", "-d", "raw_data", "-D", "file.txt", "path",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     try std.testing.expect(parsed.osd);
     try std.testing.expect(parsed.form);
@@ -729,7 +783,7 @@ pub fn buildRequest(
     const api_path = args.kv_params.items[0];
     const kv_args = args.kv_params.items[1..];
 
-    // Collect all parameters (SPEC §3.1)
+    // Collect all parameters
     var params: std.ArrayList(u8) = .{};
     errdefer params.deinit(allocator);
 
@@ -841,7 +895,7 @@ pub fn buildRequest(
         relative_path = if (std.mem.startsWith(u8, api_path, "/")) api_path[1..] else api_path;
     }
 
-    // Build request body (SPEC §7)
+    // Build request body
     // Note: KV params are NOT placed in the body here — that routing is
     // done by openQAReq based on the HTTP method. Only explicit --data,
     // --data-file, and --form bodies are set here.
@@ -853,7 +907,7 @@ pub fn buildRequest(
         req_body = d;
     }
 
-    // --form: JSON object body → application/x-www-form-urlencoded (SPEC §7)
+    // --form: JSON object body → application/x-www-form-urlencoded
     var form_body_buf: ?[]u8 = null;
     errdefer if (form_body_buf) |b| allocator.free(b);
 
@@ -891,6 +945,9 @@ pub fn buildRequest(
         try custom_headers.append(allocator, .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" });
     }
 
+    // §1.2: User-Agent header from --name (default: "openQAclient")
+    try custom_headers.append(allocator, .{ .name = "User-Agent", .value = args.name });
+
     return RequestConfig{
         .method = method,
         .host = resolved_host,
@@ -909,12 +966,10 @@ pub fn buildRequest(
 test "buildRequest: GET with KV params appends query string" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--host", "http://example.com", "api", "jobs", "state=running",
+        "zoqa", "api", "--host", "http://example.com", "jobs", "state=running",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -929,13 +984,11 @@ test "buildRequest: GET with KV params appends query string" {
 test "buildRequest: POST with --data and --form" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa",   "--host", "http://example.com", "-X",  "POST",
-        "--form", "--data", "{\"foo\":\"bar\"}",  "api", "jobs",
+        "zoqa",   "api",    "--host",            "http://example.com", "-X", "POST",
+        "--form", "--data", "{\"foo\":\"bar\"}", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -959,12 +1012,10 @@ test "buildRequest: POST with --data and --form" {
 test "buildRequest: lowercase method is upper-cased" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "-X", "post", "api", "jobs",
+        "zoqa", "api", "-X", "post", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -978,9 +1029,7 @@ test "buildRequest: absolute URL used as-is" {
         "zoqa", "api", "https://custom.host/api/v1/jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -993,17 +1042,16 @@ test "buildRequest: absolute URL used as-is" {
 test "buildRequest: --header with colon splitting" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--header", "X-Custom: my-value", "api", "jobs",
+        "zoqa", "api", "--header", "X-Custom: my-value", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
 
-    try std.testing.expectEqual(@as(usize, 1), req_cfg.headers.items.len);
+    // X-Custom + User-Agent = 2 headers
+    try std.testing.expectEqual(@as(usize, 2), req_cfg.headers.items.len);
     try std.testing.expectEqualStrings("X-Custom", req_cfg.headers.items[0].name);
     try std.testing.expectEqualStrings("my-value", req_cfg.headers.items[0].value);
 }
@@ -1011,12 +1059,10 @@ test "buildRequest: --header with colon splitting" {
 test "buildRequest: --json adds Content-Type header" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--json", "-X", "POST", "--data", "{}", "api", "jobs",
+        "zoqa", "api", "--json", "-X", "POST", "--data", "{}", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -1036,12 +1082,10 @@ test "buildRequest: --json adds Content-Type header" {
 test "buildRequest: --form without --data returns error" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--form", "api", "jobs",
+        "zoqa", "api", "--form", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     try std.testing.expectError(error.FormRequiresData, buildRequest(allocator, &parsed, null));
 }
@@ -1049,12 +1093,10 @@ test "buildRequest: --form without --data returns error" {
 test "buildRequest: data-file content used as body" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "-X", "POST", "--data-file", "dummy.txt", "api", "jobs",
+        "zoqa", "api", "-X", "POST", "--data-file", "dummy.txt", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     const file_data = "file body content";
     var req_cfg = try buildRequest(allocator, &parsed, file_data);
@@ -1066,12 +1108,10 @@ test "buildRequest: data-file content used as body" {
 test "buildRequest: --osd flag resolves to openqa.suse.de" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--osd", "api", "jobs",
+        "zoqa", "api", "--osd", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -1082,13 +1122,11 @@ test "buildRequest: --osd flag resolves to openqa.suse.de" {
 test "buildRequest: DELETE with KV params appends query string" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "-X",     "DELETE",  "--host", "http://example.com",
-        "api",  "jobs/1", "force=1",
+        "zoqa",   "api",     "-X", "DELETE", "--host", "http://example.com",
+        "jobs/1", "force=1",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -1101,13 +1139,11 @@ test "buildRequest: DELETE with KV params appends query string" {
 test "buildRequest: POST with KV params uses body not query string" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "-X",   "POST",       "--host",     "http://example.com",
-        "api",  "jobs", "DISTRI=sle", "VERSION=15",
+        "zoqa", "api",        "-X",         "POST", "--host", "http://example.com",
+        "jobs", "DISTRI=sle", "VERSION=15",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -1135,9 +1171,7 @@ test "buildRequest: missing path returns error" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{ "zoqa", "api" };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     try std.testing.expectError(error.MissingPath, buildRequest(allocator, &parsed, null));
 }
@@ -1145,12 +1179,10 @@ test "buildRequest: missing path returns error" {
 test "buildRequest: --o3 flag resolves to openqa.opensuse.org" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--o3", "api", "jobs",
+        "zoqa", "api", "--o3", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -1161,29 +1193,27 @@ test "buildRequest: --o3 flag resolves to openqa.opensuse.org" {
 test "buildRequest: --header without colon is skipped" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--header", "MalformedHeader", "api", "jobs",
+        "zoqa", "api", "--header", "MalformedHeader", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
 
-    // Malformed header without colon should be silently skipped
-    try std.testing.expectEqual(@as(usize, 0), req_cfg.headers.items.len);
+    // Malformed header without colon should be silently skipped.
+    // Only User-Agent should remain (always injected by buildRequest).
+    try std.testing.expectEqual(@as(usize, 1), req_cfg.headers.items.len);
+    try std.testing.expectEqualStrings("User-Agent", req_cfg.headers.items[0].name);
 }
 
 test "buildRequest: leading slash stripped from relative api path" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--host", "http://example.com", "api", "/jobs/overview",
+        "zoqa", "api", "--host", "http://example.com", "/jobs/overview",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -1196,12 +1226,10 @@ test "buildRequest: leading slash stripped from relative api path" {
 test "buildRequest: bare hostname gets https:// prefix via resolveHost" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--host", "myhost.example.com", "api", "jobs",
+        "zoqa", "api", "--host", "myhost.example.com", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit(allocator);
@@ -1212,12 +1240,10 @@ test "buildRequest: bare hostname gets https:// prefix via resolveHost" {
 test "buildRequest: data-file content with --form encodes JSON body" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "-X", "POST", "--data-file", "dummy.json", "--form", "api", "jobs",
+        "zoqa", "api", "-X", "POST", "--data-file", "dummy.json", "--form", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     const file_data = "{\"key\":\"value\"}";
     var req_cfg = try buildRequest(allocator, &parsed, file_data);
@@ -1229,14 +1255,55 @@ test "buildRequest: data-file content with --form encodes JSON body" {
 test "buildRequest: path with null byte returns error" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
-        "zoqa", "--param-file", "key=path\x00with_null", "api", "jobs",
+        "zoqa", "api", "--param-file", "key=path\x00with_null", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
-    defer parsed.headers.deinit(allocator);
-    defer parsed.param_files.deinit(allocator);
-    defer parsed.kv_params.deinit(allocator);
+    defer parsed.deinit(allocator);
 
     try std.testing.expectError(error.PathContainsNullByte, buildRequest(allocator, &parsed, null));
+}
+
+test "buildRequest: --name sets User-Agent header" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "api", "--host", "http://example.com", "--name", "mybot", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    // Find User-Agent header
+    var found = false;
+    for (req_cfg.headers.items) |h| {
+        if (std.mem.eql(u8, h.name, "User-Agent")) {
+            try std.testing.expectEqualStrings("mybot", h.value);
+            found = true;
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "buildRequest: default User-Agent is openQAclient" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "api", "--host", "http://example.com", "jobs",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    var found = false;
+    for (req_cfg.headers.items) |h| {
+        if (std.mem.eql(u8, h.name, "User-Agent")) {
+            try std.testing.expectEqualStrings("openQAclient", h.value);
+            found = true;
+        }
+    }
+    try std.testing.expect(found);
 }
 
 /// Resolve and merge API credentials from all possible sources according to priority.
@@ -1286,6 +1353,7 @@ fn mergeCredentials(
 
     if (key != null and secret != null) {
         return config.Credentials{
+            .allocator = allocator,
             .key = try allocator.dupe(u8, key.?),
             .secret = try allocator.dupe(u8, secret.?),
         };
@@ -1304,13 +1372,10 @@ test "mergeCredentials: field-level priority behavior" {
             allocator,
             .{ .key = null, .secret = "CLI_SECRET" },
             .{ .key = null, .secret = null },
-            .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
+            .{ .allocator = allocator, .key = "CONF_KEY", .secret = "CONF_SECRET" },
         );
         try testing.expect(res != null);
-        defer {
-            allocator.free(res.?.key);
-            allocator.free(res.?.secret);
-        }
+        defer res.?.deinit();
         try testing.expectEqualStrings("CONF_KEY", res.?.key);
         try testing.expectEqualStrings("CLI_SECRET", res.?.secret);
     }
@@ -1324,10 +1389,7 @@ test "mergeCredentials: field-level priority behavior" {
             null,
         );
         try testing.expect(res != null);
-        defer {
-            allocator.free(res.?.key);
-            allocator.free(res.?.secret);
-        }
+        defer res.?.deinit();
         try testing.expectEqualStrings("CLI_KEY", res.?.key);
         try testing.expectEqualStrings("ENV_SECRET", res.?.secret);
     }
@@ -1355,10 +1417,7 @@ test "mergeCredentials: env-only fallback (no CLI, no conf)" {
         null,
     );
     try testing.expect(res != null);
-    defer {
-        allocator.free(res.?.key);
-        allocator.free(res.?.secret);
-    }
+    defer res.?.deinit();
     try testing.expectEqualStrings("ENV_KEY", res.?.key);
     try testing.expectEqualStrings("ENV_SECRET", res.?.secret);
 }
@@ -1371,13 +1430,10 @@ test "mergeCredentials: conf-only fallback (no CLI, no env)" {
         allocator,
         .{ .key = null, .secret = null },
         .{ .key = null, .secret = null },
-        .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
+        .{ .allocator = allocator, .key = "CONF_KEY", .secret = "CONF_SECRET" },
     );
     try testing.expect(res != null);
-    defer {
-        allocator.free(res.?.key);
-        allocator.free(res.?.secret);
-    }
+    defer res.?.deinit();
     try testing.expectEqualStrings("CONF_KEY", res.?.key);
     try testing.expectEqualStrings("CONF_SECRET", res.?.secret);
 }
@@ -1390,13 +1446,10 @@ test "mergeCredentials: key from env, secret from conf" {
         allocator,
         .{ .key = null, .secret = null },
         .{ .key = "ENV_KEY", .secret = null },
-        .{ .key = "CONF_KEY", .secret = "CONF_SECRET" },
+        .{ .allocator = allocator, .key = "CONF_KEY", .secret = "CONF_SECRET" },
     );
     try testing.expect(res != null);
-    defer {
-        allocator.free(res.?.key);
-        allocator.free(res.?.secret);
-    }
+    defer res.?.deinit();
     try testing.expectEqualStrings("ENV_KEY", res.?.key);
     try testing.expectEqualStrings("CONF_SECRET", res.?.secret);
 }
@@ -1432,8 +1485,8 @@ test "mergeCredentials: partial secret only returns null (no key anywhere)" {
 // ---------------------------------------------------------------------------
 
 /// Write the HTTP response to stdout (and optionally stderr), implementing
-/// SPEC §9.1 (verbose headers), §9.2 (Link header parsing), and §9.4 (body
-/// output with optional JSON pretty-printing).
+/// verbose headers, link header parsing and body
+/// output with optional JSON pretty-printing.
 ///
 /// This is a pure output helper with no control-flow side effects — it never
 /// calls `std.process.exit`. The caller (`main()`) is responsible for the exit
@@ -1451,15 +1504,14 @@ test "mergeCredentials: partial secret only returns null (no key anywhere)" {
 ///     when `pretty` is true and the response body is `application/json`.
 ///   - `resp`: The HTTP response returned by `zoqa.openQAReq()`. Borrowed —
 ///     the caller retains ownership and is responsible for calling `resp.deinit()`.
-///   - `verbose`: When true, print the HTTP status line and Content-Type header
-///     to stdout before the body (SPEC §9.1).
-///   - `quiet`: Currently unused by this function (quiet suppression of error
-///     messages happens at the HTTP layer). Accepted for forward-compatibility
-///     and to keep the call-site expressive.
+///   - `verbose`: When true, print the HTTP status line and all response headers
+///     to stdout before the body.
+///   - `quiet`: When true, suppresses the non-2xx status line written to stderr.
+///     Has no effect on stdout output.
 ///   - `links`: When true and the response contains a Link header, parse it and
-///     print `rel: url` pairs to stderr (SPEC §9.2).
+///     print `rel: url` pairs to stderr.
 ///   - `pretty`: When true and Content-Type contains `application/json`, parse
-///     the body and re-serialize with 2-space indentation (SPEC §9.4).
+///     the body and re-serialize with 2-space indentation.
 fn printResponse(
     allocator: std.mem.Allocator,
     resp: zoqa.APIResponse,
@@ -1468,26 +1520,30 @@ fn printResponse(
     links: bool,
     pretty: bool,
 ) void {
-    _ = quiet; // reserved for forward-compatibility
-
     var stdout_buf: [4096]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_writer.interface;
 
-    // SPEC §9.1 — verbose response headers
+    // non-2xx status to stderr (suppressed by --quiet)
+    const status_uint = @intFromEnum(resp.status);
+    if ((status_uint < 200 or status_uint >= 300) and !quiet) {
+        std.debug.print("{d} {s}\n", .{ status_uint, resp.status.phrase() orelse "Unknown Error" });
+    }
+
+    // verbose response headers
     if (verbose) {
         _ = stdout.print("HTTP/1.1 {d} {s}\n", .{
             @intFromEnum(resp.status),
             resp.status.phrase() orelse "Unknown",
         }) catch {}; // broken-pipe safe
-        if (resp.content_type) |ct| {
-            _ = stdout.print("Content-Type: {s}\n", .{ct}) catch {}; // broken-pipe safe
+        for (resp.response_headers) |h| {
+            _ = stdout.print("{s}: {s}\n", .{ h.name, h.value }) catch {}; // broken-pipe safe
         }
         _ = stdout.print("\n", .{}) catch {}; // broken-pipe safe
         _ = stdout.flush() catch {}; // broken-pipe safe
     }
 
-    // SPEC §9.2 — Link header parsing to stderr
+    // Link header parsing to stderr
     if (links) {
         if (resp.link) |lh| {
             var stderr_buf: [4096]u8 = undefined;
@@ -1500,7 +1556,7 @@ fn printResponse(
         }
     }
 
-    // SPEC §9.4 — body output (pretty JSON or raw)
+    // body output (pretty JSON or raw)
     if (pretty) {
         const is_json = if (resp.content_type) |ct|
             std.mem.indexOf(u8, ct, "application/json") != null
@@ -1540,13 +1596,12 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, argv);
 
     var args = parseArgs(gpa, argv) catch |err| {
+        if (err == error.InvalidCommand) std.process.exit(255);
         std.debug.print("Argument error: {s}\n", .{@errorName(err)});
         printHelp();
         std.process.exit(1);
     };
-    defer args.headers.deinit(gpa);
-    defer args.param_files.deinit(gpa);
-    defer args.kv_params.deinit(gpa);
+    defer args.deinit(gpa);
 
     if (args.help) {
         printHelp();
@@ -1579,20 +1634,21 @@ pub fn main() !void {
     const data_file_content: ?[]const u8 = if (data_file_buf) |b| b else null;
 
     var req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
+        if (err == error.MissingPath) {
+            printApiHelp();
+            std.process.exit(255);
+        }
         std.debug.print("Request build error: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
     defer req_cfg.deinit(gpa);
 
-    // Resolve credentials (SPEC §5.1)
+    // Resolve credentials
     // Extract hostname from the resolved host URL for config file lookup.
     const uri = try std.Uri.parse(req_cfg.host);
     const hostname = if (uri.host) |h| h.percent_encoded else "localhost";
     const conf_creds = try config.findCredentials(gpa, hostname);
-    defer if (conf_creds) |c| {
-        gpa.free(c.key);
-        gpa.free(c.secret);
-    };
+    defer if (conf_creds) |c| c.deinit();
 
     const creds = try mergeCredentials(
         gpa,
@@ -1600,12 +1656,9 @@ pub fn main() !void {
         .{ .key = std.posix.getenv("OPENQA_API_KEY"), .secret = std.posix.getenv("OPENQA_API_SECRET") },
         conf_creds,
     );
-    defer if (creds) |c| {
-        gpa.free(c.key);
-        gpa.free(c.secret);
-    };
+    defer if (creds) |c| c.deinit();
 
-    // Retry count: --retries > OPENQA_CLI_RETRIES env > 0 (SPEC §8)
+    // Retry count: --retries > OPENQA_CLI_RETRIES env > 0
     const retries: u32 = args.retries orelse blk: {
         if (std.posix.getenv("OPENQA_CLI_RETRIES")) |s| {
             break :blk std.fmt.parseInt(u32, s, 10) catch 0;
@@ -1641,32 +1694,53 @@ pub fn main() !void {
 // Help text
 // ---------------------------------------------------------------------------
 
+const help_global_options =
+    \\Global Options:
+    \\  --host HOST          Base URL of the OpenQA instance
+    \\  --osd                Alias for --host http://openqa.suse.de
+    \\  --o3                 Alias for --host https://openqa.opensuse.org
+    \\  --odn                Alias for --host https://openqa.debian.net
+    \\  --apikey KEY         Override API public key
+    \\  --apisecret SECRET   Override API secret
+    \\  --name STRING        User-Agent name (default: openQAclient)
+    \\  -v, --verbose        Print HTTP response status line and headers to stdout
+    \\  -q, --quiet          Suppress non-fatal error messages on stderr
+    \\  --links              Parse Link response header and print rel: url pairs to stderr
+    \\  -h, --help           Display this help and exit
+    \\
+;
+
+const help_api_options =
+    \\API Options:
+    \\  -X, --method METHOD        HTTP method (default: GET)
+    \\  -d, --data BODY            Raw request body
+    \\  -D, --data-file FILE       Read body from file (- = stdin)
+    \\  -f, --form                 Treat data as JSON object, re-encode as form urlencoded
+    \\  -j, --json                 Set Content-Type: application/json
+    \\  -a, --header NAME:VALUE    Extra request header (repeatable)
+    \\  --param-file KEY=FILE      Append file contents as param (repeatable)
+    \\  -r, --retries N            Retry count on 502/503/connection error (default: 0)
+    \\  -p, --pretty               Pretty-print JSON response body
+    \\
+;
+
 fn printHelp() void {
     std.debug.print(
-        \\Usage: zoqa [GLOBAL OPTIONS] api [API OPTIONS] PATH [KEY=VALUE ...]
-        \\
-        \\Global Options:
-        \\  --host HOST          Base URL of the OpenQA instance
-        \\  --osd                Alias for --host http://openqa.suse.de
-        \\  --o3                 Alias for --host https://openqa.opensuse.org
-        \\  --odn                Alias for --host https://openqa.debian.net
-        \\  --apikey KEY         Override API public key
-        \\  --apisecret SECRET   Override API secret
-        \\  -v, --verbose        Print HTTP response status line and headers to stdout
-        \\  -q, --quiet          Suppress non-fatal error messages on stderr
-        \\  --links              Parse Link response header and print rel: url pairs to stderr
-        \\  -h, --help           Display this help and exit
-        \\
-        \\API Options:
-        \\  -X, --method METHOD        HTTP method (default: GET)
-        \\  -d, --data BODY            Raw request body
-        \\  -D, --data-file FILE       Read body from file (- = stdin)
-        \\  -f, --form                 Treat data as JSON object, re-encode as form urlencoded
-        \\  -j, --json                 Set Content-Type: application/json
-        \\  -a, --header NAME:VALUE    Extra request header (repeatable)
-        \\  --param-file KEY=FILE      Append file contents as param (repeatable)
-        \\  -r, --retries N            Retry count on 502/503/connection error (default: 0)
-        \\  -p, --pretty               Pretty-print JSON response body
-        \\
-    , .{});
+        "Usage: zoqa [GLOBAL OPTIONS] api [API OPTIONS] PATH [KEY=VALUE ...]\n\n" ++
+            help_global_options ++
+            help_api_options,
+        .{},
+    );
+}
+
+/// Print the `api` subcommand usage block to stderr.
+/// Called when PATH is missing (exit 255, per Perl reference behavior).
+fn printApiHelp() void {
+    std.debug.print(
+        "Usage: zoqa api [OPTIONS] PATH [KEY=VALUE ...]\n\n" ++
+            "Make an openQA API request. PATH is the API endpoint (e.g. \"jobs\") or an absolute URL.\n\n" ++
+            help_api_options ++
+            help_global_options,
+        .{},
+    );
 }

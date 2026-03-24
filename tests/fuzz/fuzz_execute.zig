@@ -252,7 +252,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     // Run openQAReq with the programmable mock
     // ------------------------------------------------------------------
     const creds = if (api_key.len > 0 and api_secret.len > 0)
-        zoqa.config.Credentials{ .key = api_key, .secret = api_secret }
+        zoqa.config.Credentials{ .allocator = allocator, .key = api_key, .secret = api_secret }
     else
         null;
 

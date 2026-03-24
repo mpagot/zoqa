@@ -97,7 +97,7 @@ pub const CallOptions = struct {
     /// **Not owned** — the caller retains ownership.
     body: ?[]const u8 = null,
 
-    /// Resolved API credentials for HMAC-SHA1 request signing (SPEC §5).
+    /// Resolved API credentials for HMAC-SHA1 request signing.
     /// When `null` (the default), the request is sent without authentication
     /// — suitable for read-only public endpoints. When set, `openQAReq`
     /// computes the HMAC signature and attaches the `X-API-Key` /
@@ -107,7 +107,7 @@ pub const CallOptions = struct {
     credentials: ?config.Credentials = null,
 
     /// Number of automatic retries on transient failures — connection
-    /// errors and HTTP 502/503 responses (SPEC §8). Defaults to `0`
+    /// errors and HTTP 502/503 responses. Defaults to `0`
     /// (no retries). Each retry re-executes the full request including
     /// HMAC re-signing with a fresh timestamp.
     retries: u32 = 0,

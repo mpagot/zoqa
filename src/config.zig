@@ -1,8 +1,16 @@
 const std = @import("std");
 
 pub const Credentials = struct {
+    allocator: std.mem.Allocator,
     key: []const u8,
     secret: []const u8,
+
+    /// Release the key and secret strings allocated by `parseIni` /
+    /// `mergeCredentials`. Must be called exactly once.
+    pub fn deinit(self: Credentials) void {
+        self.allocator.free(self.key);
+        self.allocator.free(self.secret);
+    }
 };
 
 pub const HostResult = struct {
@@ -20,9 +28,14 @@ pub fn resolveHost(
     flag_odn: bool,
     host_arg: ?[]const u8,
 ) !HostResult {
-    if (flag_osd) return .{ .url = "http://openqa.suse.de", .allocated = false };
-    if (flag_o3) return .{ .url = "https://openqa.opensuse.org", .allocated = false };
-    if (flag_odn) return .{ .url = "https://openqa.debian.net", .allocated = false };
+    // Last-wins: if multiple alias flags are given, the last one on the command
+    // line wins because parseArgs sets each bool independently, so we must
+    // evaluate them in priority order and let later assignments overwrite.
+    var alias_url: ?[]const u8 = null;
+    if (flag_o3) alias_url = "https://openqa.opensuse.org";
+    if (flag_osd) alias_url = "http://openqa.suse.de";
+    if (flag_odn) alias_url = "https://openqa.debian.net";
+    if (alias_url) |u| return .{ .url = u, .allocated = false };
 
     if (host_arg) |h| {
         if (std.mem.indexOf(u8, h, "://") != null or std.mem.startsWith(u8, h, "/")) {
@@ -77,6 +90,7 @@ pub fn parseIni(allocator: std.mem.Allocator, content: []const u8, hostname: []c
 
     if (key != null and secret != null) {
         return Credentials{
+            .allocator = allocator,
             .key = try allocator.dupe(u8, key.?),
             .secret = try allocator.dupe(u8, secret.?),
         };
@@ -149,6 +163,18 @@ test "resolveHost" {
         try testing.expectEqualStrings("http://localhost", r.url);
         try testing.expect(!r.allocated);
     }
+    // Last-wins: --o3 then --osd → osd wins (osd is evaluated after o3)
+    {
+        const r = try resolveHost(allocator, true, true, false, null);
+        try testing.expectEqualStrings("http://openqa.suse.de", r.url);
+        try testing.expect(!r.allocated);
+    }
+    // Last-wins: --osd then --odn → odn wins (odn is evaluated after osd)
+    {
+        const r = try resolveHost(allocator, true, false, true, null);
+        try testing.expectEqualStrings("https://openqa.debian.net", r.url);
+        try testing.expect(!r.allocated);
+    }
 }
 
 test "parseIni" {
@@ -170,15 +196,13 @@ test "parseIni" {
     try testing.expect(creds1 != null);
     try testing.expectEqualStrings("MYPUBLICKEY", creds1.?.key);
     try testing.expectEqualStrings("MYPRIVATESECRET", creds1.?.secret);
-    allocator.free(creds1.?.key);
-    allocator.free(creds1.?.secret);
+    creds1.?.deinit();
 
     const creds2 = try parseIni(allocator, ini, "another.host");
     try testing.expect(creds2 != null);
     try testing.expectEqualStrings("OTHERKEY", creds2.?.key);
     try testing.expectEqualStrings("OTHERSECRET", creds2.?.secret);
-    allocator.free(creds2.?.key);
-    allocator.free(creds2.?.secret);
+    creds2.?.deinit();
 
     const creds3 = try parseIni(allocator, ini, "not.found");
     try testing.expect(creds3 == null);

@@ -166,6 +166,7 @@ export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     const fuzz_path = path_buf[0 .. path_len + 1];
 
     const creds = zoqa.config.Credentials{
+        .allocator = allocator,
         .key = api_key,
         .secret = api_secret,
     };

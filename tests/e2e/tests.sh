@@ -217,6 +217,21 @@ run_test "PERL: --host before api rejected (exit 255)" \
 run_test "ZIG : --host before api rejected (exit 255)" \
 	"$ZIG_EXE --host http://localhost api jobs/overview" 255
 
+# Test 11c: -- stop flag before the API path is accepted
+# 'zoqa api --host http://localhost -- jobs/overview' — the -- terminates flag
+# parsing; 'jobs/overview' is treated as the positional API path, not a flag.
+# Both implementations must exit 0 and return a valid response.
+run_comparison "-- stop before API path accepted (exit 0)" "" \
+	"-- jobs/overview" 0
+
+# Test 11d: -- stop flag causes a dash-prefixed token to be treated as the API path
+# 'zoqa api --host http://localhost -- -X' — after --, '-X' is the literal API
+# path, not the --method flag.  The server has no such route, so both
+# implementations must return 404 Not Found (exit 1) rather than a flag-parsing
+# error.
+run_comparison "-- stop: dash-prefixed path is a 404, not a flag error" "" \
+	"-- -X" 1 "404 Not Found"
+
 # =============================================================================
 # Tests 13–21: New coverage using seeded data
 # =============================================================================
