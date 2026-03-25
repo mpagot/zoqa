@@ -129,7 +129,8 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             artifacts/*.tar.gz
-            artifacts/*.zip
+            # TODO: add artifacts/*.zip once Windows targets are re-enabled
+            # (blocked on config.zig porting away from std.posix.getenv)
             artifacts/SHA256SUMS
           body: |
             ## Verify checksums
