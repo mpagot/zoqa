@@ -8,8 +8,6 @@ both a CLI executable and a static library.
 ## Prerequisites
 
 - Zig 0.15.2
-- [Podman](https://podman.io/) (for Near-E2E testing)
-- `/dev/kvm` access (recommended for E2E container stability)
 
 ---
 
@@ -25,6 +23,26 @@ zig build run -- api jobs/overview
 # Build with step summary
 zig build --summary all
 ```
+
+Shortcuts: `make build` and `make release` (ReleaseFast).
+
+---
+
+## Make Targets
+
+```sh
+make help  # print this table
+```
+
+| Target | Description |
+|---|---|
+| `build` | Build the zoqa executable and static library. |
+| `release` | Build with release optimizations (`ReleaseFast`). |
+| `test` | Run all Zig unit tests. |
+| `e2e` | Build, then run the full E2E suite (starts + tears down container). |
+| `e2e-keep` | Build, then run E2E keeping the container alive (`--keep-container`). |
+| `lint` | Bash `-n` syntax check and shellcheck on all E2E scripts. |
+| `fuzz-build` | Build the instrumented AFL++ fuzz binaries. |
 
 ---
 
@@ -44,31 +62,27 @@ zig test src/main.zig
 zig test src/config.zig --test-filter "parseIni"
 ```
 
+Shortcut: `make test`.
+
 ### Near End-to-End Testing (openQA Container)
 
 Validates CLI behavior, HMAC authentication, and API parity with the Perl reference
-using a live official openQA single-instance container.
+using a live official openQA single-instance container managed by Podman.
 
-Requires: Podman, `/dev/kvm` access recommended.
+See [tests/e2e/README.md](tests/e2e/README.md) for prerequisites, script reference,
+flags (`--keep-container`, `--collect-logs`, `--dryrun`), debugging tips, and full
+test coverage table.
 
-```sh
-# Ensure the binary is built first
-zig build
-
-# Run the full E2E suite (starts container, seeds data, runs 20 tests, tears down)
-bash tests/e2e/run.sh
-```
-
-See [tests/e2e/README.md](tests/e2e/README.md) for the full script reference,
-debugging tips, flag documentation (e.g., `--keep-container`), and test coverage table.
-
----
+Shortcuts: `make e2e` and `make e2e-keep`.
 
 ### Fuzz Testing
 
-Coverage-guided fuzz testing using AFL++ is supported for the INI parser, CLI argument parser, and HTTP response handling.
+Coverage-guided fuzz testing using AFL++ in Persistent Mode with LLVM instrumentation.
 
-Refer to [tests/fuzz/README.md](tests/fuzz/README.md) for setup and workflow instructions.
+See [tests/fuzz/README.md](tests/fuzz/README.md) for setup, workflow, crash triage,
+corpus distillation, and coverage reporting.
+
+Shortcut: `make fuzz-build`.
 
 ---
 
@@ -89,5 +103,4 @@ vendor/
 build.zig
 build.zig.zon
 SPEC.md           — functional specification
-PLAN.md           — implementation plan
 ```

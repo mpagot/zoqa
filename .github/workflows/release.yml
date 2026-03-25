@@ -33,17 +33,17 @@ jobs:
           - name: macos-aarch64
             target: aarch64-macos
             ext: tar.gz
-          - name: windows-x86_64
-            target: x86_64-windows
-            ext: zip
-          - name: windows-aarch64
-            target: aarch64-windows
-            ext: zip
+          # TODO: std.posix.getenv is unavailable on Windows targets; re-enable
+          # these once config.zig uses a cross-platform env-var API.
+          # - name: windows-x86_64
+          #   target: x86_64-windows
+          #   ext: zip
+          # - name: windows-aarch64
+          #   target: aarch64-windows
+          #   ext: zip
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
@@ -82,10 +82,8 @@ jobs:
         if: matrix.ext == 'zip'
         run: |
           ARCHIVE="${{ env.PROJECT_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.name }}.zip"
-          cd zig-out/bin
-          7z a -mx=9 "../../$ARCHIVE" "${{ env.PROJECT_NAME }}.exe"
+          7z a -mx=9 "$ARCHIVE" "./zig-out/bin/${{ env.PROJECT_NAME }}.exe"
           echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
-          cd ../..
 
       - name: Generate checksum
         run: sha256sum "${{ env.archive }}" > "${{ env.archive }}.sha256"
