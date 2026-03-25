@@ -1,0 +1,141 @@
+# .github/workflows/release.yml
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  PROJECT_NAME: zoqa
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            target: x86_64-linux-musl
+            ext: tar.gz
+          - name: linux-aarch64
+            target: aarch64-linux-musl
+            ext: tar.gz
+          - name: macos-x86_64
+            target: x86_64-macos
+            ext: tar.gz
+          - name: macos-aarch64
+            target: aarch64-macos
+            ext: tar.gz
+          - name: windows-x86_64
+            target: x86_64-windows
+            ext: zip
+          - name: windows-aarch64
+            target: aarch64-windows
+            ext: zip
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          # Reads minimum_zig_version from build.zig.zon automatically.
+          cache-key: ${{ matrix.target }}
+          cache-size-limit: 2048
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          zig build \
+            -Doptimize=ReleaseSafe \
+            -Dtarget=${{ matrix.target }} \
+            -Dstrip=true \
+            --summary all
+
+      - name: Package (tar.gz)
+        if: matrix.ext == 'tar.gz'
+        run: |
+          BINARY="${{ env.PROJECT_NAME }}"
+          ARCHIVE="${{ env.PROJECT_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.name }}.tar.gz"
+          tar caf "$ARCHIVE" \
+            --sort=name \
+            --numeric-owner \
+            --owner=0 \
+            --group=0 \
+            --mtime=1970-01-01 \
+            -C zig-out/bin "$BINARY"
+          echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package (zip)
+        if: matrix.ext == 'zip'
+        run: |
+          ARCHIVE="${{ env.PROJECT_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.name }}.zip"
+          cd zig-out/bin
+          7z a -mx=9 "../../$ARCHIVE" "${{ env.PROJECT_NAME }}.exe"
+          echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
+          cd ../..
+
+      - name: Generate checksum
+        run: sha256sum "${{ env.archive }}" > "${{ env.archive }}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ matrix.name }}
+          path: |
+            ${{ env.archive }}
+            ${{ env.archive }}.sha256
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: ${{ env.PROJECT_NAME }}-*
+          merge-multiple: true
+
+      - name: Consolidate checksums into SHA256SUMS
+        run: |
+          cd artifacts
+          cat *.sha256 > SHA256SUMS
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/SHA256SUMS
+          body: |
+            ## Verify checksums
+
+            ```sh
+            sha256sum -c SHA256SUMS
+            ```
