@@ -33,14 +33,12 @@ jobs:
           - name: macos-aarch64
             target: aarch64-macos
             ext: tar.gz
-          # TODO: std.posix.getenv is unavailable on Windows targets; re-enable
-          # these once config.zig uses a cross-platform env-var API.
-          # - name: windows-x86_64
-          #   target: x86_64-windows
-          #   ext: zip
-          # - name: windows-aarch64
-          #   target: aarch64-windows
-          #   ext: zip
+          - name: windows-x86_64
+            target: x86_64-windows
+            ext: zip
+          - name: windows-aarch64
+            target: aarch64-windows
+            ext: zip
 
     steps:
       - uses: actions/checkout@v4
@@ -127,10 +125,9 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           fail_on_unmatched_files: true
-          # TODO: add artifacts/*.zip to files once Windows targets are re-enabled
-          # (blocked on config.zig porting away from std.posix.getenv)
           files: |
             artifacts/*.tar.gz
+            artifacts/*.zip
             artifacts/SHA256SUMS
           body: |
             ## Verify checksums

@@ -117,6 +117,21 @@ pub const CallOptions = struct {
     /// error details). Fatal errors still cause a non-zero exit or an
     /// error return. Corresponds to the `--quiet` / `-q` CLI flag.
     quiet: bool = false,
+
+    /// TCP connect timeout in seconds. Currently parsed and validated but
+    /// not yet wired into `std.http.Client` (which does not expose
+    /// per-connection timeout support). Reserved for future use.
+    /// Corresponds to `OPENQA_CLI_CONNECT_TIMEOUT`. Defaults to 30.0.
+    connect_timeout_s: f64 = 30.0,
+
+    /// Base sleep duration in seconds between retry attempts.
+    /// Actual sleep = `retry_sleep_s * retry_factor^attempt`.
+    /// Corresponds to `OPENQA_CLI_RETRY_SLEEP_TIME_S`. Defaults to 3.0.
+    retry_sleep_s: f64 = 3.0,
+
+    /// Exponential backoff multiplier applied per retry attempt.
+    /// Corresponds to `OPENQA_CLI_RETRY_FACTOR`. Defaults to 1.0 (constant sleep).
+    retry_factor: f64 = 1.0,
 };
 
 // ---------------------------------------------------------------------------
@@ -199,6 +214,9 @@ pub fn openQAReq(
         .credentials = opts.credentials,
         .retries = opts.retries,
         .quiet = opts.quiet,
+        .connect_timeout_s = opts.connect_timeout_s,
+        .retry_sleep_s = opts.retry_sleep_s,
+        .retry_factor = opts.retry_factor,
     };
 
     return execute(req, client);

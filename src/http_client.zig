@@ -68,35 +68,44 @@ pub const APIResponse = struct {
 /// memory must remain valid for the duration of the call.
 ///
 /// Fields:
-/// - `allocator`   — Used for all internal allocations (header list, body
-///                   buffer, HMAC scratch buffers). The returned `APIResponse`
-///                   is also allocated with this allocator and must be freed
-///                   by the caller via `APIResponse.deinit()`.
-/// - `method`      — HTTP method (GET, POST, PUT, DELETE, …).
-/// - `url`         — Fully-qualified URL string, e.g.
-///                   `"https://openqa.example.com/api/v1/jobs"`.
-///                   Must be a valid absolute URL; parsing errors surface as
-///                   `error.InvalidUri`.
-/// - `headers`     — Caller-supplied HTTP headers appended verbatim before
-///                   the auto-injected `Accept` and `Accept-Encoding` headers.
-///                   If no `Accept` header is present, `application/json` is
-///                   added automatically.
-/// - `body`        — Optional request body bytes. For methods that require a
-///                   body (`requestHasBody()` returns true) but where `body`
-///                   is `null`, an empty body is sent.
-/// - `credentials` — If non-null, HMAC-SHA1 `X-API-Key` / `X-API-Hash` /
-///                   `X-API-Microtime` headers are computed from the path,
-///                   query string, and current Unix timestamp, then appended.
-///                   Body parameters are intentionally excluded from the HMAC
-///                   message.
-/// - `retries`     — Maximum number of additional attempts after the first
-///                   failure. Retries are triggered by connection errors, send
-///                   errors, and 502/503 HTTP responses. Each retry sleeps for
-///                   an exponentially increasing interval (see `sleepForRetry`).
-/// - `quiet`       — When `true`, suppresses all diagnostic output to stderr
-///                   (connection errors, non-2xx status lines, read/decompress
-///                   errors). Useful in tests and when the caller handles
-///                   errors itself.
+/// - `allocator`        — Used for all internal allocations (header list, body
+///                        buffer, HMAC scratch buffers). The returned `APIResponse`
+///                        is also allocated with this allocator and must be freed
+///                        by the caller via `APIResponse.deinit()`.
+/// - `method`           — HTTP method (GET, POST, PUT, DELETE, …).
+/// - `url`              — Fully-qualified URL string, e.g.
+///                        `"https://openqa.example.com/api/v1/jobs"`.
+///                        Must be a valid absolute URL; parsing errors surface as
+///                        `error.InvalidUri`.
+/// - `headers`          — Caller-supplied HTTP headers appended verbatim before
+///                        the auto-injected `Accept` and `Accept-Encoding` headers.
+///                        If no `Accept` header is present, `application/json` is
+///                        added automatically.
+/// - `body`             — Optional request body bytes. For methods that require a
+///                        body (`requestHasBody()` returns true) but where `body`
+///                        is `null`, an empty body is sent.
+/// - `credentials`      — If non-null, HMAC-SHA1 `X-API-Key` / `X-API-Hash` /
+///                        `X-API-Microtime` headers are computed from the path,
+///                        query string, and current Unix timestamp, then appended.
+///                        Body parameters are intentionally excluded from the HMAC
+///                        message.
+/// - `retries`          — Maximum number of additional attempts after the first
+///                        failure. Retries are triggered by connection errors, send
+///                        errors, and 502/503 HTTP responses. Each retry sleeps for
+///                        an exponentially increasing interval (see `sleepForRetry`).
+/// - `quiet`            — When `true`, suppresses all diagnostic output to stderr
+///                        (connection errors, non-2xx status lines, read/decompress
+///                        errors). Useful in tests and when the caller handles
+///                        errors itself.
+/// - `connect_timeout_s`— TCP connect timeout in seconds. Currently parsed and
+///                        validated but not yet wired into `std.http.Client`
+///                        (which does not expose per-connection timeout support).
+///                        Reserved for future use. Defaults to 30.0.
+/// - `retry_sleep_s`    — Base sleep duration in seconds between retry attempts.
+///                        Actual sleep = `retry_sleep_s * retry_factor^attempt`.
+///                        Defaults to 3.0.
+/// - `retry_factor`     — Exponential backoff multiplier applied per attempt.
+///                        Defaults to 1.0 (constant sleep).
 pub const Request = struct {
     allocator: std.mem.Allocator,
     method: std.http.Method,
@@ -106,6 +115,9 @@ pub const Request = struct {
     credentials: ?config.Credentials,
     retries: u32,
     quiet: bool,
+    connect_timeout_s: f64 = 30.0,
+    retry_sleep_s: f64 = 3.0,
+    retry_factor: f64 = 1.0,
 };
 
 // ---------------------------------------------------------------------------
@@ -147,19 +159,10 @@ fn normalizePathQuery(input: []const u8, writer: anytype) !void {
 /// rather than an `APIResponse` with a non-2xx status, so that callers can
 /// distinguish network failures from HTTP-level failures.
 pub fn execute(req: Request, client: anytype) !APIResponse {
-    // Read connect timeout from environment.
-    // std.http.Client.request() in Zig 0.15.2 does not expose a timeout
-    // parameter, so this value is parsed and validated but cannot be wired
-    // into the underlying TCP connection yet.  It is intentionally NOT
-    // silently ignored: an invalid value causes a parse warning on stderr and
-    // the fallback of 30 s is used.
-    const _connect_timeout_s: f64 = blk: {
-        const env_str = std.posix.getenv("OPENQA_CLI_CONNECT_TIMEOUT") orelse break :blk 30.0;
-        break :blk std.fmt.parseFloat(f64, env_str) catch 30.0;
-    };
-    // TODO: wire _connect_timeout_s into the HTTP client once std.http.Client
+    // connect_timeout_s is passed in from the caller (resolved from env in main).
+    // TODO: wire req.connect_timeout_s into the HTTP client once std.http.Client
     // exposes per-connection timeout support.
-    _ = _connect_timeout_s;
+    _ = req.connect_timeout_s;
 
     var attempt: u32 = 0;
     while (true) : (attempt += 1) {
@@ -230,7 +233,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
             .extra_headers = headers.items,
         }) catch |err| {
             if (attempt < req.retries) {
-                try sleepForRetry(attempt);
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
                 continue;
             }
             if (!req.quiet) {
@@ -246,7 +249,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
             defer req.allocator.free(body_mut);
             http_req.sendBodyComplete(body_mut) catch |err| {
                 if (attempt < req.retries) {
-                    try sleepForRetry(attempt);
+                    try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
                     continue;
                 }
                 if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
@@ -255,7 +258,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         } else if (req.method.requestHasBody()) {
             http_req.sendBodyComplete(&.{}) catch |err| {
                 if (attempt < req.retries) {
-                    try sleepForRetry(attempt);
+                    try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
                     continue;
                 }
                 if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
@@ -264,7 +267,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         } else {
             http_req.sendBodiless() catch |err| {
                 if (attempt < req.retries) {
-                    try sleepForRetry(attempt);
+                    try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
                     continue;
                 }
                 if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
@@ -276,7 +279,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         var redirect_buf: [8 * 1024]u8 = undefined;
         var response = http_req.receiveHead(&redirect_buf) catch |err| {
             if (attempt < req.retries) {
-                try sleepForRetry(attempt);
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
                 continue;
             }
             if (!req.quiet) std.debug.print("Response error: {s}\n", .{@errorName(err)});
@@ -288,7 +291,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         // Retry on gateway errors
         if (status_uint == 502 or status_uint == 503) {
             if (attempt < req.retries) {
-                try sleepForRetry(attempt);
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
                 continue;
             }
         }
@@ -412,14 +415,8 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
 // Retry sleep
 // ---------------------------------------------------------------------------
 
-fn sleepForRetry(attempt: u32) !void {
-    const base_str = std.posix.getenv("OPENQA_CLI_RETRY_SLEEP_TIME_S") orelse "3";
-    const base: f64 = std.fmt.parseFloat(f64, base_str) catch 3.0;
-
-    const factor_str = std.posix.getenv("OPENQA_CLI_RETRY_FACTOR") orelse "1.0";
-    const factor: f64 = std.fmt.parseFloat(f64, factor_str) catch 1.0;
-
-    const delay_s = base * std.math.pow(f64, factor, @floatFromInt(attempt));
+fn sleepForRetry(attempt: u32, sleep_s: f64, factor: f64) !void {
+    const delay_s = sleep_s * std.math.pow(f64, factor, @floatFromInt(attempt));
     const delay_ns: u64 = @intFromFloat(delay_s * 1_000_000_000.0);
     std.Thread.sleep(delay_ns);
 }
