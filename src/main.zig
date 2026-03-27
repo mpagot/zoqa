@@ -847,12 +847,19 @@ pub fn buildRequest(
         const uri = try std.Uri.parse(api_path);
         const host_part = if (uri.host) |h| h.percent_encoded else "localhost";
 
-        // Reconstruct scheme + authority as the host.
+        // Reconstruct scheme + authority as the host, preserving the port if present.
         // uri.scheme is []const u8 in Zig 0.15.2 (e.g. "https"), not an enum.
-        host_buf = try std.fmt.allocPrint(allocator, "{s}://{s}", .{
-            uri.scheme,
-            host_part,
-        });
+        host_buf = if (uri.port) |port|
+            try std.fmt.allocPrint(allocator, "{s}://{s}:{d}", .{
+                uri.scheme,
+                host_part,
+                port,
+            })
+        else
+            try std.fmt.allocPrint(allocator, "{s}://{s}", .{
+                uri.scheme,
+                host_part,
+            });
         resolved_host = host_buf.?;
 
         // Extract relative path by stripping the /api/v1/ prefix if present.
@@ -1037,6 +1044,22 @@ test "buildRequest: absolute URL used as-is" {
     // Absolute URL should be split into host + path
     try std.testing.expectEqualStrings("https://custom.host", req_cfg.host);
     try std.testing.expectEqualStrings("jobs", req_cfg.path);
+}
+
+test "buildRequest: absolute URL with port preserves port in host" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "api", "http://172.19.203.185:8080/api/v1/jobs/1",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    // Port must be preserved — without the fix this returns "http://172.19.203.185"
+    try std.testing.expectEqualStrings("http://172.19.203.185:8080", req_cfg.host);
+    try std.testing.expectEqualStrings("jobs/1", req_cfg.path);
 }
 
 test "buildRequest: --header with colon splitting" {
