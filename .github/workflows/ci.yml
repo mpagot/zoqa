@@ -20,7 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+      # mlugg/setup-zig@v2 still runs on Node 20 (no Node 24 release upstream yet).
+      # It will continue to work via the runner compatibility shim until Sep 2026.
       - uses: mlugg/setup-zig@v2
       - name: Check formatting
         run: zig fmt --check src/
@@ -34,7 +36,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         if: runner.os != 'Windows'
       # AFL++ corpus files (tests/fuzz/) use colon-containing filenames that
       # are invalid on Windows filesystems. actions/checkout always runs
@@ -52,6 +54,8 @@ jobs:
           git sparse-checkout set '/*' '!/tests/fuzz/'
           git -c core.protectNTFS=false fetch --depth=1 origin ${{ github.sha }}
           git -c core.protectNTFS=false checkout FETCH_HEAD
+      # mlugg/setup-zig@v2 still runs on Node 20 (no Node 24 release upstream yet).
+      # It will continue to work via the runner compatibility shim until Sep 2026.
       - uses: mlugg/setup-zig@v2
         with:
           # Reads minimum_zig_version from build.zig.zon automatically.
@@ -66,7 +70,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+      # mlugg/setup-zig@v2 still runs on Node 20 (no Node 24 release upstream yet).
+      # It will continue to work via the runner compatibility shim until Sep 2026.
       - uses: mlugg/setup-zig@v2
         with:
           cache-size-limit: 4096

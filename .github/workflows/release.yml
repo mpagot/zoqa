@@ -6,6 +6,13 @@ on:
     tags:
       - "v*"
 
+# Prevent parallel release runs for the same tag.
+# If `git push --tags` fires multiple events for the same tag, only the
+# latest run proceeds — earlier ones are cancelled automatically.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -13,8 +20,33 @@ env:
   PROJECT_NAME: zoqa
 
 jobs:
+  # ── Guard: skip tags that already have a GitHub Release ──────────────
+  check:
+    name: Check for existing release
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - name: Check if release already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "${{ github.ref_name }}" &>/dev/null; then
+            echo "Release ${{ github.ref_name }} already exists — skipping."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No existing release for ${{ github.ref_name }} — proceeding."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Build matrix (gated on check) ──────────────────────────────────
   build:
     name: Build ${{ matrix.name }}
+    needs: check
+    if: needs.check.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -41,9 +73,11 @@ jobs:
             ext: zip
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Zig
+        # mlugg/setup-zig@v2 still runs on Node 20 (no Node 24 release upstream yet).
+        # It will continue to work via the runner compatibility shim until Sep 2026.
         uses: mlugg/setup-zig@v2
         with:
           # Reads minimum_zig_version from build.zig.zon automatically.
@@ -87,22 +121,24 @@ jobs:
         run: sha256sum "${{ env.archive }}" > "${{ env.archive }}.sha256"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.PROJECT_NAME }}-${{ matrix.name }}
           path: |
             ${{ env.archive }}
             ${{ env.archive }}.sha256
 
+  # ── Create GitHub Release (gated on check) ─────────────────────────
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [check, build]
+    if: needs.check.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: ${{ env.PROJECT_NAME }}-*
