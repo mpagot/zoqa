@@ -235,7 +235,7 @@ The harness employs three primary testing patterns to validate the Zig executabl
 
 ---
 
-## Test Coverage (30 test cases)
+## Test Coverage (35 test cases)
 
 ### API & Protocol
 | # | Test | Verification |
@@ -263,15 +263,15 @@ The harness employs three primary testing patterns to validate the Zig executabl
 | 15 | `--links` Flag | Parsing and displaying `Link` pagination headers. |
 | 16 | `--verbose` Flag | HTTP status line and `Content-Type` header present in output. |
 | 12, 17 | `--pretty` Flag | JSON indentation logic for both empty and populated responses. |
-| 22 | `--name` Flag | Accepted by both Perl and Zig (Zig: **FAIL** until §1.2 implemented). |
+| 22 | `--name` Flag | Accepted by both Perl and Zig; sets `User-Agent` header. |
 
 ### Error Handling & Edge Cases
 | # | Test | Verification |
 |---|---|---|
 | 4 | 404 Not Found | Standard API error propagation. |
-| 10 | Missing Arguments | Both Perl and Zig exit when PATH is omitted (**FAIL** for Zig until §1.7). |
+| 10 | Missing Arguments | Both Perl and Zig exit 255 with usage text when PATH is omitted. |
 | 11 | Connection Refused | Graceful exit when the host is unreachable. |
-| 11b | Arg-order Divergence | Perl rejects `--host` before subcommand (exit 255); Zig accepts it (exit 0). Intentional, permanent divergence. |
+| 11b | Arg-order Divergence | Both Perl and Zig reject `--host` before the subcommand with exit 255. |
 | 20 | Output Parity | Hard `diff` comparison between Perl and Zig output for a nested object. |
 | 23 | Broken Pipe | `zoqa … \| head -c 1` exits cleanly without crashing on SIGPIPE. |
 | 25, 26 | Non-2xx stderr | `404` reported on stderr without `--quiet`; suppressed with `--quiet`. |
@@ -279,20 +279,13 @@ The harness employs three primary testing patterns to validate the Zig executabl
 ### Verbose Headers (Phase 1.3)
 | # | Test | Verification |
 |---|---|---|
-| 24 | Verbose Header Count | Perl vs Zig header line count comparison (**FAIL** until §1.3 implemented). |
+| 24 | Verbose Header Count | Perl vs Zig header line count comparison — both print 5 header lines. |
 
 ---
 
 ## Expected Failures
 
-Four tests are intentional pre-implementation failures. All others must pass:
-
-| Test | Reason | Tracked by |
-|---|---|---|
-| 10 (ZIG sub-test) | Zig exits 1 + raw error name; Perl exits 255 + usage text | §1.7 |
-| 22 (ZIG sub-test) | `--name` flag not yet parsed | §1.2 |
-| 24 | Zig prints 1 verbose header; Perl prints 5 | §1.3 |
-| 26 | Same root cause as test 24 | §1.3 |
+All 35 tests pass. There are no expected failures.
 
 ---
 
