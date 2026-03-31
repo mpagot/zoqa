@@ -186,31 +186,16 @@ All files from the Linux flow are also created (inside WSL), plus:
 
 ---
 
-## Linting (shellcheck)
+## Linting
 
-A `.shellcheckrc` file in this directory configures shellcheck for the whole
-suite. Just run:
+All E2E shell scripts are checked by `bash -n` (syntax) and
+[shellcheck](https://www.shellcheck.net/). A `.shellcheckrc` in this directory
+configures source resolution so no extra flags are needed.
 
-```sh
-shellcheck tests/e2e/run.sh
-shellcheck tests/e2e/setup.sh
-shellcheck tests/e2e/teardown.sh
-shellcheck tests/e2e/seed_fixtures.sh
-```
-
-No extra flags are needed. The `.shellcheckrc` provides two settings that make
-this work:
-
-| Setting | Effect |
-|---|---|
-| `source-path=SCRIPTDIR` | Resolves `# shellcheck source=` paths relative to the script file, not the CWD where shellcheck is invoked. |
-| `external-sources=true` | Follows `source` directives into `lib.sh` so that variables set before the source line (e.g. `LOG_PREFIX`) are recognised as used there, suppressing false-positive SC2034 warnings. |
-
-Each script annotates its `source` line with:
+Run from the repository root:
 
 ```sh
-# shellcheck source=SCRIPTDIR/lib.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+make e2e-lint
 ```
 
 ---

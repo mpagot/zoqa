@@ -4,9 +4,9 @@
 
 ### Prerequisites
 
-- Zig 0.15.2 (pinned via `.tool-versions`; install with [asdf](https://asdf-vm.com/))
+- Zig 0.15.2 (pinned in `.tool-versions`)
 - Podman (for E2E tests)
-- shellcheck (for lint)
+- shellcheck (for e2e lint)
 
 ### Build and Test
 
@@ -18,7 +18,7 @@ zig build
 zig build test --summary all
 
 # Lint (bash -n + shellcheck on all E2E scripts)
-make lint
+make e2e-lint
 
 # Near end-to-end tests (starts an openQA container via Podman)
 make e2e
@@ -27,7 +27,54 @@ make e2e
 Before submitting a PR:
 1. Run `zig fmt src/` to format all source files.
 2. Ensure `zig build test` passes with no failures.
-3. Ensure `make lint` passes cleanly.
+3. Ensure `make e2e-lint` passes cleanly.
+
+### Make Targets
+
+```sh
+make help  # print this table
+```
+
+| Target | Description |
+|---|---|
+| `build` | Build the zoqa executable and static library. |
+| `release` | Build with release optimizations (`ReleaseFast`). |
+| `test` | Run all Zig unit tests. |
+| `e2e` | Build, then run the full E2E suite (starts + tears down container). |
+| `e2e-keep` | Build, then run E2E keeping the container alive (`--keep-container`). |
+| `e2e-lint` | Bash `-n` syntax check and shellcheck on all E2E scripts. |
+| `fuzz-build` | Build the instrumented AFL++ fuzz binaries. |
+
+### Testing
+
+#### Unit Tests
+
+```sh
+zig build test --summary all         # all unit tests
+zig test src/config.zig              # single file
+zig test src/main.zig --test-filter "parseIni"  # substring match
+```
+
+Shortcut: `make test`.
+
+#### Near End-to-End (E2E) Tests
+
+Validates CLI behavior, HMAC authentication, and API parity with the Perl reference
+using a live official openQA single-instance container managed by Podman.
+
+See [tests/e2e/README.md](tests/e2e/README.md) for prerequisites, script reference,
+flags, debugging tips, and the full test coverage table.
+
+Shortcuts: `make e2e` and `make e2e-keep`.
+
+#### Fuzz Testing
+
+Coverage-guided fuzz testing using AFL++ in Persistent Mode with LLVM instrumentation.
+
+See [tests/fuzz/README.md](tests/fuzz/README.md) for setup, workflow, crash triage,
+corpus distillation, and coverage reporting.
+
+Shortcut: `make fuzz-build`.
 
 ---
 
