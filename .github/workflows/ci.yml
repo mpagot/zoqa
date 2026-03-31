@@ -41,7 +41,6 @@ jobs:
       # `git checkout` after fetching, which validates all paths on Windows
       # regardless of sparse-checkout filters. The only workaround is
       # core.protectNTFS=false, applied here via a manual git setup.
-      # Build and Test steps are still skipped on Windows (see below).
       - name: Checkout (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -58,14 +57,8 @@ jobs:
           # Reads minimum_zig_version from build.zig.zon automatically.
           cache-size-limit: 2048
       - name: Build
-        # TODO: std.posix.getenv is unavailable on Windows targets; skip until
-        # config.zig uses a cross-platform env-var API.
-        if: runner.os != 'Windows'
         run: zig build --summary all
       - name: Test
-        # TODO: std.posix.getenv is unavailable on Windows targets; skip until
-        # config.zig uses a cross-platform env-var API.
-        if: runner.os != 'Windows'
         run: zig build test --summary all
 
   cross-compile:
@@ -85,12 +78,10 @@ jobs:
         run: zig build -Dtarget=x86_64-macos --summary all
       - name: Cross-compile aarch64-macos
         run: zig build -Dtarget=aarch64-macos --summary all
-      # TODO: std.posix.getenv is unavailable on Windows targets; re-enable
-      # these once config.zig uses a cross-platform env-var API.
-      # - name: Cross-compile x86_64-windows
-      #   run: zig build -Dtarget=x86_64-windows --summary all
-      # - name: Cross-compile aarch64-windows
-      #   run: zig build -Dtarget=aarch64-windows --summary all
+      - name: Cross-compile x86_64-windows
+        run: zig build -Dtarget=x86_64-windows --summary all
+      - name: Cross-compile aarch64-windows
+        run: zig build -Dtarget=aarch64-windows --summary all
 
   # Aggregation job for branch protection required status checks.
   # Handles the GitHub quirk where skipped jobs count as "success".

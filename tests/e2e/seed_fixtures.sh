@@ -56,7 +56,7 @@ CLI="openqa-cli api --host http://localhost"
 FIXTURE_DIR="/app/tests/e2e/fixtures"
 IDS_FILE="/tmp/seeded_ids.env"
 
-log() { echo "[seed] $*" >&2; }
+log() { echo "[seed] $*"; }
 
 # ---------------------------------------------------------------------------
 # 1. Load templates (Machines, TestSuites, Products, JobGroups) from JSON
@@ -224,5 +224,5 @@ ZIG_ASSET_ID=$ZIG_ASSET_ID
 GROUP_ID=$GROUP_ID
 EOF
 	log "Seeding complete."
-	cat "$IDS_FILE" >&2
+	cat "$IDS_FILE"
 fi

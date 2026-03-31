@@ -847,12 +847,19 @@ pub fn buildRequest(
         const uri = try std.Uri.parse(api_path);
         const host_part = if (uri.host) |h| h.percent_encoded else "localhost";
 
-        // Reconstruct scheme + authority as the host.
+        // Reconstruct scheme + authority as the host, preserving the port if present.
         // uri.scheme is []const u8 in Zig 0.15.2 (e.g. "https"), not an enum.
-        host_buf = try std.fmt.allocPrint(allocator, "{s}://{s}", .{
-            uri.scheme,
-            host_part,
-        });
+        host_buf = if (uri.port) |port|
+            try std.fmt.allocPrint(allocator, "{s}://{s}:{d}", .{
+                uri.scheme,
+                host_part,
+                port,
+            })
+        else
+            try std.fmt.allocPrint(allocator, "{s}://{s}", .{
+                uri.scheme,
+                host_part,
+            });
         resolved_host = host_buf.?;
 
         // Extract relative path by stripping the /api/v1/ prefix if present.
@@ -1037,6 +1044,22 @@ test "buildRequest: absolute URL used as-is" {
     // Absolute URL should be split into host + path
     try std.testing.expectEqualStrings("https://custom.host", req_cfg.host);
     try std.testing.expectEqualStrings("jobs", req_cfg.path);
+}
+
+test "buildRequest: absolute URL with port preserves port in host" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "api", "http://172.19.203.185:8080/api/v1/jobs/1",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    var req_cfg = try buildRequest(allocator, &parsed, null);
+    defer req_cfg.deinit(allocator);
+
+    // Port must be preserved — without the fix this returns "http://172.19.203.185"
+    try std.testing.expectEqualStrings("http://172.19.203.185:8080", req_cfg.host);
+    try std.testing.expectEqualStrings("jobs/1", req_cfg.path);
 }
 
 test "buildRequest: --header with colon splitting" {
@@ -1650,20 +1673,63 @@ pub fn main() !void {
     const conf_creds = try config.findCredentials(gpa, hostname);
     defer if (conf_creds) |c| c.deinit();
 
+    const env_apikey = std.process.getEnvVarOwned(gpa, "OPENQA_API_KEY") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    defer if (env_apikey) |s| gpa.free(s);
+
+    const env_apisecret = std.process.getEnvVarOwned(gpa, "OPENQA_API_SECRET") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    defer if (env_apisecret) |s| gpa.free(s);
+
     const creds = try mergeCredentials(
         gpa,
         .{ .key = args.apikey, .secret = args.apisecret },
-        .{ .key = std.posix.getenv("OPENQA_API_KEY"), .secret = std.posix.getenv("OPENQA_API_SECRET") },
+        .{ .key = env_apikey, .secret = env_apisecret },
         conf_creds,
     );
     defer if (creds) |c| c.deinit();
 
     // Retry count: --retries > OPENQA_CLI_RETRIES env > 0
     const retries: u32 = args.retries orelse blk: {
-        if (std.posix.getenv("OPENQA_CLI_RETRIES")) |s| {
-            break :blk std.fmt.parseInt(u32, s, 10) catch 0;
-        }
-        break :blk 0;
+        const env_s = std.process.getEnvVarOwned(gpa, "OPENQA_CLI_RETRIES") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => break :blk 0,
+            else => return err,
+        };
+        defer gpa.free(env_s);
+        break :blk std.fmt.parseInt(u32, env_s, 10) catch 0;
+    };
+
+    // Execution knobs: resolved from env here and passed into CallOptions so
+    // that http_client.zig stays free of std.posix / env-var dependencies.
+    const connect_timeout_s: f64 = blk: {
+        const env_s = std.process.getEnvVarOwned(gpa, "OPENQA_CLI_CONNECT_TIMEOUT") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => break :blk 30.0,
+            else => return err,
+        };
+        defer gpa.free(env_s);
+        break :blk std.fmt.parseFloat(f64, env_s) catch 30.0;
+    };
+
+    const retry_sleep_s: f64 = blk: {
+        const env_s = std.process.getEnvVarOwned(gpa, "OPENQA_CLI_RETRY_SLEEP_TIME_S") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => break :blk 3.0,
+            else => return err,
+        };
+        defer gpa.free(env_s);
+        break :blk std.fmt.parseFloat(f64, env_s) catch 3.0;
+    };
+
+    const retry_factor: f64 = blk: {
+        const env_s = std.process.getEnvVarOwned(gpa, "OPENQA_CLI_RETRY_FACTOR") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => break :blk 1.0,
+            else => return err,
+        };
+        defer gpa.free(env_s);
+        break :blk std.fmt.parseFloat(f64, env_s) catch 1.0;
     };
 
     // Execute the request via the library's public API entry point.
@@ -1679,6 +1745,9 @@ pub fn main() !void {
         .credentials = creds,
         .retries = retries,
         .quiet = args.quiet,
+        .connect_timeout_s = connect_timeout_s,
+        .retry_sleep_s = retry_sleep_s,
+        .retry_factor = retry_factor,
     }, &client) catch |err| {
         if (!args.quiet) std.debug.print("Fatal: {s}\n", .{@errorName(err)});
         std.process.exit(1);

@@ -82,7 +82,7 @@ log() { echo "[setup] $*"; }
 # Entrypoint Wrapper
 # Patches openqa-bootstrap to skip unnecessary steps and avoid zypper errors.
 # -----------------------------------------------------------------------------
-WRAPPER_TMP="tests/e2e/entrypoint-wrapper.sh"
+WRAPPER_TMP="/tmp/openqa-entrypoint-wrapper.sh"
 log "Preparing entrypoint wrapper..."
 if [[ "$DRY_RUN" == "true" ]]; then
 	echo "[DRY-RUN] cat > $WRAPPER_TMP << 'WRAPPER_EOF' ... WRAPPER_EOF"
@@ -117,11 +117,18 @@ if [[ "$EXPOSE_PORTS" == "true" ]]; then
 fi
 
 log "Starting openQA container ($CONTAINER_NAME)..."
+KVM_FLAG=""
+if [[ -e /dev/kvm ]]; then
+	KVM_FLAG="--device /dev/kvm"
+	log "KVM device found — enabling hardware virtualisation."
+else
+	log "WARNING: /dev/kvm not found — starting container without KVM (tests may be slower)."
+fi
 run_cmd "podman run -d --name $CONTAINER_NAME \
-    --device /dev/kvm \
+    $KVM_FLAG \
     -e skip_suse_specifics=1 \
     -e skip_suse_tests=1 \
-    -v \"\$(pwd)/$WRAPPER_TMP\":/app/entrypoint-wrapper.sh:ro \
+    -v \"$WRAPPER_TMP\":/app/entrypoint-wrapper.sh:ro \
     -v \"\$(pwd)\":/app:z \
     -w /app \
     $PORT_FLAGS \

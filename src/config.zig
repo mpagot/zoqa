@@ -101,10 +101,32 @@ pub fn parseIni(allocator: std.mem.Allocator, content: []const u8, hostname: []c
 
 /// Finds credentials in the filesystem based on priority.
 pub fn findCredentials(allocator: std.mem.Allocator, hostname: []const u8) !?Credentials {
-    const env_config = if (std.posix.getenv("OPENQA_CONFIG")) |p| try std.fs.path.join(allocator, &.{ p, "client.conf" }) else null;
+    // OPENQA_CONFIG overrides the default config directory.
+    const openqa_config_dir = std.process.getEnvVarOwned(allocator, "OPENQA_CONFIG") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    defer if (openqa_config_dir) |p| allocator.free(p);
+    const env_config = if (openqa_config_dir) |p| try std.fs.path.join(allocator, &.{ p, "client.conf" }) else null;
     defer if (env_config) |p| allocator.free(p);
 
-    const env_home = if (std.posix.getenv("HOME")) |h| try std.fs.path.join(allocator, &.{ h, ".config", "openqa", "client.conf" }) else null;
+    // Resolve the user's home directory: HOME on POSIX, USERPROFILE on Windows.
+    const home_dir = blk: {
+        if (std.process.getEnvVarOwned(allocator, "HOME")) |h| {
+            break :blk h;
+        } else |err| switch (err) {
+            error.EnvironmentVariableNotFound => {},
+            else => return err,
+        }
+        if (std.process.getEnvVarOwned(allocator, "USERPROFILE")) |h| {
+            break :blk h;
+        } else |err| switch (err) {
+            error.EnvironmentVariableNotFound => break :blk null,
+            else => return err,
+        }
+    };
+    defer if (home_dir) |h| allocator.free(h);
+    const env_home = if (home_dir) |h| try std.fs.path.join(allocator, &.{ h, ".config", "openqa", "client.conf" }) else null;
     defer if (env_home) |p| allocator.free(p);
 
     const search_paths = [_]?[]const u8{

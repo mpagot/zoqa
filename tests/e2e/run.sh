@@ -107,6 +107,26 @@ if [[ ! -f "zig-out/bin/zoqa" && "$DRY_RUN" == "false" ]]; then
 	exit 1
 fi
 
+# Print MD5 and last-modified date of the zoqa binary if the required tools
+# are available.  Both checks are optional — missing tools are silently skipped.
+if [[ -f "zig-out/bin/zoqa" ]]; then
+	_zoqa_bin="zig-out/bin/zoqa"
+	if command -v md5sum >/dev/null 2>&1; then
+		echo "    zoqa md5   : $(md5sum "$_zoqa_bin" | awk '{print $1}')"
+	elif command -v md5 >/dev/null 2>&1; then
+		echo "    zoqa md5   : $(md5 -q "$_zoqa_bin")"
+	fi
+	if command -v stat >/dev/null 2>&1; then
+		# GNU stat (Linux) and BSD stat (macOS) use different -f/-c flags.
+		if stat --version >/dev/null 2>&1; then
+			echo "    zoqa mtime : $(stat -c '%y' "$_zoqa_bin")"
+		else
+			echo "    zoqa mtime : $(stat -f '%Sm' "$_zoqa_bin")"
+		fi
+	fi
+	unset _zoqa_bin
+fi
+
 # Podman sanity check — verify podman is usable before spending time on the
 # openQA container setup.
 #
