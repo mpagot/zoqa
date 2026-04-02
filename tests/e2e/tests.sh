@@ -168,21 +168,38 @@ run_diff_test() {
 # -----------------------------------------------------------------------------
 # Source domain test files in order
 # -----------------------------------------------------------------------------
+#
+# If E2E_SUITES is set (comma-separated list of names, e.g. "core,auth"),
+# only the matching files are sourced. If E2E_SUITES is empty, all six
+# domain files are sourced — the default full-suite behaviour.
+#
+_e2e_suite_enabled() {
+	local name=$1
+	# Empty → all suites enabled
+	[[ -z "$E2E_SUITES" ]] && return 0
+	# Check if name appears as a comma-separated token
+	local suite
+	IFS=',' read -ra _suites <<<"$E2E_SUITES"
+	for suite in "${_suites[@]}"; do
+		[[ "$suite" == "$name" ]] && return 0
+	done
+	return 1
+}
 
 # shellcheck source=SCRIPTDIR/tests_core.sh
-source "$_E2E_DIR/tests_core.sh"
+_e2e_suite_enabled core && source "$_E2E_DIR/tests_core.sh"
 
 # shellcheck source=SCRIPTDIR/tests_auth.sh
-source "$_E2E_DIR/tests_auth.sh"
+_e2e_suite_enabled auth && source "$_E2E_DIR/tests_auth.sh"
 
 # shellcheck source=SCRIPTDIR/tests_data.sh
-source "$_E2E_DIR/tests_data.sh"
+_e2e_suite_enabled data && source "$_E2E_DIR/tests_data.sh"
 
 # shellcheck source=SCRIPTDIR/tests_output.sh
-source "$_E2E_DIR/tests_output.sh"
+_e2e_suite_enabled output && source "$_E2E_DIR/tests_output.sh"
 
 # shellcheck source=SCRIPTDIR/tests_robustness.sh
-source "$_E2E_DIR/tests_robustness.sh"
+_e2e_suite_enabled robustness && source "$_E2E_DIR/tests_robustness.sh"
 
 # shellcheck source=SCRIPTDIR/tests_retry_knobs.sh
-source "$_E2E_DIR/tests_retry_knobs.sh"
+_e2e_suite_enabled retry_knobs && source "$_E2E_DIR/tests_retry_knobs.sh"

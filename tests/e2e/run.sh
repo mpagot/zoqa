@@ -17,6 +17,9 @@
 #                       before stopping (or always, when combined with
 #                       --keep-container the logs are collected but the container
 #                       stays up).
+#   --suites NAMES      Comma-separated list of suite names to run (no .sh
+#                       extension). Valid names: core, auth, data, output,
+#                       robustness, retry_knobs. Omit to run all suites.
 
 set -eo pipefail
 
@@ -51,6 +54,10 @@ OPTIONS:
                       ports 80->8080 and 443->8443 so the openQA web UI is
                       reachable at http://localhost:8080.
   --collect-logs      Dump openQA server logs to ./openqa-e2e-logs/.
+  --suites NAMES      Comma-separated list of suite names to run (no .sh
+                      extension). Valid names: core, auth, data, output,
+                      robustness, retry_knobs. Omit to run all suites.
+                      Example: --suites core,auth
 
 DEBUGGING TIPS:
   Use --keep-container to browse the openQA web UI during or after the run.
@@ -66,6 +73,7 @@ EOF
 # -----------------------------------------------------------------------------
 KEEP_CONTAINER=false
 COLLECT_LOGS=false
+E2E_SUITES=""
 
 while [[ "$#" -gt 0 ]]; do
 	case $1 in
@@ -84,6 +92,10 @@ while [[ "$#" -gt 0 ]]; do
 	--collect-logs)
 		COLLECT_LOGS=true
 		shift
+		;;
+	--suites)
+		E2E_SUITES=$2
+		shift 2
 		;;
 	*)
 		echo "Unknown parameter: $1" >&2
@@ -203,6 +215,7 @@ fi
 
 echo "==> Environment:"
 echo "    JOB_ID=$JOB_ID  ASSET_ID=$ASSET_ID  ZIG_ASSET_ID=${ZIG_ASSET_ID:-}  GROUP_ID=$GROUP_ID"
+[[ -n "$E2E_SUITES" ]] && echo "==> Suites filter: $E2E_SUITES"
 
 # -----------------------------------------------------------------------------
 # Test Infrastructure
@@ -226,7 +239,10 @@ else
 fi
 
 # shellcheck source=SCRIPTDIR/tests.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tests.sh"
+# The 'source' is guarded with '|| true' so that a non-zero exit from the last
+# command in any domain file (e.g. a run_test that expects exit 1) does not
+# trigger the errexit trap and skip the summary block below.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tests.sh" || true
 
 # =============================================================================
 # Summary
