@@ -67,7 +67,8 @@ E2E_SCRIPTS := \
 	tests/e2e/tests_data.sh \
 	tests/e2e/tests_output.sh \
 	tests/e2e/tests_retry_knobs.sh \
-	tests/e2e/tests_robustness.sh
+	tests/e2e/tests_robustness.sh \
+	tests/e2e/tests_perf.sh
 
 e2e-lint:
 	@echo "==> bash -n syntax check"

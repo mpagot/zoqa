@@ -121,6 +121,15 @@ run_comparison "-a custom header does not break request" "" \
 # body. Canonical example from openqa-cli.yaml (line 109).
 # PUT /api/v1/jobs/:id (route apiv1_put_job → job#update) updates job settings.
 # The JSON is written to a file to avoid double-quote nesting in run_comparison.
+#
+# Server-side effect: none (deliberate no-op).
+# The seeded job already belongs to group_id=1 (GROUP_ID=1 set by
+# seed_fixtures.sh). Sending {"group_id":1} sets the field to the value it
+# already holds, so the PUT is accepted (exit 0) but produces no observable
+# state change on the server. This is intentional: the goal is to exercise
+# the --json + --data-file + -X PUT flag combination in isolation, without
+# mutating fixture state in a way that could affect downstream tests that
+# rely on the job's group membership.
 container_exec bash -c 'printf %s "{\"group_id\":1}" > /tmp/put39.json'
 run_comparison "--json + --data-file + PUT jobs/:id" "" \
 	"--json --data-file /tmp/put39.json -X PUT jobs/$JOB_ID" \

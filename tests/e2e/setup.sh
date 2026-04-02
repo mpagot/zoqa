@@ -93,6 +93,9 @@ else
 set -xeuo pipefail
 zypper -n --gpg-auto-import-keys ref
 zypper -n --gpg-auto-import-keys dup -y
+# Install GNU time so /usr/bin/time -v is available for peak-RSS measurement
+# in tests_perf.sh.  The base image does not include it. Also install gawk for metrics.
+zypper -n --gpg-auto-import-keys install -y time gawk
 BOOTSTRAP="/usr/share/openqa/script/openqa-bootstrap"
 sed -i 's/zypper -n/zypper -n --gpg-auto-import-keys/g' "$BOOTSTRAP"
 sed -i 's/ os-autoinst-distri-opensuse-deps//' "$BOOTSTRAP"

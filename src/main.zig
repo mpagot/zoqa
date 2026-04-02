@@ -1711,7 +1711,10 @@ pub fn main() !void {
             else => return err,
         };
         defer gpa.free(env_s);
-        break :blk std.fmt.parseFloat(f64, env_s) catch 30.0;
+        break :blk std.fmt.parseFloat(f64, env_s) catch {
+            std.debug.print("error: OPENQA_CLI_CONNECT_TIMEOUT={s}: not a valid number\n", .{env_s});
+            return error.InvalidConnectTimeout;
+        };
     };
 
     const retry_sleep_s: f64 = blk: {

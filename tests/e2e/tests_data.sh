@@ -24,20 +24,52 @@ run_comparison "GET jobs/$JOB_ID (nested object)" "" \
 
 # Test 20: GET machines?limit=2 with --links triggers the Link pagination header.
 # We seeded 3 machines; requesting limit=2 should yield a Link: rel="next" header.
-# parseLinkHeader formats output as "next: <url>" per link.
-echo "--- Test: ZIG : --links and follow pagination ---"
-container_exec bash -c "$ZIG_EXE api --host http://localhost --links 'machines?limit=2'" \
-	>"$LOG_DIR/test_pagination.log" 2>&1
-if grep -q "next:" "$LOG_DIR/test_pagination.log"; then
-	NEXT_URL=$(grep "^next: " "$LOG_DIR/test_pagination.log" | cut -d' ' -f2 | tr -d '\r')
-	echo "Found next URL: $NEXT_URL"
-	# Call again with the next URL to verify it returns the remaining data
-	run_test "ZIG : Follow pagination link" "$ZIG_EXE api --host http://localhost '$NEXT_URL'" 0 '"name":"uefi"'
-else
-	echo "FAIL: next link not found in output"
-	cat "$LOG_DIR/test_pagination.log"
-	failed_tests=$((failed_tests + 1))
-fi
+# Both implementations parse the Link header and emit "next: <url>" to stderr.
+#
+# Intentional behavioral difference: Perl wraps link lines in ANSI colour codes
+# (e.g. "\e[32mnext: <url>\e[0m"); Zig emits plain text.  The helper always
+# strips ANSI escape sequences — this is a no-op for Zig output — so both code
+# paths are identical and the grep pattern is consistent.
+#
+# Stream separation is also asserted here: next: must appear on stderr, not
+# stdout.  This subsumes the check that was previously in Test 43b
+# (tests_output.sh), and fixes that test's missing ANSI strip on the Zig block.
+_run_pagination_test() {
+	local label=$1   # "PERL" or "ZIG " — used verbatim in test output lines
+	local exe=$2     # binary to invoke
+	local log_tag=$3 # "perl" or "zig" — prefix for log filenames
+
+	echo "--- Test: ${label}: --links and follow pagination ---"
+	container_exec bash -c "$exe api --host http://localhost --links 'machines?limit=2'" \
+		>"$LOG_DIR/test_pagination_${log_tag}_stdout.log" \
+		2>"$LOG_DIR/test_pagination_${log_tag}_stderr.log"
+	sed 's/\x1b\[[0-9;]*m//g' "$LOG_DIR/test_pagination_${log_tag}_stderr.log" \
+		>"$LOG_DIR/test_pagination_${log_tag}_clean.log"
+
+	# Assert stream separation: next: must appear on stderr, not stdout.
+	if grep -q "^next: " "$LOG_DIR/test_pagination_${log_tag}_clean.log" &&
+		! grep -q "next:" "$LOG_DIR/test_pagination_${log_tag}_stdout.log"; then
+		echo "PASS (next: on stderr, not on stdout)"
+	else
+		echo "FAIL: --links stream routing incorrect for ${label}"
+		cat "$LOG_DIR/test_pagination_${log_tag}_stderr.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+
+	if grep -q "^next: " "$LOG_DIR/test_pagination_${log_tag}_clean.log"; then
+		local next_url
+		next_url=$(grep "^next: " "$LOG_DIR/test_pagination_${log_tag}_clean.log" |
+			cut -d' ' -f2 | tr -d '\r')
+		echo "Found next URL: $next_url"
+		run_test "${label}: Follow pagination link" \
+			"$exe api --host http://localhost '$next_url'" 0 '"name":"uefi"'
+	else
+		echo "SKIP: Cannot follow pagination link (stream routing failed)"
+	fi
+}
+
+_run_pagination_test "PERL" "$PERL_EXE" "perl"
+_run_pagination_test "ZIG " "$ZIG_EXE" "zig"
 
 # Test 21: DELETE a real asset (successful authenticated DELETE).
 # Perl and Zig each get their own asset to avoid ordering conflicts.

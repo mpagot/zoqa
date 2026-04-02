@@ -21,7 +21,7 @@ run_comparison "--verbose includes Content-Type" "" "--verbose jobs/overview" 0 
 # pretty-printed JSON but never in the compact single-line output.
 run_comparison "--pretty (non-empty)" "" "--pretty jobs/overview" 0 "^  "
 
-# Test 27: --name flag sets the User-Agent header (SPEC §2).
+# Test 27: --name flag sets the User-Agent header.
 #
 # Both Perl and Zig must accept the flag and exit 0 on a valid request.
 # Server-side User-Agent verification (via access logs) is not attempted here:
@@ -85,6 +85,8 @@ run_comparison "--pretty on empty result (no crash)" "" \
 # Uses machines?limit=2: 3 machines are seeded, guaranteeing a next page.
 # Perl (Command.pm:52-56) wraps output in ANSI colour codes; Zig (main.zig:1570)
 # writes plain text. Both contain "next:" — grep matches regardless of ANSI.
+# Stream separation (next: on stderr, not stdout) is asserted in Test 20
+# (_run_pagination_test in tests_data.sh), which also strips ANSI for both impls.
 run_comparison "--links outputs next: for paginated response" "" \
 	"--links 'machines?limit=2'" \
 	0 "next:"

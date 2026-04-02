@@ -54,6 +54,8 @@ single static binaries, and need zero runtime dependencies.
 | **Cross-compilation** | N/A | 6 targets from a single build host |
 | **Platforms shipped** | Wherever Perl runs | Linux, macOS, Windows (x86_64 + aarch64) |
 | **Container-friendly** | Needs Perl + deps installed | Copy one file, done |
+| **Wall-time per request** | ~0.6–2.2 s | ~0.020–0.085 s (30–50× faster) |
+| **Peak memory (RSS)** | ~57 MB | ~3.7 MB |
 
 
 ## Quick start

@@ -50,7 +50,7 @@ fi
 
 # Test 30: Non-2xx error reporting — status line must appear on stderr without --quiet.
 #
-# SPEC §9.3: on a non-2xx response, the status line must be printed to stderr
+# on a non-2xx response, the status line must be printed to stderr
 # (unless --quiet is set).
 echo "--- Test: PERL vs ZIG : non-2xx stderr without --quiet ---"
 set +e
