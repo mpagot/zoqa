@@ -72,14 +72,22 @@ echo "==> [perf] Running performance comparison tests..."
 # Private helpers — prefixed with _perf_ to avoid polluting the shared scope
 # -----------------------------------------------------------------------------
 
-# _perf_wall_time_s ENV_VARS CMD_STR
+# Measures the wall-clock execution time of a command running inside the container.
 #
-# Runs ENV_VARS CMD_STR inside the container (output discarded) and prints the
-# wall-clock duration in seconds with three decimal places, using bash's
-# TIMEFORMAT="%R" built-in timer.  No external 'time' binary is needed.
-# ENV_VARS may be "" for none.
+# Uses bash's built-in 'time' utility with TIMEFORMAT="%R" to obtain high-precision
+# duration without requiring an external 'time' binary. The command's stdout and
+# stderr are discarded; only the duration is printed to stdout.
 #
-# Example output: "0.043"
+# Arguments:
+#   $1 (env_vars): A string of environment variable assignments (e.g., "VAR=val")
+#                  to prepend to the command. Use "" for no variables.
+#   $2 (cmd):      The command string to execute and measure.
+#
+# Return code:
+#   Returns the exit status of the measurement process (0 on success).
+#
+# Environment variables:
+#   TIMEFORMAT: Set to "%R" internally to force the decimal-seconds output format.
 _perf_wall_time_s() {
 	local env_vars=$1
 	local cmd=$2
