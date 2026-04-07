@@ -44,8 +44,8 @@ OPTIONS:
   --collect-logs      Dump openQA server logs to ./openqa-e2e-logs/.
   --suites NAMES      Comma-separated list of suite names to run (no .sh
                       extension). Valid names: core, auth, data, output,
-                      robustness, retry_knobs, perf. Omit to run all suites.
-                      Example: --suites core,auth
+                      robustness, retry_knobs, archive, perf. Omit to run
+                      all suites. Example: --suites core,auth
 
 DEBUGGING TIPS:
   Use --keep-container to browse the openQA web UI during or after the run.

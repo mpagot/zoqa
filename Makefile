@@ -62,6 +62,7 @@ E2E_SCRIPTS := \
 	tests/e2e/teardown.sh \
 	tests/e2e/seed_fixtures.sh \
 	tests/e2e/lib.sh \
+	tests/e2e/tests_archive.sh \
 	tests/e2e/tests_auth.sh \
 	tests/e2e/tests_core.sh \
 	tests/e2e/tests_data.sh \

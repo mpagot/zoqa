@@ -88,6 +88,7 @@ pwsh tests\e2e\run_windows.ps1 -WslDistro "openSUSE-Tumbleweed"
 | `tests_output.sh` | Section D — `--verbose`, `--pretty`, `--name` (tests 25–28). |
 | `tests_robustness.sh` | Section E — broken pipe, non-2xx stderr, `--quiet` (tests 29–31). |
 | `tests_retry_knobs.sh` | Section F — retry/timeout env var smoke tests (tests 32–35). |
+| `tests_archive.sh` | Section H — archive subcommand tests (ARC-1–ARC-25). |
 | `tests_perf.sh` | Section G — wall-clock timing and peak RSS comparisons (PERF-T1, T2, R1, R2). |
 
 `run.sh` is the only script you need to call directly in normal use. The others are
@@ -115,8 +116,8 @@ invoked automatically.
                     at http://localhost:8080.
 --collect-logs      Dump openQA server-side logs to ./openqa-e2e-logs/ before stopping.
 --suites NAMES      Comma-separated list of suite names to run. Valid names:
-                    core, auth, data, output, robustness, retry_knobs, perf.
-                    When omitted, all suites are run (default behaviour).
+                    core, auth, data, output, robustness, retry_knobs, archive,
+                    perf. When omitted, all suites are run (default behaviour).
 -h, --help          Show help.
 ```
 
@@ -301,6 +302,35 @@ The harness employs three primary testing patterns to validate the Zig executabl
 | # | Test | Verification |
 |---|---|---|
 | 24 | Verbose Header Count | Perl vs Zig header line count comparison — both print 5 header lines. |
+
+### Archive Subcommand (Section H — SPEC §13)
+| # | Test | Verification |
+|---|---|---|
+| ARC-1 | Missing All Arguments | `archive` with no JOB_ID or OUTPUT_PATH exits 255 (usage error). |
+| ARC-2 | Missing Output Path | `archive JOB_ID` with no path exits 255 (usage error). |
+| ARC-3 | Invalid Job ID | `archive 999999 /tmp/out` exits 1 (non-200 job details response). |
+| ARC-4 | Basic Archive | Both Perl and Zig archive a seeded job and exit 0. |
+| ARC-5 | Output Dir Exists | Output directory is created after a successful archive. |
+| ARC-6 | Dir Structure Parity | `find -type d` comparison between Perl and Zig output trees. |
+| ARC-7 | testresults/ Created | The `testresults/` directory exists after archive. |
+| ARC-8 | ulogs/ Created | The `testresults/ulogs/` directory exists after archive. |
+| ARC-9 | No thumbnails/ Default | `testresults/thumbnails/` absent without `--with-thumbnails`. |
+| ARC-10 | No repo/ Directory | `repo/` directory never created (repo assets are skipped). |
+| ARC-11 | File Listing Parity | `find -type f` comparison between Perl and Zig output trees. |
+| ARC-12 | --with-thumbnails | Flag accepted; `testresults/thumbnails/` directory created. |
+| ARC-13 | Thumbnails Dir Parity | Dir structure comparison with `--with-thumbnails`. |
+| ARC-14 | --asset-size-limit | Flag accepted with default value (exit 0). |
+| ARC-15 | Size Limit 1 Byte | `--asset-size-limit 1` exits 0 (skips are not fatal). |
+| ARC-16 | --quiet Flag | `--quiet` accepted on archive (exit 0). |
+| ARC-17 | --verbose --pretty | Both no-op flags accepted on archive (exit 0). |
+| ARC-18 | Env Var Credentials | Archive works with `OPENQA_API_KEY`/`SECRET` env vars. |
+| ARC-19 | Wrong Credentials | Wrong API secret causes archive to abort (exit 1). |
+| ARC-20 | Progress Messages | stdout contains "Downloading test details", "logs", "ulogs". |
+| ARC-21 | Asset Group Message | stdout contains "Attempt {type} download:" for asset groups. |
+| ARC-22 | Pre-existing Dir | Archive into an existing directory succeeds (exit 0). |
+| ARC-23 | Short Flags -t -l | Short-form flags `-t` and `-l` are accepted. |
+| ARC-24 | --host Before archive | Global `--host` before subcommand name rejected (exit 255). |
+| ARC-25 | Default Size Limit | Default 200 MiB limit allows small files (exit 0). |
 
 ---
 
