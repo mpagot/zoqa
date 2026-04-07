@@ -7,16 +7,7 @@
 # Usage:
 #   bash tests/e2e/run.sh [OPTIONS]
 #
-# OPTIONS:
-#   -h, --help          Show this help message and exit.
-#   --dryrun            Print commands without executing them.
-#   --keep-container    Do not stop the container after tests finish. Publishes
-#                       ports 80->8080 and 443->8443 so the openQA web UI is
-#                       reachable at http://localhost:8080.
-#   --collect-logs      Collect server-side openQA logs into ./openqa-e2e-logs/
-#                       before stopping (or always, when combined with
-#                       --keep-container the logs are collected but the container
-#                       stays up).
+# Run with --help for the full option reference.
 
 set -eo pipefail
 
@@ -51,6 +42,10 @@ OPTIONS:
                       ports 80->8080 and 443->8443 so the openQA web UI is
                       reachable at http://localhost:8080.
   --collect-logs      Dump openQA server logs to ./openqa-e2e-logs/.
+  --suites NAMES      Comma-separated list of suite names to run (no .sh
+                      extension). Valid names: core, auth, data, output,
+                      robustness, retry_knobs, perf. Omit to run all suites.
+                      Example: --suites core,auth
 
 DEBUGGING TIPS:
   Use --keep-container to browse the openQA web UI during or after the run.
@@ -66,6 +61,7 @@ EOF
 # -----------------------------------------------------------------------------
 KEEP_CONTAINER=false
 COLLECT_LOGS=false
+E2E_SUITES=""
 
 while [[ "$#" -gt 0 ]]; do
 	case $1 in
@@ -84,6 +80,10 @@ while [[ "$#" -gt 0 ]]; do
 	--collect-logs)
 		COLLECT_LOGS=true
 		shift
+		;;
+	--suites)
+		E2E_SUITES=$2
+		shift 2
 		;;
 	*)
 		echo "Unknown parameter: $1" >&2
@@ -193,16 +193,17 @@ else
 		exit 1
 	fi
 	# Dry-run defaults
-	OPENQA_API_KEY="MOCK_KEY"
-	OPENQA_API_SECRET="MOCK_SECRET"
-	JOB_ID="1"
-	ASSET_ID="1"
-	ZIG_ASSET_ID="2"
-	GROUP_ID="1"
+	export OPENQA_API_KEY="MOCK_KEY"
+	export OPENQA_API_SECRET="MOCK_SECRET"
+	export JOB_ID="1"
+	export ASSET_ID="1"
+	export ZIG_ASSET_ID="2"
+	export GROUP_ID="1"
 fi
 
 echo "==> Environment:"
 echo "    JOB_ID=$JOB_ID  ASSET_ID=$ASSET_ID  ZIG_ASSET_ID=${ZIG_ASSET_ID:-}  GROUP_ID=$GROUP_ID"
+[[ -n "$E2E_SUITES" ]] && echo "==> Suites filter: $E2E_SUITES"
 
 # -----------------------------------------------------------------------------
 # Test Infrastructure

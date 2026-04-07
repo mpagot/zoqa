@@ -21,7 +21,7 @@ run_comparison "--verbose includes Content-Type" "" "--verbose jobs/overview" 0 
 # pretty-printed JSON but never in the compact single-line output.
 run_comparison "--pretty (non-empty)" "" "--pretty jobs/overview" 0 "^  "
 
-# Test 27: --name flag sets the User-Agent header (SPEC §2).
+# Test 27: --name flag sets the User-Agent header.
 #
 # Both Perl and Zig must accept the flag and exit 0 on a valid request.
 # Server-side User-Agent verification (via access logs) is not attempted here:
@@ -74,3 +74,38 @@ else
 	echo "WARN: Perl produced no headers in verbose mode — skipping comparison"
 	warned_tests=$((warned_tests + 1))
 fi
+
+# Test 42: --pretty on an empty result (just verifies no crash, exit 0).
+# Output format differs: Perl → "[\n]\n"; Zig → "[]\n". No pattern asserted.
+run_comparison "--pretty on empty result (no crash)" "" \
+	"--pretty jobs distri=doesnotexist999" \
+	0
+
+# Test 43: --links prints the Link header's rel=next URL to stderr.
+# Uses machines?limit=2: 3 machines are seeded, guaranteeing a next page.
+# Perl (Command.pm:52-56) wraps output in ANSI colour codes; Zig (main.zig:1570)
+# writes plain text. Both contain "next:" — grep matches regardless of ANSI.
+# Stream separation (next: on stderr, not stdout) is asserted in Test 20
+# (_run_pagination_test in tests_data.sh), which also strips ANSI for both impls.
+run_comparison "--links outputs next: for paginated response" "" \
+	"--links 'machines?limit=2'" \
+	0 "next:"
+
+# Test 44: --verbose on a 404 prints the HTTP status line to stdout.
+# Perl (Command.pm:59-63): if/elsif → verbose branch → stdout gets the status
+# line; stderr is empty (error branch not taken).
+# Zig (main.zig:1550-1566): two independent if blocks → stdout gets status line
+# AND stderr gets "404 Not Found".
+# run_comparison combines stdout+stderr, so "HTTP/1.1 404" is found in either
+# stream for both implementations.
+run_comparison "--verbose on 404 shows HTTP status line" "" \
+	"--verbose jobs/999999" \
+	1 "HTTP/1.1 404"
+
+# Test 45: --quiet + --verbose on a 404.
+# --quiet suppresses the non-2xx error line on stderr in both implementations.
+# --verbose still prints the HTTP status line to stdout in both.
+# Both exit 1; stdout has the "HTTP/" status line; stderr is empty.
+run_comparison "--quiet --verbose on 404: headers on stdout, quiet stderr" "" \
+	"--quiet --verbose jobs/999999" \
+	1 "HTTP/"

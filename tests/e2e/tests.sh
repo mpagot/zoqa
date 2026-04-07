@@ -13,6 +13,7 @@
 #   tests_output.sh      — Section D: output formatting (verbose, pretty, name)
 #   tests_robustness.sh  — Section E: broken pipe, non-2xx stderr, --quiet
 #   tests_retry_knobs.sh — Section F: OPENQA_CLI_RETRIES / SLEEP / FACTOR env vars
+#   tests_perf.sh        — Section G: wall-clock timing and peak RSS comparisons
 #
 # Reads from the calling scope:
 #   ZIG_EXE       — absolute path to the zoqa binary inside the container
@@ -168,21 +169,38 @@ run_diff_test() {
 # -----------------------------------------------------------------------------
 # Source domain test files in order
 # -----------------------------------------------------------------------------
+#
+# If E2E_SUITES is set (comma-separated list of names, e.g. "core,auth"),
+# only the matching files are sourced. If E2E_SUITES is empty, all
+# domain files are sourced — the default full-suite behaviour.
+#
+_e2e_suite_enabled() {
+	local name=$1
+	# Empty → all suites enabled
+	[[ -z "$E2E_SUITES" ]] && return 0
+	# Check if name appears as a comma-separated token
+	local suite
+	IFS=',' read -ra _suites <<<"$E2E_SUITES"
+	for suite in "${_suites[@]}"; do
+		[[ "$suite" == "$name" ]] && return 0
+	done
+	return 1
+}
 
-# shellcheck source=SCRIPTDIR/tests_core.sh
-source "$_E2E_DIR/tests_core.sh"
-
-# shellcheck source=SCRIPTDIR/tests_auth.sh
-source "$_E2E_DIR/tests_auth.sh"
-
-# shellcheck source=SCRIPTDIR/tests_data.sh
-source "$_E2E_DIR/tests_data.sh"
-
-# shellcheck source=SCRIPTDIR/tests_output.sh
-source "$_E2E_DIR/tests_output.sh"
-
-# shellcheck source=SCRIPTDIR/tests_robustness.sh
-source "$_E2E_DIR/tests_robustness.sh"
-
-# shellcheck source=SCRIPTDIR/tests_retry_knobs.sh
-source "$_E2E_DIR/tests_retry_knobs.sh"
+# Run each enabled suite in order.  When E2E_SUITES is set, suites not in
+# the list are skipped.  The `|| true` ensures each iteration exits 0:
+# a disabled suite returns 1 from the && short-circuit, and a sourced file
+# whose last command exits non-zero would otherwise propagate that code out
+# of `source tests.sh` in run.sh and fire the errexit trap before the summary.
+# All test outcomes are tracked via $failed_tests / $warned_tests, not exit
+# codes, so nothing meaningful is hidden by this.
+#
+# ShellCheck cannot follow a dynamic source path; the individual tests_*.sh
+# files are checked independently when `make e2e-lint` is run.
+# shellcheck disable=SC1090
+_e2e_all_suites=(core auth data output robustness retry_knobs perf)
+for _suite in "${_e2e_all_suites[@]}"; do
+	if _e2e_suite_enabled "$_suite"; then
+		source "$_E2E_DIR/tests_${_suite}.sh"
+	fi
+done

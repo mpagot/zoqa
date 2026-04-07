@@ -88,6 +88,7 @@ pwsh tests\e2e\run_windows.ps1 -WslDistro "openSUSE-Tumbleweed"
 | `tests_output.sh` | Section D — `--verbose`, `--pretty`, `--name` (tests 25–28). |
 | `tests_robustness.sh` | Section E — broken pipe, non-2xx stderr, `--quiet` (tests 29–31). |
 | `tests_retry_knobs.sh` | Section F — retry/timeout env var smoke tests (tests 32–35). |
+| `tests_perf.sh` | Section G — wall-clock timing and peak RSS comparisons (PERF-T1, T2, R1, R2). |
 
 `run.sh` is the only script you need to call directly in normal use. The others are
 invoked automatically.
@@ -113,7 +114,27 @@ invoked automatically.
                     ports 80->8080 and 443->8443 so the web UI is reachable
                     at http://localhost:8080.
 --collect-logs      Dump openQA server-side logs to ./openqa-e2e-logs/ before stopping.
+--suites NAMES      Comma-separated list of suite names to run. Valid names:
+                    core, auth, data, output, robustness, retry_knobs, perf.
+                    When omitted, all suites are run (default behaviour).
 -h, --help          Show help.
+```
+
+Examples:
+
+```sh
+# Run the full suite (default)
+bash tests/e2e/run.sh
+
+# Run only the core suite
+bash tests/e2e/run.sh --suites core
+
+# Run two suites
+bash tests/e2e/run.sh --suites core,auth
+
+# Via make
+make e2e SUITES=core
+make e2e SUITES=core,auth
 ```
 
 ---

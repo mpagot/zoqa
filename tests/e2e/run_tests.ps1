@@ -384,6 +384,27 @@ Run-Test -Label "W-24: --name flag accepted (exit 0)" -ExpectedExit 0 -Cmd {
     & $ZoqaExe api --host $BaseUrl --name zoqa-e2e-windows jobs/overview 2>&1
 }
 
+# Test W-31: --links stream separation — next: must appear on stderr, not stdout.
+# Mirrors test 43b from tests_output.sh.
+# run_test / Run-ZoqaTest captures combined stdout+stderr; explicit per-stream
+# redirects are required here to assert the stream-routing contract.
+Write-Host ""
+Write-Host "--- Test: W-31: --links next: on stderr, not stdout ---"
+$linksStdout = Join-Path $script:LogDir "w31_stdout.log"
+$linksStderr = Join-Path $script:LogDir "w31_stderr.log"
+& $ZoqaExe api --host $BaseUrl --links "machines?limit=2" `
+    2>$linksStderr 1>$linksStdout
+$linksStderrContent = Get-Content -Path $linksStderr -Raw -ErrorAction SilentlyContinue
+$linksStdoutContent = Get-Content -Path $linksStdout -Raw -ErrorAction SilentlyContinue
+if (($linksStderrContent -match 'next:') -and (-not ($linksStdoutContent -match 'next:'))) {
+    Write-Host "PASS (next: on stderr, not on stdout)"
+} else {
+    Write-Host "FAIL: --links stream routing incorrect"
+    Write-Host "stdout: $linksStdoutContent"
+    Write-Host "stderr: $linksStderrContent"
+    $script:FailedTests++
+}
+
 # =============================================================================
 # Section E — Robustness tests
 # (mirrors tests_robustness.sh; broken pipe test skipped — complex in PS)
