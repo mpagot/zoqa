@@ -3,13 +3,13 @@ const config = @import("config.zig");
 const auth = @import("auth.zig");
 
 // ---------------------------------------------------------------------------
-// Public types
+// Types
 // ---------------------------------------------------------------------------
 
 /// A single HTTP response header name/value pair.
 /// Both fields are heap-allocated and owned by the `APIResponse` that contains
 /// this entry. Freed by `APIResponse.deinit()`.
-pub const ResponseHeader = struct {
+const ResponseHeader = struct {
     name: []u8,
     value: []u8,
 };
@@ -118,6 +118,26 @@ pub const Request = struct {
     connect_timeout_s: f64 = 30.0,
     retry_sleep_s: f64 = 3.0,
     retry_factor: f64 = 1.0,
+    /// Maximum bytes to accept in a streaming response. Only used by
+    /// `executeStream()`; ignored by `execute()`. If the `Content-Length`
+    /// response header exceeds this value, `executeStream()` returns
+    /// `error.FileTooLarge` without reading the body.
+    size_limit: ?u64 = null,
+};
+
+// ---------------------------------------------------------------------------
+// StreamResult — result type for executeStream()
+// ---------------------------------------------------------------------------
+
+/// Result returned by `executeStream()`.
+///
+/// Fields:
+/// - `status`         — HTTP status code of the response.
+/// - `content_length` — Value of the `Content-Length` response header, or
+///                      `null` if absent or not parseable as u64.
+pub const StreamResult = struct {
+    status: std.http.Status,
+    content_length: ?u64,
 };
 
 // ---------------------------------------------------------------------------
@@ -145,6 +165,86 @@ fn normalizePathQuery(input: []const u8, writer: anytype) !void {
 }
 
 // ---------------------------------------------------------------------------
+// buildHeaders — shared request-header construction
+// ---------------------------------------------------------------------------
+
+/// Build the outbound header list for a single request attempt.
+///
+/// Copies `extra_headers` verbatim, adds `Accept: application/json` if no
+/// `Accept` header is present, always adds `Accept-Encoding: identity`, and
+/// optionally appends HMAC-SHA1 auth headers when `credentials` is non-null.
+///
+/// The caller must supply `hash_buf` and `timestamp_buf` as stack variables
+/// that outlive the returned list — the HMAC auth headers borrow from them
+/// (see `auth.buildAuthHeaders` doc comment).
+///
+/// The returned `ArrayList` is owned by the caller; free via
+/// `headers.deinit(allocator)`.
+fn buildHeaders(
+    allocator: std.mem.Allocator,
+    extra_headers: []const std.http.Header,
+    credentials: ?config.Credentials,
+    uri: std.Uri,
+    hash_buf: *[40]u8,
+    timestamp_buf: *[32]u8,
+) !std.ArrayList(std.http.Header) {
+    var headers: std.ArrayList(std.http.Header) = .{};
+    errdefer headers.deinit(allocator);
+
+    try headers.appendSlice(allocator, extra_headers);
+
+    var has_accept = false;
+    for (extra_headers) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "Accept")) {
+            has_accept = true;
+            break;
+        }
+    }
+    if (!has_accept) {
+        try headers.append(allocator, .{ .name = "Accept", .value = "application/json" });
+    }
+
+    // Disable compression: request raw bytes so the response body is
+    // always human-readable text. We still handle gzip defensively.
+    try headers.append(allocator, .{ .name = "Accept-Encoding", .value = "identity" });
+
+    if (credentials) |creds| {
+        // HMAC message: path + ("?" + query if query else "") + timestamp.
+        // Body parameters are strictly EXCLUDED.
+        var msg_buf: std.ArrayList(u8) = .{};
+        defer msg_buf.deinit(allocator);
+
+        const w = msg_buf.writer(allocator);
+
+        // 1. Build the path + query string
+        try w.print("{s}", .{uri.path.percent_encoded});
+        if (uri.query) |q| {
+            try w.print("?{s}", .{q.percent_encoded});
+        }
+
+        // 2. Normalize: %20 → +, ~ → %7E
+        const raw_path_query = try msg_buf.toOwnedSlice(allocator);
+        defer allocator.free(raw_path_query);
+        msg_buf.clearRetainingCapacity();
+
+        try normalizePathQuery(raw_path_query, w);
+
+        // 3. Generate timestamp and auth headers
+        const timestamp_str = try std.fmt.bufPrint(timestamp_buf, "{d}", .{std.time.timestamp()});
+        const auth_headers = auth.buildAuthHeaders(
+            creds.key,
+            creds.secret,
+            msg_buf.items,
+            timestamp_str,
+            hash_buf,
+        );
+        try headers.appendSlice(allocator, &auth_headers);
+    }
+
+    return headers;
+}
+
+// ---------------------------------------------------------------------------
 // execute — injectable HTTP engine
 // ---------------------------------------------------------------------------
 
@@ -166,65 +266,14 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
 
     var attempt: u32 = 0;
     while (true) : (attempt += 1) {
-        // Build the header list for this attempt (unmanaged ArrayList)
-        var headers: std.ArrayList(std.http.Header) = .{};
-        defer headers.deinit(req.allocator);
-
-        try headers.appendSlice(req.allocator, req.headers);
-
-        // Add default Accept header if the caller didn't supply one
-        var has_accept = false;
-        for (req.headers) |h| {
-            if (std.ascii.eqlIgnoreCase(h.name, "Accept")) {
-                has_accept = true;
-                break;
-            }
-        }
-        if (!has_accept) {
-            try headers.append(req.allocator, .{ .name = "Accept", .value = "application/json" });
-        }
-
-        // Disable compression: request raw bytes so the response body is
-        // always human-readable text. We still handle gzip defensively.
-        try headers.append(req.allocator, .{ .name = "Accept-Encoding", .value = "identity" });
-
+        // Build request headers fresh on each attempt so the HMAC timestamp
+        // is current. hash_buf and timestamp_buf are declared here so they
+        // outlive the headers list (auth headers borrow from them).
         const uri = try std.Uri.parse(req.url);
-
         var hash_buf: [40]u8 = undefined;
         var timestamp_buf: [32]u8 = undefined;
-        const timestamp_str = try std.fmt.bufPrint(&timestamp_buf, "{d}", .{std.time.timestamp()});
-
-        if (req.credentials) |creds| {
-            // HMAC message: path + ("?" + query if query else "") + timestamp.
-            // Body parameters are strictly EXCLUDED.
-            var msg_buf: std.ArrayList(u8) = .{};
-            defer msg_buf.deinit(req.allocator);
-
-            const w = msg_buf.writer(req.allocator);
-
-            // 1. Build the path + query string
-            try w.print("{s}", .{uri.path.percent_encoded});
-            if (uri.query) |q| {
-                try w.print("?{s}", .{q.percent_encoded});
-            }
-
-            // 2. Normalize: %20 → +, ~ → %7E
-            const raw_path_query = try msg_buf.toOwnedSlice(req.allocator);
-            defer req.allocator.free(raw_path_query);
-            msg_buf.clearRetainingCapacity();
-
-            try normalizePathQuery(raw_path_query, w);
-
-            // 3. Generate auth headers
-            const auth_headers = auth.buildAuthHeaders(
-                creds.key,
-                creds.secret,
-                msg_buf.items,
-                timestamp_str,
-                &hash_buf,
-            );
-            try headers.appendSlice(req.allocator, &auth_headers);
-        }
+        var headers = try buildHeaders(req.allocator, req.headers, req.credentials, uri, &hash_buf, &timestamp_buf);
+        defer headers.deinit(req.allocator);
 
         // ----------------------------------------------------------------
         // Issue the request via the injected client
@@ -299,6 +348,12 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         // Single pass over response headers to collect needed information
         var content_type_buf: ?[]u8 = null;
         var link_buf: ?[]u8 = null;
+        // Register errdefer here, before the loop, so any allocation failure
+        // inside the loop doesn't leak content_type_buf or link_buf (issue #7).
+        errdefer {
+            if (content_type_buf) |ct| req.allocator.free(ct);
+            if (link_buf) |l| req.allocator.free(l);
+        }
         var content_type_is_json = false;
         var is_gzip = false;
         var all_headers: std.ArrayList(ResponseHeader) = .{};
@@ -351,10 +406,6 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
                     content_type_is_json = true;
                 }
             }
-        }
-        errdefer {
-            if (content_type_buf) |ct| req.allocator.free(ct);
-            if (link_buf) |l| req.allocator.free(l);
         }
 
         // Fallback: check structured content_type field
@@ -409,6 +460,61 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
             .link = link_buf,
         };
     }
+}
+
+// ---------------------------------------------------------------------------
+// executeStream — stream a response body directly to a writer
+// ---------------------------------------------------------------------------
+
+/// Perform a single (non-retried) HTTP request and stream the response body
+/// directly to `writer`.
+///
+/// Unlike `execute()`, this function does not buffer the body in memory and
+/// does not retry on failure — it is intended for large file downloads (e.g.
+/// the `archive` subcommand) where buffering would be prohibitive.
+///
+/// If `req.size_limit` is set and the `Content-Length` response header is
+/// present and exceeds the limit, `error.FileTooLarge` is returned before
+/// any body bytes are written to `writer`.
+///
+/// Returns a `StreamResult` with the HTTP status and content length.
+/// The caller is responsible for checking `result.status` and handling
+/// non-2xx responses.
+pub fn executeStream(req: Request, client: anytype, writer: *std.Io.Writer) !StreamResult {
+    _ = req.connect_timeout_s;
+
+    const uri = try std.Uri.parse(req.url);
+    var hash_buf: [40]u8 = undefined;
+    var timestamp_buf: [32]u8 = undefined;
+    var headers = try buildHeaders(req.allocator, req.headers, req.credentials, uri, &hash_buf, &timestamp_buf);
+    defer headers.deinit(req.allocator);
+
+    var http_req = try client.request(req.method, uri, .{
+        .extra_headers = headers.items,
+    });
+    defer http_req.deinit();
+
+    try http_req.sendBodiless();
+
+    var redirect_buf: [8 * 1024]u8 = undefined;
+    var response = try http_req.receiveHead(&redirect_buf);
+
+    const content_length = response.head.content_length;
+
+    if (req.size_limit) |limit| {
+        if (content_length) |cl| {
+            if (cl > limit) return error.FileTooLarge;
+        }
+    }
+
+    var transfer_buf: [65536]u8 = undefined;
+    const body_reader = response.reader(&transfer_buf);
+    _ = try body_reader.streamRemaining(writer);
+
+    return StreamResult{
+        .status = response.head.status,
+        .content_length = content_length,
+    };
 }
 
 // ---------------------------------------------------------------------------
