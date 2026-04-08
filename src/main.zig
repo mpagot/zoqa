@@ -89,6 +89,10 @@ pub const Args = struct {
     // User-Agent name (--name)
     name: []const u8 = "openQAclient",
 
+    // archive subcommand options
+    with_thumbnails: bool = false,
+    asset_size_limit: ?u64 = null,
+
     /// Release the three owned ArrayLists.  Call this (via `defer`) immediately
     /// after a successful `parseArgs` return.
     pub fn deinit(self: *Args, allocator: std.mem.Allocator) void {
@@ -309,6 +313,26 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
         if (try flagValue(arg, &i, argv, "--name")) |v| {
             args.name = v;
             continue;
+        }
+
+        // ---- archive-specific flags ----
+        if (args.path != null and std.mem.eql(u8, args.path.?, "archive")) {
+            if (std.mem.eql(u8, arg, "-t") or std.mem.eql(u8, arg, "--with-thumbnails")) {
+                args.with_thumbnails = true;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "-l")) {
+                i += 1;
+                if (i >= argv.len) return error.MissingValue;
+                args.asset_size_limit = std.fmt.parseInt(u64, argv[i], 10) catch
+                    return error.InvalidAssetSizeLimit;
+                continue;
+            }
+            if (try flagValue(arg, &i, argv, "--asset-size-limit")) |v| {
+                args.asset_size_limit = std.fmt.parseInt(u64, v, 10) catch
+                    return error.InvalidAssetSizeLimit;
+                continue;
+            }
         }
 
         // ---- positionals / unrecognized flags ----
@@ -1614,8 +1638,8 @@ pub fn main() !void {
         std.process.exit(1);
     };
 
-    if (!std.mem.eql(u8, subcmd, "api")) {
-        std.debug.print("Error: Unknown subcommand '{s}'. Only 'api' is supported.\n", .{subcmd});
+    if (!std.mem.eql(u8, subcmd, "api") and !std.mem.eql(u8, subcmd, "archive")) {
+        std.debug.print("Error: Unknown subcommand '{s}'. Only 'api' and 'archive' are supported.\n", .{subcmd});
         std.process.exit(1);
     }
 
@@ -1633,20 +1657,35 @@ pub fn main() !void {
 
     const data_file_content: ?[]const u8 = if (data_file_buf) |b| b else null;
 
-    var req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
-        if (err == error.MissingPath) {
-            printApiHelp();
+    var req_cfg: ?RequestConfig = null;
+    defer if (req_cfg) |*cfg| cfg.deinit();
+
+    if (std.mem.eql(u8, subcmd, "api")) {
+        req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
+            if (err == error.MissingPath) {
+                printApiHelp();
+                std.process.exit(255);
+            }
+            std.debug.print("Request build error: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, subcmd, "archive")) {
+        if (args.kv_params.items.len < 2) {
+            printArchiveHelp();
             std.process.exit(255);
         }
-        std.debug.print("Request build error: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-    defer req_cfg.deinit();
+    }
 
     // Resolve credentials
     // Extract hostname from the resolved host URL for config file lookup.
-    const uri = try std.Uri.parse(req_cfg.host);
-    const hostname = if (uri.host) |h| h.percent_encoded else "localhost";
+    const host_for_uri = if (req_cfg) |cfg| cfg.host else args.host orelse "localhost";
+    const hostname = blk: {
+        const uri = std.Uri.parse(host_for_uri) catch {
+            break :blk host_for_uri;
+        };
+        break :blk if (uri.host) |h| h.percent_encoded else "localhost";
+    };
+
     const conf_creds = try config.findCredentials(gpa, hostname);
     defer if (conf_creds) |c| c.deinit();
 
@@ -1712,31 +1751,75 @@ pub fn main() !void {
         break :blk std.fmt.parseFloat(f64, env_s) catch 1.0;
     };
 
-    // Execute the request via the library's public API entry point.
-    var client = std.http.Client{ .allocator = gpa };
-    defer client.deinit();
+    if (std.mem.eql(u8, subcmd, "api")) {
+        // Execute the request via the library's public API entry point.
+        var client = std.http.Client{ .allocator = gpa };
+        defer client.deinit();
 
-    const resp = zoqa.openQAReq(req_cfg.host, req_cfg.path, .{
-        .allocator = gpa,
-        .method = req_cfg.method,
-        .headers = req_cfg.headers,
-        .params = req_cfg.params_encoded,
-        .body = req_cfg.body,
-        .credentials = creds,
-        .retries = retries,
-        .quiet = args.quiet,
-        .connect_timeout_s = connect_timeout_s,
-        .retry_sleep_s = retry_sleep_s,
-        .retry_factor = retry_factor,
-    }, &client) catch |err| {
-        if (!args.quiet) std.debug.print("Fatal: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-    defer resp.deinit();
+        const cfg = req_cfg.?;
+        const resp = zoqa.openQAReq(cfg.host, cfg.path, .{
+            .allocator = gpa,
+            .method = cfg.method,
+            .headers = cfg.headers,
+            .params = cfg.params_encoded,
+            .body = cfg.body,
+            .credentials = creds,
+            .retries = retries,
+            .quiet = args.quiet,
+            .connect_timeout_s = connect_timeout_s,
+            .retry_sleep_s = retry_sleep_s,
+            .retry_factor = retry_factor,
+        }, &client) catch |err| {
+            if (!args.quiet) std.debug.print("Fatal: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer resp.deinit();
 
-    printResponse(gpa, resp, args.verbose, args.quiet, args.links, args.pretty);
+        printResponse(gpa, resp, args.verbose, args.quiet, args.links, args.pretty);
 
-    std.process.exit(resp.exitCode());
+        std.process.exit(resp.exitCode());
+    } else if (std.mem.eql(u8, subcmd, "archive")) {
+        if (args.kv_params.items.len < 2) {
+            printArchiveHelp();
+            std.process.exit(255);
+        }
+        const job_id = std.fmt.parseInt(u64, args.kv_params.items[0], 10) catch {
+            std.debug.print("Invalid JOB_ID: {s}\n", .{args.kv_params.items[0]});
+            std.process.exit(1);
+        };
+        const output_path = args.kv_params.items[1];
+
+        const archive_opts = zoqa.ArchiveOptions{
+            .with_thumbnails = args.with_thumbnails,
+            .asset_size_limit = args.asset_size_limit orelse 209_715_200,
+            .credentials = creds,
+            .quiet = args.quiet,
+            .retries = retries,
+            .retry_sleep_s = retry_sleep_s,
+            .retry_factor = retry_factor,
+        };
+
+        const host_res = config.resolveHost(
+            gpa,
+            args.osd,
+            args.o3,
+            args.odn,
+            args.host,
+        ) catch |err| {
+            std.debug.print("Host resolution error: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer if (host_res.allocated) gpa.free(host_res.url);
+
+        var client = std.http.Client{ .allocator = gpa };
+        defer client.deinit();
+
+        zoqa.runArchive(gpa, &client, host_res.url, job_id, output_path, archive_opts) catch |err| {
+            std.debug.print("archive: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        std.process.exit(0);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1773,11 +1856,22 @@ const help_api_options =
     \\
 ;
 
+const help_archive_options =
+    \\Archive Options:
+    \\  -t, --with-thumbnails   Download thumbnails for screenshots
+    \\  -l, --asset-size-limit  Skip downloading assets larger than this limit (default 200MiB)
+    \\
+;
+
 fn printHelp() void {
     std.debug.print(
-        "Usage: zoqa [GLOBAL OPTIONS] api [API OPTIONS] PATH [KEY=VALUE ...]\n\n" ++
+        "Usage: zoqa [GLOBAL OPTIONS] SUBCOMMAND [OPTIONS] ...\n\n" ++
+            "Subcommands:\n" ++
+            "  api       Make an openQA API request\n" ++
+            "  archive   Download assets and test results from a job\n\n" ++
             help_global_options ++
-            help_api_options,
+            help_api_options ++
+            help_archive_options,
         .{},
     );
 }
@@ -1789,6 +1883,17 @@ fn printApiHelp() void {
         "Usage: zoqa api [OPTIONS] PATH [KEY=VALUE ...]\n\n" ++
             "Make an openQA API request. PATH is the API endpoint (e.g. \"jobs\") or an absolute URL.\n\n" ++
             help_api_options ++
+            help_global_options,
+        .{},
+    );
+}
+
+/// Print the `archive` subcommand usage block to stderr.
+fn printArchiveHelp() void {
+    std.debug.print(
+        "Usage: zoqa archive [OPTIONS] JOB_ID OUTPUT_PATH\n\n" ++
+            "Download assets and test results from a job into a local directory.\n\n" ++
+            help_archive_options ++
             help_global_options,
         .{},
     );

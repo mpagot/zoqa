@@ -480,7 +480,12 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
 /// Returns a `StreamResult` with the HTTP status and content length.
 /// The caller is responsible for checking `result.status` and handling
 /// non-2xx responses.
-pub fn executeStream(req: Request, client: anytype, writer: *std.Io.Writer) !StreamResult {
+pub fn executeStream(
+    req: Request,
+    client: anytype,
+    writer: *std.Io.Writer,
+    content_length_out: ?*?u64,
+) !StreamResult {
     _ = req.connect_timeout_s;
 
     const uri = try std.Uri.parse(req.url);
@@ -500,6 +505,7 @@ pub fn executeStream(req: Request, client: anytype, writer: *std.Io.Writer) !Str
     var response = try http_req.receiveHead(&redirect_buf);
 
     const content_length = response.head.content_length;
+    if (content_length_out) |out| out.* = content_length;
 
     if (req.size_limit) |limit| {
         if (content_length) |cl| {
@@ -558,6 +564,7 @@ test "execute: MockClient returns APIResponse" {
         const MockHead = struct {
             status: std.http.Status = .ok,
             content_type: ?[]const u8 = "application/json",
+            content_length: ?u64 = null,
 
             const HeaderIterator = struct {
                 done: bool = false,
@@ -638,6 +645,7 @@ test "execute: hop-by-hop headers are excluded from response_headers" {
         const MockHead = struct {
             status: std.http.Status = .ok,
             content_type: ?[]const u8 = "application/json",
+            content_length: ?u64 = null,
 
             // Emits: Content-Type, Connection, Keep-Alive, Transfer-Encoding,
             // Server, Upgrade.  The hop-by-hop ones (Connection, Keep-Alive,

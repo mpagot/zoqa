@@ -54,8 +54,13 @@ single static binaries, and need zero runtime dependencies.
 | **Cross-compilation** | N/A | 6 targets from a single build host |
 | **Platforms shipped** | Wherever Perl runs | Linux, macOS, Windows (x86_64 + aarch64) |
 | **Container-friendly** | Needs Perl + deps installed | Copy one file, done |
-| **Wall-time per request** | ~0.6–2.2 s | ~0.020–0.085 s (30–50× faster) |
-| **Peak memory (RSS)** | ~57 MB | ~3.7 MB |
+| **Wall-time per request (`api`)** | ~0.6–2.2 s | ~0.020–0.085 s (30–50× faster) |
+| **Peak memory (RSS) (`api`)** | ~57 MB | ~3.7 MB |
+| **Full `archive` download (2.6GB)** | ~15m 28s | ~10m 20s (50% faster) |
+| **Peak memory (RSS) (`archive`)** | ~69 MB | ~14 MB (4.8× less memory) |
+| **CPU user time (`archive`)** | ~111.8 s | ~7.8 s (14× less CPU time) |
+
+*zoqa streams large `archive` downloads directly to disk using ~192 KB of stack buffers regardless of file size. `openqa-cli` buffers each response through a `/tmp` Mojolicious temporary file before moving it — requiring double the disk space and 5× the memory.*
 
 
 ## Quick start
