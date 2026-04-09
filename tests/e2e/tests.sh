@@ -177,8 +177,10 @@ run_diff_test() {
 #
 _e2e_suite_enabled() {
 	local name=$1
-	# Empty → all suites enabled
-	[[ -z "$E2E_SUITES" ]] && return 0
+	# 'all' (default) → all suites enabled
+	[[ "$E2E_SUITES" == "all" ]] && return 0
+	# Empty string → skip all tests
+	[[ -z "$E2E_SUITES" ]] && return 1
 	# Check if name appears as a comma-separated token
 	local suite
 	IFS=',' read -ra _suites <<<"$E2E_SUITES"

@@ -6,7 +6,7 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help build release test e2e e2e-keep e2e-lint fuzz-build
+.PHONY: help build release test e2e e2e-keep e2e-dryrun e2e-lint fuzz-build
 
 # Default target
 help:
@@ -18,7 +18,10 @@ help:
 	@echo "  test        Run all Zig unit tests."
 	@echo "  e2e         Build, then run the full E2E suite (starts + tears down container)."
 	@echo "              Optional: SUITES=core,auth  — run only the listed suite(s)."
+	@echo "              Optional: SUITES=           — run no tests (deployment check)."
 	@echo "  e2e-keep    Build, then run E2E keeping the container alive (--keep-container)."
+	@echo "              Optional: SUITES=           — deploy only, skip all tests."
+	@echo "  e2e-dryrun  Build, then simulate E2E run without starting container (--dryrun)."
 	@echo "  e2e-lint        Run bash -n syntax check and shellcheck on all E2E scripts."
 	@echo "  fuzz-build  Build the fuzzy app."
 
@@ -46,11 +49,19 @@ test:
 # -----------------------------------------------------------------------------
 # Near End-to-End Tests
 # -----------------------------------------------------------------------------
+
+# Internal helper: if SUITES is defined (even if empty), pass it to --suites.
+# This allows 'make e2e SUITES=' to run zero tests.
+E2E_SUITES_ARG := $(if $(filter-out undefined,$(origin SUITES)),--suites "$(SUITES)",)
+
 e2e: build
-	bash tests/e2e/run.sh $(if $(SUITES),--suites $(SUITES),)
+	bash tests/e2e/run.sh $(E2E_SUITES_ARG)
 
 e2e-keep: build
-	bash tests/e2e/run.sh --keep-container $(if $(SUITES),--suites $(SUITES),)
+	bash tests/e2e/run.sh --keep-container $(E2E_SUITES_ARG)
+
+e2e-dryrun: build
+	bash tests/e2e/run.sh --dryrun $(E2E_SUITES_ARG)
 
 # -----------------------------------------------------------------------------
 # Linting — bash syntax check + shellcheck on all E2E scripts

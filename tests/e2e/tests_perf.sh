@@ -135,7 +135,6 @@ _perf_peak_rss_kb() {
 	local cmd=$2
 
 	if [[ "${DRY_RUN:-false}" == "true" ]]; then
-		echo "[DRY-RUN] _perf_peak_rss_kb: $env_vars $cmd"
 		echo "0"
 		return
 	fi
@@ -248,6 +247,96 @@ perf_timing() {
 }
 
 # -----------------------------------------------------------------------------
+# perf_timing_archive LABEL ENV_VARS API_ARGS [RUNS]
+#
+# Like perf_timing, but for the archive subcommand. Handles per-run output
+# directory creation and cleanup to ensure a clean slate for each iteration.
+# -----------------------------------------------------------------------------
+perf_timing_archive() {
+	local label=$1
+	local env_vars=$2
+	local api_args=$3
+	local runs=${4:-3}
+
+	_perf_t_seq=$((_perf_t_seq + 1))
+	local tid="PERF-T${_perf_t_seq}"
+	echo "  $tid  $label — archive timing (${runs} runs)..."
+
+	local t p_times=() z_times=()
+
+	# Run Perl
+	for i in $(seq 1 "$runs"); do
+		container_exec rm -rf /tmp/perf_arc_perl_"$i"
+		t=$(_perf_wall_time_s "$env_vars" "$PERL_EXE archive --host http://localhost $api_args /tmp/perf_arc_perl_$i")
+		p_times+=("$t")
+	done
+
+	# Run Zig
+	for i in $(seq 1 "$runs"); do
+		container_exec rm -rf /tmp/perf_arc_zig_"$i"
+		t=$(_perf_wall_time_s "$env_vars" "$ZIG_EXE archive --host http://localhost $api_args /tmp/perf_arc_zig_$i")
+		z_times+=("$t")
+	done
+
+	# Use awk inside the container to aggregate
+	local p_agg z_agg p_avg z_avg
+	p_agg=$(container_exec bash -c "echo \"${p_times[*]}\" | awk '{min=\$1; max=\$1; sum=0; for(i=1;i<=NF;i++) {if(\$i<min) min=\$i; if(\$i>max) max=\$i; sum+=\$i} printf \"min=%.3f  avg=%.3f  max=%.3f\", min, sum/NF, max}'")
+	z_agg=$(container_exec bash -c "echo \"${z_times[*]}\" | awk '{min=\$1; max=\$1; sum=0; for(i=1;i<=NF;i++) {if(\$i<min) min=\$i; if(\$i>max) max=\$i; sum+=\$i} printf \"min=%.3f  avg=%.3f  max=%.3f\", min, sum/NF, max}'")
+
+	p_avg=$(echo "$p_agg" | awk '{print $2}' | cut -d= -f2)
+	z_avg=$(echo "$z_agg" | awk '{print $2}' | cut -d= -f2)
+
+	local cmp_msg=""
+	if [[ -n "$p_avg" && -n "$z_avg" && "$p_avg" != "0.000" && "$z_avg" != "0.000" ]]; then
+		cmp_msg=$(container_exec bash -c "awk 'BEGIN { p=$p_avg; z=$z_avg; if (z < p) { printf \"INFO: Zig is %.1f%% faster (%.1fx speedup)\", (p-z)/p*100, p/z; } else { printf \"INFO: Zig is %.1f%% slower (%.1fx slowdown)\", (z-p)/p*100, z/p; } }'")
+	fi
+
+	_perf_timing_report+=("$tid  $label")
+	_perf_timing_report+=("  PERL ${p_times[*]}  ($p_agg)")
+	_perf_timing_report+=("  ZIG  ${z_times[*]}  ($z_agg)")
+	[[ -n "$cmp_msg" ]] && _perf_timing_report+=("  $cmp_msg")
+	_perf_timing_report+=("")
+}
+
+# -----------------------------------------------------------------------------
+# perf_rss_archive LABEL ENV_VARS API_ARGS
+#
+# Like perf_rss, but for the archive subcommand.
+# -----------------------------------------------------------------------------
+perf_rss_archive() {
+	local label=$1
+	local env_vars=$2
+	local api_args=$3
+
+	_perf_r_seq=$((_perf_r_seq + 1))
+	local tid="PERF-R${_perf_r_seq}"
+	echo "  $tid  $label — archive RSS..."
+
+	local perl_tag zig_tag
+	perl_tag=$(echo "$PERL_EXE" | cut -d' ' -f1 | tr -cs 'a-zA-Z0-9_-' '_')
+	zig_tag=$(echo "$ZIG_EXE" | cut -d' ' -f1 | tr -cs 'a-zA-Z0-9_-' '_')
+
+	container_exec rm -rf /tmp/perf_arc_rss_perl /tmp/perf_arc_rss_zig
+	local perl_rss zig_rss
+	perl_rss=$(_perf_peak_rss_kb "$env_vars" "$PERL_EXE archive --host http://localhost $api_args /tmp/perf_arc_rss_perl")
+	zig_rss=$(_perf_peak_rss_kb "$env_vars" "$ZIG_EXE archive --host http://localhost $api_args /tmp/perf_arc_rss_zig")
+
+	if [[ "$DRY_RUN" == "false" && ( -z "$perl_rss" || "$perl_rss" -eq 0 ) ]]; then die "Perl RSS failed"; fi
+	if [[ "$DRY_RUN" == "false" && ( -z "$zig_rss" || "$zig_rss" -eq 0 ) ]]; then die "Zig RSS failed"; fi
+
+	_perf_rss_report+=("$tid  $label")
+	_perf_rss_report+=("  PERL peak RSS: ${perl_rss} kB   ZIG peak RSS: ${zig_rss} kB")
+	if [[ "$DRY_RUN" == "true" ]]; then
+		_perf_rss_report+=("  INFO: [DRY-RUN] skipping memory comparison")
+	elif [[ "$zig_rss" -lt "$perl_rss" ]]; then
+		_perf_rss_report+=("  INFO: Zig uses $(((perl_rss-zig_rss)*100/perl_rss))% less memory")
+	else
+		_perf_rss_report+=("  INFO: Zig uses $(((zig_rss-perl_rss)*100/perl_rss))% more memory")
+	fi
+	_perf_rss_report+=("")
+}
+
+# -----------------------------------------------------------------------------
 # perf_rss LABEL ENV_VARS API_ARGS
 #
 # Measures peak RSS for each implementation using /usr/bin/time -v.
@@ -281,17 +370,19 @@ perf_rss() {
 	zig_rss=$(_perf_peak_rss_kb "$env_vars" "$ZIG_EXE api --host http://localhost $api_args")
 
 	# Guard: if Perl RSS is 0 we cannot make a meaningful comparison.
-	if [[ -z "$perl_rss" || "$perl_rss" -eq 0 ]]; then
+	if [[ "$DRY_RUN" == "false" && ( -z "$perl_rss" || "$perl_rss" -eq 0 ) ]]; then
 		die "Could not measure Perl peak RSS for $label (/usr/bin/time -v may have failed)"
 	fi
 
 	# Guard: if Zig RSS is 0 measurement failed.
-	if [[ -z "$zig_rss" || "$zig_rss" -eq 0 ]]; then
+	if [[ "$DRY_RUN" == "false" && ( -z "$zig_rss" || "$zig_rss" -eq 0 ) ]]; then
 		die "Could not measure Zig peak RSS for $label (/usr/bin/time -v may have failed)"
 	fi
 
 	local pct msg
-	if [[ "$zig_rss" -lt "$perl_rss" ]]; then
+	if [[ "$DRY_RUN" == "true" ]]; then
+		msg="INFO: [DRY-RUN] skipping memory comparison"
+	elif [[ "$zig_rss" -lt "$perl_rss" ]]; then
 		pct=$(((perl_rss - zig_rss) * 100 / perl_rss))
 		msg="INFO: Zig uses less memory: ${zig_rss} kB < ${perl_rss} kB (${pct}% less)"
 	else
@@ -405,6 +496,24 @@ perf_timing "--pretty jobs/overview" "" "--pretty jobs/overview" 3
 # Zig allocates a temporary buffer to hold and re-format the JSON body; RSS
 # grows slightly relative to the plain baseline but remains far below Perl.
 perf_rss "--pretty jobs/overview" "" "--pretty jobs/overview"
+
+# --- Scenario: archive overhead (dummy job) ----------------------------------
+#
+# Fixed overhead: parsing, initial API call, dir creation, cleanup.
+perf_timing_archive "archive baseline (dummy job)" "" "$JOB_ID" 3
+perf_rss_archive "archive baseline (dummy job)" "" "$JOB_ID"
+
+# --- Scenario: archive skip overhead -----------------------------------------
+#
+# Isolates overhead by skipping assets.
+perf_timing_archive "archive --asset-size-limit 1 (skip assets)" "" "--asset-size-limit 1 $JOB_ID" 3
+perf_rss_archive "archive --asset-size-limit 1 (skip assets)" "" "--asset-size-limit 1 $JOB_ID"
+
+# --- Scenario: archive streaming (rich job) ----------------------------------
+#
+# Real I/O throughput and memory pressure.
+perf_timing_archive "archive rich job (~21MB image + artifacts)" "" "$RICH_JOB_ID" 3
+perf_rss_archive "archive rich job (~21MB image + artifacts)" "" "$RICH_JOB_ID"
 
 # =============================================================================
 # Summary Report

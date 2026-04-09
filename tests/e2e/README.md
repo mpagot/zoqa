@@ -130,12 +130,20 @@ bash tests/e2e/run.sh
 # Run only the core suite
 bash tests/e2e/run.sh --suites core
 
-# Run two suites
-bash tests/e2e/run.sh --suites core,auth
-
 # Via make
 make e2e SUITES=core
 make e2e SUITES=core,auth
+
+# Deployment check (starts container, seeds data, runs NO tests, then stops)
+make e2e SUITES=
+
+# Deployment for manual inspection (starts container, seeds, keeps it alive)
+# All tests are skipped; web UI is reachable at http://localhost:8080 (HTTP)
+# and https://localhost:8443 (HTTPS).
+make e2e-keep SUITES=
+
+# Simulation (runs the full logic without starting Podman)
+make e2e-dryrun
 ```
 
 ---

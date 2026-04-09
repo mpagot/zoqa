@@ -469,7 +469,300 @@ run_test "ZIG : archive default size limit accepts small files (exit 0)" \
 	"$ZIG_EXE archive --host http://localhost $JOB_ID /tmp/arc_zig_quiet" 0
 
 # =============================================================================
-# Section 13: Cross-Subcommand Flag Rejection
+# Section 13: Rich Job — Basic Operation
+# =============================================================================
+
+# Test ARC-26: Archive rich job succeeds (exit 0).
+run_test "PERL: archive rich job (exit 0)" \
+	"$PERL_EXE archive --host http://localhost $RICH_JOB_ID /tmp/arc_perl_rich" 0
+run_test "ZIG : archive rich job (exit 0)" \
+	"$ZIG_EXE archive --host http://localhost $RICH_JOB_ID /tmp/arc_zig_rich" 0
+
+# Test ARC-27: Output directory exists.
+echo "--- Test: PERL: rich archive output directory exists ---"
+if container_exec test -d /tmp/arc_perl_rich; then echo "PASS"; else
+	echo "FAIL"
+	failed_tests=$((failed_tests + 1))
+fi
+echo "--- Test: ZIG : rich archive output directory exists ---"
+if container_exec test -d /tmp/arc_zig_rich; then echo "PASS"; else
+	echo "FAIL"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# =============================================================================
+# Section 14: Rich Job — Test Results
+# =============================================================================
+
+# Test ARC-28: details-*.json files exist (Zig).
+echo "--- Test: ZIG : details-*.json files exist ---"
+if container_exec bash -c "ls /tmp/arc_zig_rich/testresults/details-*.json >/dev/null 2>&1"; then
+	echo "PASS"
+else
+	echo "FAIL: No details-*.json found in /tmp/arc_zig_rich/testresults/"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-29: details-*.json parity (Perl vs Zig).
+echo "--- Test: DIFF details-*.json listing parity ---"
+container_exec bash -c "cd /tmp/arc_perl_rich/testresults && ls details-*.json | sort" >"$LOG_DIR/arc_perl_details.log"
+container_exec bash -c "cd /tmp/arc_zig_rich/testresults && ls details-*.json | sort" >"$LOG_DIR/arc_zig_details.log"
+if diff -u "$LOG_DIR/arc_perl_details.log" "$LOG_DIR/arc_zig_details.log" >"$LOG_DIR/arc_details_diff.log" 2>&1; then
+	echo "PASS"
+else
+	echo "FAIL: details-*.json listings differ"
+	cat "$LOG_DIR/arc_details_diff.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-30: details-*.json content parity.
+# We pick the first details file and compare it.
+echo "--- Test: DIFF details-*.json content parity ---"
+FIRST_DETAIL=$(head -n 1 "$LOG_DIR/arc_perl_details.log")
+container_exec cat "/tmp/arc_perl_rich/testresults/$FIRST_DETAIL" >"$LOG_DIR/arc_perl_detail_content.json"
+container_exec cat "/tmp/arc_zig_rich/testresults/$FIRST_DETAIL" >"$LOG_DIR/arc_zig_detail_content.json"
+if diff -u "$LOG_DIR/arc_perl_detail_content.json" "$LOG_DIR/arc_zig_detail_content.json" >"$LOG_DIR/arc_detail_content_diff.log" 2>&1; then
+	echo "PASS"
+else
+	echo "FAIL: $FIRST_DETAIL content differs"
+	cat "$LOG_DIR/arc_detail_content_diff.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# =============================================================================
+# Section 15: Rich Job — Screenshots
+# =============================================================================
+
+# Test ARC-31: Screenshot .png files exist (Zig).
+echo "--- Test: ZIG : screenshot .png files exist ---"
+if container_exec bash -c "ls /tmp/arc_zig_rich/testresults/*.png >/dev/null 2>&1"; then
+	echo "PASS"
+else
+	echo "FAIL: No .png found in /tmp/arc_zig_rich/testresults/"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-32: Screenshot file listing parity.
+echo "--- Test: DIFF screenshot listing parity ---"
+container_exec bash -c "cd /tmp/arc_perl_rich/testresults && ls *.png | sort" >"$LOG_DIR/arc_perl_pngs.log"
+container_exec bash -c "cd /tmp/arc_zig_rich/testresults && ls *.png | sort" >"$LOG_DIR/arc_zig_pngs.log"
+if diff -u "$LOG_DIR/arc_perl_pngs.log" "$LOG_DIR/arc_zig_pngs.log" >"$LOG_DIR/arc_pngs_diff.log" 2>&1; then
+	echo "PASS"
+else
+	echo "FAIL: .png listings differ"
+	cat "$LOG_DIR/arc_pngs_diff.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-33: Screenshot file size parity.
+echo "--- Test: DIFF screenshot file size parity ---"
+if [[ "$DRY_RUN" == "true" ]]; then
+	echo "PASS (DRY-RUN)"
+else
+	FIRST_PNG=$(head -n 1 "$LOG_DIR/arc_perl_pngs.log")
+	P_SIZE=$(container_exec stat -c%s "/tmp/arc_perl_rich/testresults/$FIRST_PNG")
+	Z_SIZE=$(container_exec stat -c%s "/tmp/arc_zig_rich/testresults/$FIRST_PNG")
+	if [[ "$P_SIZE" -eq "$Z_SIZE" ]]; then
+		echo "PASS ($P_SIZE bytes)"
+	else
+		echo "FAIL: $FIRST_PNG size differs (Perl: $P_SIZE, Zig: $Z_SIZE)"
+		failed_tests=$((failed_tests + 1))
+	fi
+fi
+
+# =============================================================================
+# Section 16: Rich Job — Thumbnails
+# =============================================================================
+
+# Test ARC-34: --with-thumbnails downloads thumbnail files.
+run_test "PERL: archive --with-thumbnails rich job (exit 0)" \
+	"$PERL_EXE archive --host http://localhost --with-thumbnails $RICH_JOB_ID /tmp/arc_perl_rich_thumb" 0
+run_test "ZIG : archive --with-thumbnails rich job (exit 0)" \
+	"$ZIG_EXE archive --host http://localhost --with-thumbnails $RICH_JOB_ID /tmp/arc_zig_rich_thumb" 0
+
+echo "--- Test: ZIG : thumbnail files exist ---"
+if container_exec bash -c "ls /tmp/arc_zig_rich_thumb/testresults/thumbnails/*.png >/dev/null 2>&1"; then
+	echo "PASS"
+else
+	echo "FAIL: No thumbnails found in /tmp/arc_zig_rich_thumb/testresults/thumbnails/"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-35: Thumbnail file listing parity.
+echo "--- Test: DIFF thumbnail listing parity ---"
+container_exec bash -c "cd /tmp/arc_perl_rich_thumb/testresults/thumbnails && ls *.png | sort" >"$LOG_DIR/arc_perl_thumbs.log"
+container_exec bash -c "cd /tmp/arc_zig_rich_thumb/testresults/thumbnails && ls *.png | sort" >"$LOG_DIR/arc_zig_thumbs.log"
+if diff -u "$LOG_DIR/arc_perl_thumbs.log" "$LOG_DIR/arc_zig_thumbs.log" >"$LOG_DIR/arc_thumbs_diff.log" 2>&1; then
+	echo "PASS"
+else
+	echo "FAIL: thumbnail listings differ"
+	cat "$LOG_DIR/arc_thumbs_diff.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# =============================================================================
+# Section 17: Rich Job — Logs
+# =============================================================================
+
+# Test ARC-36: autoinst-log.txt exists (Zig).
+echo "--- Test: ZIG : autoinst-log.txt exists ---"
+if container_exec test -f /tmp/arc_zig_rich/testresults/autoinst-log.txt; then
+	echo "PASS"
+else
+	echo "FAIL: autoinst-log.txt missing"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-37: Log file listing parity.
+echo "--- Test: DIFF log listing parity ---"
+container_exec bash -c "cd /tmp/arc_perl_rich/testresults && ls *.txt | sort" >"$LOG_DIR/arc_perl_logs.log"
+container_exec bash -c "cd /tmp/arc_zig_rich/testresults && ls *.txt | sort" >"$LOG_DIR/arc_zig_logs.log"
+if diff -u "$LOG_DIR/arc_perl_logs.log" "$LOG_DIR/arc_zig_logs.log" >"$LOG_DIR/arc_logs_diff.log" 2>&1; then
+	echo "PASS"
+else
+	echo "FAIL: log listings differ"
+	cat "$LOG_DIR/arc_logs_diff.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-38: Log file content parity.
+echo "--- Test: DIFF autoinst-log.txt content parity ---"
+container_exec cat /tmp/arc_perl_rich/testresults/autoinst-log.txt >"$LOG_DIR/arc_perl_autoinst.log"
+container_exec cat /tmp/arc_zig_rich/testresults/autoinst-log.txt >"$LOG_DIR/arc_zig_autoinst.log"
+if diff -u "$LOG_DIR/arc_perl_autoinst.log" "$LOG_DIR/arc_zig_autoinst.log" >"$LOG_DIR/arc_autoinst_diff.log" 2>&1; then
+	echo "PASS"
+else
+	echo "FAIL: autoinst-log.txt content differs"
+	cat "$LOG_DIR/arc_autoinst_diff.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# =============================================================================
+# Section 18: Rich Job — Assets
+# =============================================================================
+
+# Test ARC-39: HDD asset directory exists.
+echo "--- Test: ZIG : hdd/ directory exists ---"
+if container_exec test -d /tmp/arc_zig_rich/hdd; then echo "PASS"; else
+	echo "FAIL"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-40: Asset file size is non-zero (CirrOS image).
+echo "--- Test: ZIG : CirrOS image size is non-zero ---"
+if [[ "$DRY_RUN" == "true" ]]; then
+	echo "PASS (DRY-RUN)"
+else
+	IMG_SIZE=$(container_exec stat -c%s "/tmp/arc_zig_rich/hdd/cirros-0.6.3-x86_64-disk.qcow2")
+	if [[ "$IMG_SIZE" -gt 20000000 ]]; then
+		echo "PASS ($IMG_SIZE bytes)"
+	else
+		echo "FAIL: CirrOS image size too small ($IMG_SIZE bytes)"
+		failed_tests=$((failed_tests + 1))
+	fi
+fi
+
+# Test ARC-41: Asset file size parity.
+echo "--- Test: DIFF asset file size parity ---"
+if [[ "$DRY_RUN" == "true" ]]; then
+	echo "PASS (DRY-RUN)"
+else
+	P_IMG_SIZE=$(container_exec stat -c%s "/tmp/arc_perl_rich/hdd/cirros-0.6.3-x86_64-disk.qcow2")
+	if [[ "$P_IMG_SIZE" -eq "$IMG_SIZE" ]]; then
+		echo "PASS"
+	else
+		echo "FAIL: Asset size differs (Perl: $P_IMG_SIZE, Zig: $IMG_SIZE)"
+		failed_tests=$((failed_tests + 1))
+	fi
+fi
+
+# =============================================================================
+# Section 19: Rich Job — Size Limit Enforcement
+# =============================================================================
+
+# Test ARC-42: --asset-size-limit 1 skips CirrOS (21 MB).
+echo "--- Test: ZIG : --asset-size-limit 1 skips CirrOS ---"
+container_exec rm -rf /tmp/arc_zig_rich_limit1
+set +e
+container_exec bash -c "$ZIG_EXE archive --host http://localhost --asset-size-limit 1 $RICH_JOB_ID /tmp/arc_zig_rich_limit1" >"$LOG_DIR/arc_zig_rich_limit1.log" 2>&1
+set -e
+if grep -q "exceeds maximum size limit" "$LOG_DIR/arc_zig_rich_limit1.log"; then
+	echo "PASS"
+else
+	echo "FAIL: Zig did not print skip message for CirrOS"
+	cat "$LOG_DIR/arc_zig_rich_limit1.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-43: Size-limit skip parity (Perl vs Zig).
+echo "--- Test: PERL: --asset-size-limit 1 skips CirrOS ---"
+container_exec rm -rf /tmp/arc_perl_rich_limit1
+set +e
+container_exec bash -c "$PERL_EXE archive --host http://localhost --asset-size-limit 1 $RICH_JOB_ID /tmp/arc_perl_rich_limit1" >"$LOG_DIR/arc_perl_rich_limit1.log" 2>&1
+set -e
+if grep -q "exceeds maximum size limit" "$LOG_DIR/arc_perl_rich_limit1.log"; then
+	echo "PASS"
+else
+	echo "FAIL: Perl did not print skip message for CirrOS"
+	cat "$LOG_DIR/arc_perl_rich_limit1.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# =============================================================================
+# Section 20: Rich Job — Progress Output
+# =============================================================================
+
+# Test ARC-44: Progress percentage appears on stdout.
+echo "--- Test: ZIG : progress percentage on stdout ---"
+if grep -q "Downloading.*%" "$LOG_DIR/arc_zig_rich_limit1.log"; then
+	echo "PASS"
+else
+	echo "FAIL: Zig stdout missing progress percentage"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-45: "Saved details for" message appears.
+echo "--- Test: ZIG : 'Saved details for' message on stdout ---"
+set +e
+container_exec bash -c "$ZIG_EXE archive --host http://localhost $RICH_JOB_ID /tmp/arc_zig_rich_progress" >"$LOG_DIR/arc_zig_rich_details_msg.log" 2>&1
+set -e
+if grep -q "Saved details for" "$LOG_DIR/arc_zig_rich_details_msg.log"; then
+	echo "PASS"
+else
+	echo "FAIL: Zig stdout missing 'Saved details for' message"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# =============================================================================
+# Section 21: Rich Job — Full Parity
+# =============================================================================
+
+# Test ARC-46: Complete directory structure parity.
+echo "--- Test: DIFF rich archive full directory structure parity ---"
+container_exec bash -c "cd /tmp/arc_perl_rich && find . -type d | sort" >"$LOG_DIR/arc_perl_rich_dirs.log"
+container_exec bash -c "cd /tmp/arc_zig_rich && find . -type d | sort" >"$LOG_DIR/arc_zig_rich_dirs.log"
+if diff -u "$LOG_DIR/arc_perl_rich_dirs.log" "$LOG_DIR/arc_zig_rich_dirs.log" >"$LOG_DIR/arc_rich_dirs_diff.log" 2>&1; then
+	echo "PASS"
+else
+	echo "FAIL: Directory structures differ"
+	cat "$LOG_DIR/arc_rich_dirs_diff.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-47: Complete file listing parity.
+echo "--- Test: DIFF rich archive full file listing parity ---"
+container_exec bash -c "cd /tmp/arc_perl_rich && find . -type f | sort" >"$LOG_DIR/arc_perl_rich_files.log"
+container_exec bash -c "cd /tmp/arc_zig_rich && find . -type f | sort" >"$LOG_DIR/arc_zig_rich_files.log"
+if diff -u "$LOG_DIR/arc_perl_rich_files.log" "$LOG_DIR/arc_zig_rich_files.log" >"$LOG_DIR/arc_rich_files_diff.log" 2>&1; then
+	echo "PASS"
+else
+	echo "FAIL: File listings differ"
+	cat "$LOG_DIR/arc_rich_files_diff.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# =============================================================================
+# Section 50: Cross-Subcommand Flag Rejection
 #
 # API-specific flags (--form, --json, -X/--method, --data) have no meaning for
 # the archive subcommand.  Both Perl and Zig should reject them at parse time.
@@ -477,28 +770,28 @@ run_test "ZIG : archive default size limit accepts small files (exit 0)" \
 # implementations to verify behavioural parity.
 # =============================================================================
 
-# Test ARC-26: --form is api-specific (request body encoding).
+# Test ARC-50: --form is api-specific (request body encoding).
 # Archive downloads files; it never encodes form data.
 run_test "PERL: api flag --form rejected for archive (exit 255)" \
 	"$PERL_EXE archive --form --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
 run_test "ZIG : api flag --form rejected for archive (exit 255)" \
 	"$ZIG_EXE archive --form --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
 
-# Test ARC-27: --json is api-specific (request content-type).
+# Test ARC-51: --json is api-specific (request content-type).
 # Archive never sends JSON payloads.
 run_test "PERL: api flag --json rejected for archive (exit 255)" \
 	"$PERL_EXE archive --json --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
 run_test "ZIG : api flag --json rejected for archive (exit 255)" \
 	"$ZIG_EXE archive --json --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
 
-# Test ARC-28: -X (--method) is api-specific (HTTP method override).
+# Test ARC-52: -X (--method) is api-specific (HTTP method override).
 # Archive always uses GET; overriding the method is meaningless.
 run_test "PERL: api flag -X rejected for archive (exit 255)" \
 	"$PERL_EXE archive -X POST --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
 run_test "ZIG : api flag -X rejected for archive (exit 255)" \
 	"$ZIG_EXE archive -X POST --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
 
-# Test ARC-29: --data is api-specific (request body).
+# Test ARC-53: --data is api-specific (request body).
 # Archive never sends a request body.
 run_test "PERL: api flag --data rejected for archive (exit 255)" \
 	"$PERL_EXE archive --data body --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
