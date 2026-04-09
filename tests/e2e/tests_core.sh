@@ -173,3 +173,22 @@ run_test "PERL: explicit URL wrong port (exit 1)" \
 	"$PERL_EXE api --host http://localhost:8428 jobs/overview" 1
 run_test "ZIG : explicit URL wrong port (exit 1)" \
 	"$ZIG_EXE api --host http://localhost:8428 jobs/overview" 1
+
+# =============================================================================
+# Section: Cross-Subcommand Flag Rejection
+# =============================================================================
+
+# Test 42: Combined short flags (e.g. -vp) must not be treated as -v + -p.
+# Neither Perl (Getopt::Long with bundling off) nor Zig supports flag bundling.
+# Both implementations should reject -vp as an unknown flag.
+run_test "PERL: combined short flags -vp rejected (exit 255)" \
+	"$PERL_EXE api -vp --host http://localhost jobs/overview" 255
+run_test "ZIG : combined short flags -vp rejected (exit 255)" \
+	"$ZIG_EXE api -vp --host http://localhost jobs/overview" 255
+
+# Test 43: Archive-specific flag --with-thumbnails must be rejected for api.
+# Each subcommand only accepts its own flags; --with-thumbnails is archive-only.
+run_test "PERL: archive flag --with-thumbnails rejected for api (exit 255)" \
+	"$PERL_EXE api --with-thumbnails --host http://localhost jobs/overview" 255
+run_test "ZIG : archive flag --with-thumbnails rejected for api (exit 255)" \
+	"$ZIG_EXE api --with-thumbnails --host http://localhost jobs/overview" 255

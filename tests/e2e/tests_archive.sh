@@ -467,3 +467,40 @@ run_test "PERL: archive default size limit accepts small files (exit 0)" \
 	"$PERL_EXE archive --host http://localhost $JOB_ID /tmp/arc_perl_quiet" 0
 run_test "ZIG : archive default size limit accepts small files (exit 0)" \
 	"$ZIG_EXE archive --host http://localhost $JOB_ID /tmp/arc_zig_quiet" 0
+
+# =============================================================================
+# Section 13: Cross-Subcommand Flag Rejection
+#
+# API-specific flags (--form, --json, -X/--method, --data) have no meaning for
+# the archive subcommand.  Both Perl and Zig should reject them at parse time.
+# These tests assert exit 255 (argument validation failure) for both
+# implementations to verify behavioural parity.
+# =============================================================================
+
+# Test ARC-26: --form is api-specific (request body encoding).
+# Archive downloads files; it never encodes form data.
+run_test "PERL: api flag --form rejected for archive (exit 255)" \
+	"$PERL_EXE archive --form --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
+run_test "ZIG : api flag --form rejected for archive (exit 255)" \
+	"$ZIG_EXE archive --form --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
+
+# Test ARC-27: --json is api-specific (request content-type).
+# Archive never sends JSON payloads.
+run_test "PERL: api flag --json rejected for archive (exit 255)" \
+	"$PERL_EXE archive --json --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
+run_test "ZIG : api flag --json rejected for archive (exit 255)" \
+	"$ZIG_EXE archive --json --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
+
+# Test ARC-28: -X (--method) is api-specific (HTTP method override).
+# Archive always uses GET; overriding the method is meaningless.
+run_test "PERL: api flag -X rejected for archive (exit 255)" \
+	"$PERL_EXE archive -X POST --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
+run_test "ZIG : api flag -X rejected for archive (exit 255)" \
+	"$ZIG_EXE archive -X POST --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
+
+# Test ARC-29: --data is api-specific (request body).
+# Archive never sends a request body.
+run_test "PERL: api flag --data rejected for archive (exit 255)" \
+	"$PERL_EXE archive --data body --host http://localhost $JOB_ID /tmp/e2e_xflag" 255
+run_test "ZIG : api flag --data rejected for archive (exit 255)" \
+	"$ZIG_EXE archive --data body --host http://localhost $JOB_ID /tmp/e2e_xflag" 255

@@ -519,6 +519,164 @@ test "parseArgs: short flags and aliases" {
 }
 
 // ---------------------------------------------------------------------------
+// Cross-subcommand flag rejection: api-specific flags must be rejected
+// when used with the archive subcommand.  Currently these flags are parsed
+// unconditionally, so every sub-case below is expected to FAIL until the
+// api-specific gate is added (symmetric with the archive gate at line 319).
+// ---------------------------------------------------------------------------
+
+test "parseArgs: api-specific flags rejected for archive" {
+    const allocator = std.testing.allocator;
+
+    // -f (short for --form)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-f", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --form
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--form", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // -j (short for --json)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-j", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --json
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--json", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // -X (short for --method)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-X", "POST", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --method
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--method", "POST", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // -d (short for --data)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-d", "body", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --data
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--data", "body", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // -D (short for --data-file)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-D", "f.json", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --data-file
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--data-file", "f.json", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // -a (short for --header)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-a", "X:Y", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --header
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--header", "X:Y", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --param-file (no short form)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--param-file", "p.txt", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Missing -L alias: upstream openqa-cli.yaml defines "links|L" but our
+// parseArgs only handles --links, not -L.  This test will FAIL until the
+// alias is added.
+// ---------------------------------------------------------------------------
+
+test "parseArgs: -L alias for --links" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "-L", "jobs" };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    try std.testing.expect(parsed.links);
+}
+
+// ---------------------------------------------------------------------------
+// Regression guards: confirm that combined short flags and archive-specific
+// flags used with the api subcommand are correctly rejected.  These tests
+// should PASS with the current code — they lock in existing correct behaviour.
+// ---------------------------------------------------------------------------
+
+test "parseArgs: combined short flags -vp rejected" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "-vp", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: combined short flags -pv rejected" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "-pv", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: archive flag -t rejected for api" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "-t", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: archive flag --with-thumbnails rejected for api" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "--with-thumbnails", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: archive flag -l rejected for api" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "-l", "1024", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: archive flag --asset-size-limit rejected for api" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "--asset-size-limit", "1024", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+// ---------------------------------------------------------------------------
+// SPEC §13.1 compliance: --pretty and --links are "accepted but have no
+// observable effect" for the archive subcommand.  These tests should PASS
+// with the current code — they confirm the spec-mandated behaviour.
+// ---------------------------------------------------------------------------
+
+test "parseArgs: --pretty accepted for archive per SPEC 13.1" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "archive", "--pretty", "12345", "/tmp/out" };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    try std.testing.expect(parsed.pretty);
+}
+
+test "parseArgs: --links accepted for archive per SPEC 13.1" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "archive", "--links", "12345", "/tmp/out" };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    try std.testing.expect(parsed.links);
+}
+
+// ---------------------------------------------------------------------------
 // --form: JSON object → application/x-www-form-urlencoded
 // ---------------------------------------------------------------------------
 
