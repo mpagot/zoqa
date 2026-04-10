@@ -32,6 +32,10 @@ container_exec rm -rf /tmp/arc_perl /tmp/arc_zig \
 	/tmp/arc_perl_norepo /tmp/arc_zig_norepo \
 	/tmp/arc_perl_progress /tmp/arc_zig_progress \
 	/tmp/arc_perl_struct /tmp/arc_zig_struct \
+	/tmp/arc_perl_cliflag /tmp/arc_zig_cliflag \
+	/tmp/arc_perl_cliovenv /tmp/arc_zig_cliovenv \
+	/tmp/arc_perl_wrongenv /tmp/arc_zig_wrongenv \
+	/tmp/arc_perl_osd_test /tmp/arc_zig_osd_test \
 	2>/dev/null || true
 
 # =============================================================================
@@ -338,6 +342,75 @@ run_test "PERL: archive succeeds with wrong config credentials (GET is public, e
 run_test "ZIG : archive succeeds with wrong config credentials (GET is public, exit 0)" \
 	"bash -c \"OPENQA_CONFIG=/tmp/arc_wrongsecret \
 	$ZIG_EXE archive --host http://localhost $JOB_ID /tmp/arc_zig_wrongauth\"" 0
+
+# Test ARC-60: CLI flags override wrong config file credentials for archive.
+run_test "PERL: archive CLI flags override wrong config (exit 0)" \
+	"bash -c \"OPENQA_CONFIG=/tmp/arc_wrongsecret \
+	$PERL_EXE archive --host http://localhost \
+	--apikey '$OPENQA_API_KEY' --apisecret '$OPENQA_API_SECRET' \
+	$JOB_ID /tmp/arc_perl_cliflag\"" 0
+run_test "ZIG : archive CLI flags override wrong config (exit 0)" \
+	"bash -c \"OPENQA_CONFIG=/tmp/arc_wrongsecret \
+	$ZIG_EXE archive --host http://localhost \
+	--apikey '$OPENQA_API_KEY' --apisecret '$OPENQA_API_SECRET' \
+	$JOB_ID /tmp/arc_zig_cliflag\"" 0
+
+# Test ARC-61: CLI flags override wrong env var credentials for archive.
+run_test "PERL: archive CLI overrides wrong env vars (exit 0)" \
+	"bash -c \"OPENQA_CONFIG=/tmp/arc_wrongsecret \
+	OPENQA_API_KEY='GARBAGE' OPENQA_API_SECRET='GARBAGE' \
+	$PERL_EXE archive --host http://localhost \
+	--apikey '$OPENQA_API_KEY' --apisecret '$OPENQA_API_SECRET' \
+	$JOB_ID /tmp/arc_perl_cliovenv\"" 0
+run_test "ZIG : archive CLI overrides wrong env vars (exit 0)" \
+	"bash -c \"OPENQA_CONFIG=/tmp/arc_wrongsecret \
+	OPENQA_API_KEY='GARBAGE' OPENQA_API_SECRET='GARBAGE' \
+	$ZIG_EXE archive --host http://localhost \
+	--apikey '$OPENQA_API_KEY' --apisecret '$OPENQA_API_SECRET' \
+	$JOB_ID /tmp/arc_zig_cliovenv\"" 0
+
+# Test ARC-62: Wrong OPENQA_API_SECRET env var — archive still succeeds (GET is public).
+run_test "PERL: archive wrong env secret still succeeds (exit 0)" \
+	"bash -c \"OPENQA_CONFIG=/tmp/arc_wrongsecret \
+	OPENQA_API_KEY='$OPENQA_API_KEY' OPENQA_API_SECRET='WRONG' \
+	$PERL_EXE archive --host http://localhost $JOB_ID /tmp/arc_perl_wrongenv\"" 0
+run_test "ZIG : archive wrong env secret still succeeds (exit 0)" \
+	"bash -c \"OPENQA_CONFIG=/tmp/arc_wrongsecret \
+	OPENQA_API_KEY='$OPENQA_API_KEY' OPENQA_API_SECRET='WRONG' \
+	$ZIG_EXE archive --host http://localhost $JOB_ID /tmp/arc_zig_wrongenv\"" 0
+
+# Test ARC-63: archive --osd resolves hostname for credential lookup.
+container_exec rm -rf /tmp/arc_zig_osd_test 2>/dev/null || true
+echo "--- Test: ZIG : archive --osd resolves alias (attempts openqa.suse.de) ---"
+set +e
+container_exec bash -c "OPENQA_CONFIG=/tmp/arc_wrongsecret \
+	$ZIG_EXE archive --osd $JOB_ID /tmp/arc_zig_osd_test" \
+	>"$LOG_DIR/arc_zig_osd_test.log" 2>&1
+arc_osd_exit=$?
+set -e
+if [[ "$arc_osd_exit" -eq 1 ]]; then
+	echo "PASS (exit 1 — connection to openqa.suse.de failed as expected)"
+else
+	echo "FAIL: Expected exit 1 (unreachable host), got $arc_osd_exit"
+	cat "$LOG_DIR/arc_zig_osd_test.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+container_exec rm -rf /tmp/arc_perl_osd_test 2>/dev/null || true
+echo "--- Test: PERL: archive --osd resolves alias (attempts openqa.suse.de) ---"
+set +e
+container_exec bash -c "OPENQA_CONFIG=/tmp/arc_wrongsecret \
+	$PERL_EXE archive --osd $JOB_ID /tmp/arc_perl_osd_test" \
+	>"$LOG_DIR/arc_perl_osd_test.log" 2>&1
+arc_osd_perl_exit=$?
+set -e
+if [[ "$arc_osd_perl_exit" -ne 0 ]]; then
+	echo "PASS (exit $arc_osd_perl_exit — connection to openqa.suse.de failed as expected)"
+else
+	echo "FAIL: Expected non-zero exit (unreachable host), got 0"
+	cat "$LOG_DIR/arc_perl_osd_test.log"
+	failed_tests=$((failed_tests + 1))
+fi
 
 # =============================================================================
 # Section 8: Progress Output
