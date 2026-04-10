@@ -89,6 +89,10 @@ pub const Args = struct {
     // User-Agent name (--name)
     name: []const u8 = "openQAclient",
 
+    // archive subcommand options
+    with_thumbnails: bool = false,
+    asset_size_limit: ?u64 = null,
+
     /// Release the three owned ArrayLists.  Call this (via `defer`) immediately
     /// after a successful `parseArgs` return.
     pub fn deinit(self: *Args, allocator: std.mem.Allocator) void {
@@ -215,10 +219,31 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
             args.quiet = true;
             continue;
         }
-        if (std.mem.eql(u8, arg, "--links")) {
+        if (std.mem.eql(u8, arg, "-L") or std.mem.eql(u8, arg, "--links")) {
             args.links = true;
             continue;
         }
+
+        // ---- reject api-only flags when subcommand is archive ----
+        if (args.path != null and std.mem.eql(u8, args.path.?, "archive")) {
+            const is_api_only =
+                std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--form") or
+                std.mem.eql(u8, arg, "-j") or std.mem.eql(u8, arg, "--json") or
+                std.mem.eql(u8, arg, "-X") or
+                std.mem.eql(u8, arg, "-d") or
+                std.mem.eql(u8, arg, "-D") or
+                std.mem.eql(u8, arg, "-a") or
+                std.mem.eql(u8, arg, "--method") or std.mem.startsWith(u8, arg, "--method=") or
+                std.mem.eql(u8, arg, "--data") or std.mem.startsWith(u8, arg, "--data=") or
+                std.mem.eql(u8, arg, "--data-file") or std.mem.startsWith(u8, arg, "--data-file=") or
+                std.mem.eql(u8, arg, "--header") or std.mem.startsWith(u8, arg, "--header=") or
+                std.mem.eql(u8, arg, "--param-file") or std.mem.startsWith(u8, arg, "--param-file=");
+            if (is_api_only) {
+                std.debug.print("Unknown flag: {s}\n", .{arg});
+                return error.UnknownFlag;
+            }
+        }
+
         if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--form")) {
             args.form = true;
             continue;
@@ -309,6 +334,26 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
         if (try flagValue(arg, &i, argv, "--name")) |v| {
             args.name = v;
             continue;
+        }
+
+        // ---- archive-specific flags ----
+        if (args.path != null and std.mem.eql(u8, args.path.?, "archive")) {
+            if (std.mem.eql(u8, arg, "-t") or std.mem.eql(u8, arg, "--with-thumbnails")) {
+                args.with_thumbnails = true;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "-l")) {
+                i += 1;
+                if (i >= argv.len) return error.MissingValue;
+                args.asset_size_limit = std.fmt.parseInt(u64, argv[i], 10) catch
+                    return error.InvalidAssetSizeLimit;
+                continue;
+            }
+            if (try flagValue(arg, &i, argv, "--asset-size-limit")) |v| {
+                args.asset_size_limit = std.fmt.parseInt(u64, v, 10) catch
+                    return error.InvalidAssetSizeLimit;
+                continue;
+            }
         }
 
         // ---- positionals / unrecognized flags ----
@@ -495,6 +540,164 @@ test "parseArgs: short flags and aliases" {
 }
 
 // ---------------------------------------------------------------------------
+// Cross-subcommand flag rejection: api-specific flags must be rejected
+// when used with the archive subcommand.  Currently these flags are parsed
+// unconditionally, so every sub-case below is expected to FAIL until the
+// api-specific gate is added (symmetric with the archive gate at line 319).
+// ---------------------------------------------------------------------------
+
+test "parseArgs: api-specific flags rejected for archive" {
+    const allocator = std.testing.allocator;
+
+    // -f (short for --form)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-f", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --form
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--form", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // -j (short for --json)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-j", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --json
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--json", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // -X (short for --method)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-X", "POST", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --method
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--method", "POST", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // -d (short for --data)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-d", "body", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --data
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--data", "body", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // -D (short for --data-file)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-D", "f.json", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --data-file
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--data-file", "f.json", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // -a (short for --header)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "-a", "X:Y", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --header
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--header", "X:Y", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+    // --param-file (no short form)
+    {
+        const argv: []const []const u8 = &.{ "zoqa", "archive", "--param-file", "p.txt", "12345", "/tmp/out" };
+        try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Missing -L alias: upstream openqa-cli.yaml defines "links|L" but our
+// parseArgs only handles --links, not -L.  This test will FAIL until the
+// alias is added.
+// ---------------------------------------------------------------------------
+
+test "parseArgs: -L alias for --links" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "-L", "jobs" };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    try std.testing.expect(parsed.links);
+}
+
+// ---------------------------------------------------------------------------
+// Regression guards: confirm that combined short flags and archive-specific
+// flags used with the api subcommand are correctly rejected.  These tests
+// should PASS with the current code — they lock in existing correct behaviour.
+// ---------------------------------------------------------------------------
+
+test "parseArgs: combined short flags -vp rejected" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "-vp", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: combined short flags -pv rejected" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "-pv", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: archive flag -t rejected for api" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "-t", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: archive flag --with-thumbnails rejected for api" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "--with-thumbnails", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: archive flag -l rejected for api" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "-l", "1024", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+test "parseArgs: archive flag --asset-size-limit rejected for api" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "api", "--asset-size-limit", "1024", "jobs" };
+    try std.testing.expectError(error.UnknownFlag, parseArgs(allocator, argv));
+}
+
+// ---------------------------------------------------------------------------
+// SPEC §13.1 compliance: --pretty and --links are "accepted but have no
+// observable effect" for the archive subcommand.  These tests should PASS
+// with the current code — they confirm the spec-mandated behaviour.
+// ---------------------------------------------------------------------------
+
+test "parseArgs: --pretty accepted for archive per SPEC 13.1" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "archive", "--pretty", "12345", "/tmp/out" };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    try std.testing.expect(parsed.pretty);
+}
+
+test "parseArgs: --links accepted for archive per SPEC 13.1" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "archive", "--links", "12345", "/tmp/out" };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    try std.testing.expect(parsed.links);
+}
+
+// ---------------------------------------------------------------------------
 // --form: JSON object → application/x-www-form-urlencoded
 // ---------------------------------------------------------------------------
 
@@ -677,6 +880,9 @@ test "formEncodeAppend: all special bytes percent-encoded" {
 }
 
 /// Post-parseArgs processing result, ready to pass to `zoqa.openQAReq()`.
+/// RequestConfig is purely a transitional container: it exists to bridge
+/// the gap between raw CLI argument parsing (parseArgs → Args) and
+/// the library's public API (openQAReq / CallOptions).
 ///
 /// `buildRequest` extracts and validates CLI arguments into the fields needed
 /// by the library's public API. URL construction is **not** performed here —
@@ -705,22 +911,12 @@ const RequestConfig = struct {
     /// `params_encoded` as the body for POST/PUT/PATCH methods.
     body: ?[]const u8,
     /// Extra request headers from --header, --json, --form flags.
-    headers: std.ArrayList(std.http.Header),
+    headers: []const std.http.Header,
 
-    // Owned buffers that must be freed by the caller
-    body_owned: bool,
-    form_body_buf: ?[]u8,
-    params_buf: std.ArrayList(u8),
-    host_buf: ?[]u8,
-    /// Allocated path buffer for absolute-URL case (path extracted from URL).
-    path_buf: ?[]u8,
+    arena: std.heap.ArenaAllocator,
 
-    pub fn deinit(self: *RequestConfig, allocator: std.mem.Allocator) void {
-        if (self.form_body_buf) |b| allocator.free(b);
-        self.params_buf.deinit(allocator);
-        if (self.host_buf) |b| allocator.free(b);
-        if (self.path_buf) |b| allocator.free(b);
-        self.headers.deinit(allocator);
+    pub fn deinit(self: *RequestConfig) void {
+        self.arena.deinit();
     }
 };
 
@@ -777,6 +973,10 @@ pub fn buildRequest(
     args: *const Args,
     data_file_content: ?[]const u8,
 ) !RequestConfig {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
     // kv_params[0] = PATH, kv_params[1..] = KEY=VALUE pairs.
     if (args.kv_params.items.len == 0) return error.MissingPath;
 
@@ -785,15 +985,14 @@ pub fn buildRequest(
 
     // Collect all parameters
     var params: std.ArrayList(u8) = .{};
-    errdefer params.deinit(allocator);
 
     // Positional KEY=VALUE pairs
     for (kv_args) |p| {
         const eq = std.mem.indexOfScalar(u8, p, '=') orelse continue;
-        if (params.items.len > 0) try params.append(allocator, '&');
-        try formEncodeAppend(allocator, &params, p[0..eq]);
-        try params.append(allocator, '=');
-        try formEncodeAppend(allocator, &params, p[eq + 1 ..]);
+        if (params.items.len > 0) try params.append(arena_alloc, '&');
+        try formEncodeAppend(arena_alloc, &params, p[0..eq]);
+        try params.append(arena_alloc, '=');
+        try formEncodeAppend(arena_alloc, &params, p[eq + 1 ..]);
     }
 
     // --param-file KEY=FILE
@@ -808,10 +1007,10 @@ pub fn buildRequest(
         const contents = try std.fs.cwd().readFileAlloc(allocator, file_path, 10 * 1024 * 1024);
         defer allocator.free(contents);
         const trimmed = std.mem.trimRight(u8, contents, "\n\r");
-        if (params.items.len > 0) try params.append(allocator, '&');
-        try formEncodeAppend(allocator, &params, key);
-        try params.append(allocator, '=');
-        try formEncodeAppend(allocator, &params, trimmed);
+        if (params.items.len > 0) try params.append(arena_alloc, '&');
+        try formEncodeAppend(arena_alloc, &params, key);
+        try params.append(arena_alloc, '=');
+        try formEncodeAppend(arena_alloc, &params, trimmed);
     }
 
     // Parse HTTP method (accept upper or lower case)
@@ -828,10 +1027,6 @@ pub fn buildRequest(
     // Two cases:
     //   1. Relative path (e.g. "jobs") → resolve host from flags, path = api_path.
     //   2. Absolute URL (e.g. "https://host/api/v1/jobs") → split into host + path.
-    var host_buf: ?[]u8 = null;
-    errdefer if (host_buf) |b| allocator.free(b);
-    var path_buf: ?[]u8 = null;
-    errdefer if (path_buf) |b| allocator.free(b);
 
     // SAFETY: both variables are unconditionally assigned in every branch of the
     // if/else below before any subsequent read. The `if (isAbsoluteUrl(...))` /
@@ -849,18 +1044,17 @@ pub fn buildRequest(
 
         // Reconstruct scheme + authority as the host, preserving the port if present.
         // uri.scheme is []const u8 in Zig 0.15.2 (e.g. "https"), not an enum.
-        host_buf = if (uri.port) |port|
-            try std.fmt.allocPrint(allocator, "{s}://{s}:{d}", .{
+        resolved_host = if (uri.port) |port|
+            try std.fmt.allocPrint(arena_alloc, "{s}://{s}:{d}", .{
                 uri.scheme,
                 host_part,
                 port,
             })
         else
-            try std.fmt.allocPrint(allocator, "{s}://{s}", .{
+            try std.fmt.allocPrint(arena_alloc, "{s}://{s}", .{
                 uri.scheme,
                 host_part,
             });
-        resolved_host = host_buf.?;
 
         // Extract relative path by stripping the /api/v1/ prefix if present.
         const raw_path = uri.path.percent_encoded;
@@ -880,22 +1074,17 @@ pub fn buildRequest(
 
         // If the original URL had a query string, append it to relative_path
         if (uri.query) |q| {
-            path_buf = try std.fmt.allocPrint(allocator, "{s}?{s}", .{ relative_path, q.percent_encoded });
-            relative_path = path_buf.?;
+            relative_path = try std.fmt.allocPrint(arena_alloc, "{s}?{s}", .{ relative_path, q.percent_encoded });
         }
     } else {
         // Relative path: resolve host from CLI flags / --host / default.
         const host_res = try config.resolveHost(
-            allocator,
+            arena_alloc,
             args.osd,
             args.o3,
             args.odn,
             args.host,
         );
-        // If resolveHost allocated, we take ownership via host_buf.
-        if (host_res.allocated) {
-            host_buf = @constCast(host_res.url);
-        }
         resolved_host = host_res.url;
 
         // Strip leading slash from relative path to avoid double-slash in URL.
@@ -915,13 +1104,9 @@ pub fn buildRequest(
     }
 
     // --form: JSON object body → application/x-www-form-urlencoded
-    var form_body_buf: ?[]u8 = null;
-    errdefer if (form_body_buf) |b| allocator.free(b);
-
     if (args.form) {
         if (req_body) |rb| {
-            form_body_buf = try jsonToFormEncoded(allocator, rb);
-            req_body = form_body_buf.?;
+            req_body = try jsonToFormEncoded(arena_alloc, rb);
         } else {
             return error.FormRequiresData;
         }
@@ -929,17 +1114,16 @@ pub fn buildRequest(
 
     // Build extra request headers
     var custom_headers: std.ArrayList(std.http.Header) = .{};
-    errdefer custom_headers.deinit(allocator);
 
     for (args.headers.items) |h| {
         const colon = std.mem.indexOfScalar(u8, h, ':') orelse continue;
         const name = std.mem.trim(u8, h[0..colon], " \t");
         const value = std.mem.trim(u8, h[colon + 1 ..], " \t");
-        try custom_headers.append(allocator, .{ .name = name, .value = value });
+        try custom_headers.append(arena_alloc, .{ .name = name, .value = value });
     }
 
     if (args.json) {
-        try custom_headers.append(allocator, .{ .name = "Content-Type", .value = "application/json" });
+        try custom_headers.append(arena_alloc, .{ .name = "Content-Type", .value = "application/json" });
     }
 
     // Add form content-type when:
@@ -949,24 +1133,20 @@ pub fn buildRequest(
     if (args.form or ((method == .POST or method == .PUT or method == .PATCH) and
         params.items.len > 0 and args.data == null and args.data_file == null))
     {
-        try custom_headers.append(allocator, .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" });
+        try custom_headers.append(arena_alloc, .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" });
     }
 
-    // §1.2: User-Agent header from --name (default: "openQAclient")
-    try custom_headers.append(allocator, .{ .name = "User-Agent", .value = args.name });
+    // User-Agent header from --name (default: "openQAclient")
+    try custom_headers.append(arena_alloc, .{ .name = "User-Agent", .value = args.name });
 
-    return RequestConfig{
+    return .{
         .method = method,
         .host = resolved_host,
         .path = relative_path,
+        .params_encoded = params.items[0..params.items.len],
         .body = req_body,
-        .headers = custom_headers,
-        .params_encoded = params.items,
-        .body_owned = data_file_content != null,
-        .form_body_buf = form_body_buf,
-        .params_buf = params,
-        .host_buf = host_buf,
-        .path_buf = path_buf,
+        .headers = try custom_headers.toOwnedSlice(arena_alloc),
+        .arena = arena,
     };
 }
 
@@ -979,7 +1159,7 @@ test "buildRequest: GET with KV params appends query string" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     try std.testing.expect(req_cfg.method == .GET);
     // params_encoded should contain the encoded KV pair (query string routing is done by openQAReq)
@@ -998,14 +1178,14 @@ test "buildRequest: POST with --data and --form" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     try std.testing.expect(req_cfg.method == .POST);
     try std.testing.expect(req_cfg.body != null);
     try std.testing.expectEqualStrings("foo=bar", req_cfg.body.?);
     // Should have Content-Type: application/x-www-form-urlencoded header
     var found_ct = false;
-    for (req_cfg.headers.items) |h| {
+    for (req_cfg.headers) |h| {
         if (std.mem.eql(u8, h.name, "Content-Type") and
             std.mem.eql(u8, h.value, "application/x-www-form-urlencoded"))
         {
@@ -1025,7 +1205,7 @@ test "buildRequest: lowercase method is upper-cased" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     try std.testing.expect(req_cfg.method == .POST);
 }
@@ -1039,7 +1219,7 @@ test "buildRequest: absolute URL used as-is" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     // Absolute URL should be split into host + path
     try std.testing.expectEqualStrings("https://custom.host", req_cfg.host);
@@ -1055,7 +1235,7 @@ test "buildRequest: absolute URL with port preserves port in host" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     // Port must be preserved — without the fix this returns "http://172.19.203.185"
     try std.testing.expectEqualStrings("http://172.19.203.185:8080", req_cfg.host);
@@ -1071,12 +1251,12 @@ test "buildRequest: --header with colon splitting" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     // X-Custom + User-Agent = 2 headers
-    try std.testing.expectEqual(@as(usize, 2), req_cfg.headers.items.len);
-    try std.testing.expectEqualStrings("X-Custom", req_cfg.headers.items[0].name);
-    try std.testing.expectEqualStrings("my-value", req_cfg.headers.items[0].value);
+    try std.testing.expectEqual(@as(usize, 2), req_cfg.headers.len);
+    try std.testing.expectEqualStrings("X-Custom", req_cfg.headers[0].name);
+    try std.testing.expectEqualStrings("my-value", req_cfg.headers[0].value);
 }
 
 test "buildRequest: --json adds Content-Type header" {
@@ -1088,10 +1268,10 @@ test "buildRequest: --json adds Content-Type header" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     var found_json_ct = false;
-    for (req_cfg.headers.items) |h| {
+    for (req_cfg.headers) |h| {
         if (std.mem.eql(u8, h.name, "Content-Type") and
             std.mem.eql(u8, h.value, "application/json"))
         {
@@ -1123,7 +1303,7 @@ test "buildRequest: data-file content used as body" {
 
     const file_data = "file body content";
     var req_cfg = try buildRequest(allocator, &parsed, file_data);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     try std.testing.expectEqualStrings("file body content", req_cfg.body.?);
 }
@@ -1137,7 +1317,7 @@ test "buildRequest: --osd flag resolves to openqa.suse.de" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     try std.testing.expect(std.mem.indexOf(u8, req_cfg.host, "openqa.suse.de") != null);
 }
@@ -1152,7 +1332,7 @@ test "buildRequest: DELETE with KV params appends query string" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     try std.testing.expect(req_cfg.method == .DELETE);
     // params_encoded should contain the encoded KV pair (query string routing is done by openQAReq)
@@ -1169,7 +1349,7 @@ test "buildRequest: POST with KV params uses body not query string" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     try std.testing.expect(req_cfg.method == .POST);
     // buildRequest no longer puts KV params in body — that routing is
@@ -1179,7 +1359,7 @@ test "buildRequest: POST with KV params uses body not query string" {
     try std.testing.expect(std.mem.indexOf(u8, req_cfg.params_encoded, "VERSION=15") != null);
     // Should have form Content-Type (added by buildRequest for POST with KV params)
     var found_ct = false;
-    for (req_cfg.headers.items) |h| {
+    for (req_cfg.headers) |h| {
         if (std.mem.eql(u8, h.name, "Content-Type") and
             std.mem.eql(u8, h.value, "application/x-www-form-urlencoded"))
         {
@@ -1208,7 +1388,7 @@ test "buildRequest: --o3 flag resolves to openqa.opensuse.org" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     try std.testing.expect(std.mem.indexOf(u8, req_cfg.host, "openqa.opensuse.org") != null);
 }
@@ -1222,12 +1402,12 @@ test "buildRequest: --header without colon is skipped" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     // Malformed header without colon should be silently skipped.
     // Only User-Agent should remain (always injected by buildRequest).
-    try std.testing.expectEqual(@as(usize, 1), req_cfg.headers.items.len);
-    try std.testing.expectEqualStrings("User-Agent", req_cfg.headers.items[0].name);
+    try std.testing.expectEqual(@as(usize, 1), req_cfg.headers.len);
+    try std.testing.expectEqualStrings("User-Agent", req_cfg.headers[0].name);
 }
 
 test "buildRequest: leading slash stripped from relative api path" {
@@ -1239,7 +1419,7 @@ test "buildRequest: leading slash stripped from relative api path" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     // Should split into host + path with no double slash
     try std.testing.expectEqualStrings("http://example.com", req_cfg.host);
@@ -1255,7 +1435,7 @@ test "buildRequest: bare hostname gets https:// prefix via resolveHost" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     try std.testing.expect(std.mem.startsWith(u8, req_cfg.host, "https://myhost.example.com"));
 }
@@ -1270,7 +1450,7 @@ test "buildRequest: data-file content with --form encodes JSON body" {
 
     const file_data = "{\"key\":\"value\"}";
     var req_cfg = try buildRequest(allocator, &parsed, file_data);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     try std.testing.expectEqualStrings("key=value", req_cfg.body.?);
 }
@@ -1295,11 +1475,11 @@ test "buildRequest: --name sets User-Agent header" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     // Find User-Agent header
     var found = false;
-    for (req_cfg.headers.items) |h| {
+    for (req_cfg.headers) |h| {
         if (std.mem.eql(u8, h.name, "User-Agent")) {
             try std.testing.expectEqualStrings("mybot", h.value);
             found = true;
@@ -1317,10 +1497,10 @@ test "buildRequest: default User-Agent is openQAclient" {
     defer parsed.deinit(allocator);
 
     var req_cfg = try buildRequest(allocator, &parsed, null);
-    defer req_cfg.deinit(allocator);
+    defer req_cfg.deinit();
 
     var found = false;
-    for (req_cfg.headers.items) |h| {
+    for (req_cfg.headers) |h| {
         if (std.mem.eql(u8, h.name, "User-Agent")) {
             try std.testing.expectEqualStrings("openQAclient", h.value);
             found = true;
@@ -1622,7 +1802,7 @@ pub fn main() !void {
         if (err == error.InvalidCommand) std.process.exit(255);
         std.debug.print("Argument error: {s}\n", .{@errorName(err)});
         printHelp();
-        std.process.exit(1);
+        std.process.exit(255);
     };
     defer args.deinit(gpa);
 
@@ -1637,8 +1817,8 @@ pub fn main() !void {
         std.process.exit(1);
     };
 
-    if (!std.mem.eql(u8, subcmd, "api")) {
-        std.debug.print("Error: Unknown subcommand '{s}'. Only 'api' is supported.\n", .{subcmd});
+    if (!std.mem.eql(u8, subcmd, "api") and !std.mem.eql(u8, subcmd, "archive")) {
+        std.debug.print("Error: Unknown subcommand '{s}'. Only 'api' and 'archive' are supported.\n", .{subcmd});
         std.process.exit(1);
     }
 
@@ -1656,20 +1836,35 @@ pub fn main() !void {
 
     const data_file_content: ?[]const u8 = if (data_file_buf) |b| b else null;
 
-    var req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
-        if (err == error.MissingPath) {
-            printApiHelp();
+    var req_cfg: ?RequestConfig = null;
+    defer if (req_cfg) |*cfg| cfg.deinit();
+
+    if (std.mem.eql(u8, subcmd, "api")) {
+        req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
+            if (err == error.MissingPath) {
+                printApiHelp();
+                std.process.exit(255);
+            }
+            std.debug.print("Request build error: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, subcmd, "archive")) {
+        if (args.kv_params.items.len < 2) {
+            printArchiveHelp();
             std.process.exit(255);
         }
-        std.debug.print("Request build error: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-    defer req_cfg.deinit(gpa);
+    }
 
     // Resolve credentials
     // Extract hostname from the resolved host URL for config file lookup.
-    const uri = try std.Uri.parse(req_cfg.host);
-    const hostname = if (uri.host) |h| h.percent_encoded else "localhost";
+    const host_for_uri = if (req_cfg) |cfg| cfg.host else args.host orelse "localhost";
+    const hostname = blk: {
+        const uri = std.Uri.parse(host_for_uri) catch {
+            break :blk host_for_uri;
+        };
+        break :blk if (uri.host) |h| h.percent_encoded else "localhost";
+    };
+
     const conf_creds = try config.findCredentials(gpa, hostname);
     defer if (conf_creds) |c| c.deinit();
 
@@ -1735,31 +1930,75 @@ pub fn main() !void {
         break :blk std.fmt.parseFloat(f64, env_s) catch 1.0;
     };
 
-    // Execute the request via the library's public API entry point.
-    var client = std.http.Client{ .allocator = gpa };
-    defer client.deinit();
+    if (std.mem.eql(u8, subcmd, "api")) {
+        // Execute the request via the library's public API entry point.
+        var client = std.http.Client{ .allocator = gpa };
+        defer client.deinit();
 
-    const resp = zoqa.openQAReq(req_cfg.host, req_cfg.path, .{
-        .allocator = gpa,
-        .method = req_cfg.method,
-        .headers = req_cfg.headers.items,
-        .params = req_cfg.params_encoded,
-        .body = req_cfg.body,
-        .credentials = creds,
-        .retries = retries,
-        .quiet = args.quiet,
-        .connect_timeout_s = connect_timeout_s,
-        .retry_sleep_s = retry_sleep_s,
-        .retry_factor = retry_factor,
-    }, &client) catch |err| {
-        if (!args.quiet) std.debug.print("Fatal: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-    defer resp.deinit();
+        const cfg = req_cfg.?;
+        const resp = zoqa.openQAReq(cfg.host, cfg.path, .{
+            .allocator = gpa,
+            .method = cfg.method,
+            .headers = cfg.headers,
+            .params = cfg.params_encoded,
+            .body = cfg.body,
+            .credentials = creds,
+            .retries = retries,
+            .quiet = args.quiet,
+            .connect_timeout_s = connect_timeout_s,
+            .retry_sleep_s = retry_sleep_s,
+            .retry_factor = retry_factor,
+        }, &client) catch |err| {
+            if (!args.quiet) std.debug.print("Fatal: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer resp.deinit();
 
-    printResponse(gpa, resp, args.verbose, args.quiet, args.links, args.pretty);
+        printResponse(gpa, resp, args.verbose, args.quiet, args.links, args.pretty);
 
-    std.process.exit(resp.exitCode());
+        std.process.exit(resp.exitCode());
+    } else if (std.mem.eql(u8, subcmd, "archive")) {
+        if (args.kv_params.items.len < 2) {
+            printArchiveHelp();
+            std.process.exit(255);
+        }
+        const job_id = std.fmt.parseInt(u64, args.kv_params.items[0], 10) catch {
+            std.debug.print("Invalid JOB_ID: {s}\n", .{args.kv_params.items[0]});
+            std.process.exit(1);
+        };
+        const output_path = args.kv_params.items[1];
+
+        const archive_opts = zoqa.ArchiveOptions{
+            .with_thumbnails = args.with_thumbnails,
+            .asset_size_limit = args.asset_size_limit orelse 209_715_200,
+            .credentials = creds,
+            .quiet = args.quiet,
+            .retries = retries,
+            .retry_sleep_s = retry_sleep_s,
+            .retry_factor = retry_factor,
+        };
+
+        const host_res = config.resolveHost(
+            gpa,
+            args.osd,
+            args.o3,
+            args.odn,
+            args.host,
+        ) catch |err| {
+            std.debug.print("Host resolution error: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer if (host_res.allocated) gpa.free(host_res.url);
+
+        var client = std.http.Client{ .allocator = gpa };
+        defer client.deinit();
+
+        zoqa.runArchive(gpa, &client, host_res.url, job_id, output_path, archive_opts) catch |err| {
+            std.debug.print("archive: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        std.process.exit(0);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1796,11 +2035,22 @@ const help_api_options =
     \\
 ;
 
+const help_archive_options =
+    \\Archive Options:
+    \\  -t, --with-thumbnails   Download thumbnails for screenshots
+    \\  -l, --asset-size-limit  Skip downloading assets larger than this limit (default 200MiB)
+    \\
+;
+
 fn printHelp() void {
     std.debug.print(
-        "Usage: zoqa [GLOBAL OPTIONS] api [API OPTIONS] PATH [KEY=VALUE ...]\n\n" ++
+        "Usage: zoqa [GLOBAL OPTIONS] SUBCOMMAND [OPTIONS] ...\n\n" ++
+            "Subcommands:\n" ++
+            "  api       Make an openQA API request\n" ++
+            "  archive   Download assets and test results from a job\n\n" ++
             help_global_options ++
-            help_api_options,
+            help_api_options ++
+            help_archive_options,
         .{},
     );
 }
@@ -1812,6 +2062,17 @@ fn printApiHelp() void {
         "Usage: zoqa api [OPTIONS] PATH [KEY=VALUE ...]\n\n" ++
             "Make an openQA API request. PATH is the API endpoint (e.g. \"jobs\") or an absolute URL.\n\n" ++
             help_api_options ++
+            help_global_options,
+        .{},
+    );
+}
+
+/// Print the `archive` subcommand usage block to stderr.
+fn printArchiveHelp() void {
+    std.debug.print(
+        "Usage: zoqa archive [OPTIONS] JOB_ID OUTPUT_PATH\n\n" ++
+            "Download assets and test results from a job into a local directory.\n\n" ++
+            help_archive_options ++
             help_global_options,
         .{},
     );

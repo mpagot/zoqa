@@ -44,8 +44,9 @@ OPTIONS:
   --collect-logs      Dump openQA server logs to ./openqa-e2e-logs/.
   --suites NAMES      Comma-separated list of suite names to run (no .sh
                       extension). Valid names: core, auth, data, output,
-                      robustness, retry_knobs, perf. Omit to run all suites.
-                      Example: --suites core,auth
+                      robustness, retry_knobs, archive, perf. Omit or use
+                      'all' to run all suites. Pass an empty string to
+                      skip all tests (e.g. --suites "").
 
 DEBUGGING TIPS:
   Use --keep-container to browse the openQA web UI during or after the run.
@@ -61,7 +62,7 @@ EOF
 # -----------------------------------------------------------------------------
 KEEP_CONTAINER=false
 COLLECT_LOGS=false
-E2E_SUITES=""
+E2E_SUITES="all"
 
 while [[ "$#" -gt 0 ]]; do
 	case $1 in
@@ -196,13 +197,14 @@ else
 	export OPENQA_API_KEY="MOCK_KEY"
 	export OPENQA_API_SECRET="MOCK_SECRET"
 	export JOB_ID="1"
+	export RICH_JOB_ID="2"
 	export ASSET_ID="1"
 	export ZIG_ASSET_ID="2"
 	export GROUP_ID="1"
 fi
 
 echo "==> Environment:"
-echo "    JOB_ID=$JOB_ID  ASSET_ID=$ASSET_ID  ZIG_ASSET_ID=${ZIG_ASSET_ID:-}  GROUP_ID=$GROUP_ID"
+echo "    JOB_ID=$JOB_ID  RICH_JOB_ID=$RICH_JOB_ID  ASSET_ID=$ASSET_ID  ZIG_ASSET_ID=${ZIG_ASSET_ID:-}  GROUP_ID=$GROUP_ID"
 [[ -n "$E2E_SUITES" ]] && echo "==> Suites filter: $E2E_SUITES"
 
 # -----------------------------------------------------------------------------

@@ -222,5 +222,5 @@ export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     // injection (--json, --form).
     // ------------------------------------------------------------------
     var req_cfg = main_mod.buildRequest(allocator, &parsed, data_file_content) catch return;
-    req_cfg.deinit(allocator);
+    req_cfg.deinit();
 }

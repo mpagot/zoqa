@@ -206,10 +206,11 @@ else
 	log "Reading seeded IDs from container..."
 	SEEDED=$(container_exec cat /tmp/seeded_ids.env) || die "Could not read /tmp/seeded_ids.env"
 	JOB_ID=$(echo "$SEEDED" | grep "^JOB_ID=" | cut -d'=' -f2)
+	RICH_JOB_ID=$(echo "$SEEDED" | grep "^RICH_JOB_ID=" | cut -d'=' -f2)
 	ASSET_ID=$(echo "$SEEDED" | grep "^ASSET_ID=" | cut -d'=' -f2)
 	ZIG_ASSET_ID=$(echo "$SEEDED" | grep "^ZIG_ASSET_ID=" | cut -d'=' -f2)
 	GROUP_ID=$(echo "$SEEDED" | grep "^GROUP_ID=" | cut -d'=' -f2)
-	log "Seeded: JOB_ID=$JOB_ID  ASSET_ID=$ASSET_ID  ZIG_ASSET_ID=$ZIG_ASSET_ID  GROUP_ID=$GROUP_ID"
+	log "Seeded: JOB_ID=$JOB_ID  RICH_JOB_ID=$RICH_JOB_ID  ASSET_ID=$ASSET_ID  ZIG_ASSET_ID=$ZIG_ASSET_ID  GROUP_ID=$GROUP_ID"
 fi
 
 # -----------------------------------------------------------------------------
@@ -224,6 +225,7 @@ export CONTAINER_NAME="$CONTAINER_NAME"
 export OPENQA_API_KEY="$API_KEY"
 export OPENQA_API_SECRET="$API_SECRET"
 export JOB_ID="$JOB_ID"
+export RICH_JOB_ID="$RICH_JOB_ID"
 export ASSET_ID="$ASSET_ID"
 export ZIG_ASSET_ID="$ZIG_ASSET_ID"
 export GROUP_ID="$GROUP_ID"

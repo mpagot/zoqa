@@ -291,7 +291,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
             defer p.kv_params.deinit(allocator);
 
             var req_cfg = main_mod.buildRequest(allocator, p, data_file_content) catch null;
-            if (req_cfg) |*r| r.deinit(allocator);
+            if (req_cfg) |*r| r.deinit();
         }
     }
 

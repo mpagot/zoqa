@@ -109,7 +109,62 @@ run_cmd "mkdir -p $ISO_DIR"
 run_cmd "touch $ISO_DIR/$ISO_NAME"
 
 # ---------------------------------------------------------------------------
-# 5. Schedule jobs via POST /api/v1/isos with inline SCENARIO_DEFINITIONS_YAML
+# 5. Download CirrOS image for Rich Job
+# ---------------------------------------------------------------------------
+HDD_DIR="/var/lib/openqa/share/factory/hdd"
+CIRROS_ORIG="cirros-0.6.3-x86_64-disk.img"
+CIRROS_IMG="cirros-0.6.3-x86_64-disk.qcow2"
+CIRROS_URL="https://download.cirros-cloud.net/0.6.3/${CIRROS_ORIG}"
+
+log "Downloading CirrOS image to $HDD_DIR/$CIRROS_IMG..."
+run_cmd "mkdir -p $HDD_DIR"
+if [[ "$DRY_RUN" == "false" ]]; then
+	if [[ ! -f "$HDD_DIR/$CIRROS_IMG" ]]; then
+		run_cmd "curl -sS -L -o $HDD_DIR/$CIRROS_ORIG $CIRROS_URL"
+		# Rename to .qcow2 so os-autoinst's deduce_driver detects the
+		# backing format correctly (it keys on file extension, not content).
+		run_cmd "mv $HDD_DIR/$CIRROS_ORIG $HDD_DIR/$CIRROS_IMG"
+	else
+		log "CirrOS image already exists, skipping download."
+	fi
+else
+	echo "[DRY-RUN] curl -sS -L -o $HDD_DIR/$CIRROS_ORIG $CIRROS_URL"
+	echo "[DRY-RUN] mv $HDD_DIR/$CIRROS_ORIG $HDD_DIR/$CIRROS_IMG"
+fi
+
+# ---------------------------------------------------------------------------
+# 5b. Create NoCloud seed ISO to skip CirrOS metadata service timeout
+# ---------------------------------------------------------------------------
+SEED_ISO="seed-nocloud.iso"
+log "Creating NoCloud seed ISO at $ISO_DIR/$SEED_ISO..."
+if [[ "$DRY_RUN" == "false" ]]; then
+	if [[ ! -f "$ISO_DIR/$SEED_ISO" ]]; then
+		CIDATA_TMP=$(mktemp -d)
+		echo '{ "instance-id": "nocloud" }' >"$CIDATA_TMP/meta-data"
+		printf '#!/bin/sh\n' >"$CIDATA_TMP/user-data"
+		run_cmd "mkisofs -output $ISO_DIR/$SEED_ISO -volid cidata -joliet -rock -input-charset utf-8 $CIDATA_TMP/meta-data $CIDATA_TMP/user-data >/dev/null 2>&1"
+		rm -rf "$CIDATA_TMP"
+	else
+		log "NoCloud seed ISO already exists, skipping."
+	fi
+else
+	echo "[DRY-RUN] mkisofs -output $ISO_DIR/$SEED_ISO -volid cidata ..."
+fi
+
+# ---------------------------------------------------------------------------
+# 5c. Install custom CirrOS test distribution
+# ---------------------------------------------------------------------------
+log "Installing custom CirrOS test distribution..."
+if [[ "$DRY_RUN" == "false" ]]; then
+	run_cmd "mkdir -p /var/lib/openqa/share/tests/cirros"
+	run_cmd "cp -a $FIXTURE_DIR/cirros-distri/* /var/lib/openqa/share/tests/cirros/"
+	run_cmd "chown -R geekotest:geekotest /var/lib/openqa/share/tests/cirros"
+else
+	echo "[DRY-RUN] cp -a $FIXTURE_DIR/cirros-distri/* /var/lib/openqa/share/tests/cirros/"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Schedule jobs via POST /api/v1/isos with inline SCENARIO_DEFINITIONS_YAML
 # ---------------------------------------------------------------------------
 log "Reading scenario-definitions.yaml..."
 if [[ "$DRY_RUN" == "false" ]]; then
@@ -120,7 +175,7 @@ else
 	SCENARIO_YAML="[DRY-RUN placeholder]"
 fi
 
-log "Scheduling jobs via POST /api/v1/isos..."
+log "Scheduling basic dummy job via POST /api/v1/isos..."
 if [[ "$DRY_RUN" == "true" ]]; then
 	echo "[DRY-RUN] $CLI -X POST isos DISTRI=example VERSION=0 FLAVOR=DVD ARCH=x86_64 BUILD=e2e-test ISO=$ISO_NAME ..."
 	JOB_ID=1
@@ -151,8 +206,54 @@ else
 fi
 log "JOB_ID=$JOB_ID"
 
+log "Scheduling RICH job via POST /api/v1/isos..."
+if [[ "$DRY_RUN" == "true" ]]; then
+	echo "[DRY-RUN] $CLI -X POST isos ... HDD_1=$CIRROS_IMG ISO_1=$SEED_ISO BUILD=e2e-test-rich ..."
+	RICH_JOB_ID=2
+else
+	RICH_RESPONSE=$(
+		$CLI -X POST isos \
+			DISTRI=example \
+			VERSION=0 \
+			FLAVOR=DVD \
+			ARCH=x86_64 \
+			BUILD=e2e-test-rich \
+			HDD_1="$CIRROS_IMG" \
+			ISO_1="$SEED_ISO" \
+			CASEDIR="/var/lib/openqa/share/tests/cirros" \
+			NEEDLES_DIR="%CASEDIR%/needles" \
+			"_GROUP_ID=$GROUP_ID" \
+			"SCENARIO_DEFINITIONS_YAML=$SCENARIO_YAML" \
+			2>/dev/null
+	) || die "POST /api/v1/isos (rich) failed"
+
+	log "POST /api/v1/isos (rich) response: $RICH_RESPONSE"
+	RICH_JOB_ID=$(echo "$RICH_RESPONSE" | jq '.ids[0] // empty')
+	[[ -n "$RICH_JOB_ID" ]] || die "Could not obtain RICH_JOB_ID"
+fi
+log "RICH_JOB_ID=$RICH_JOB_ID"
+
 # ---------------------------------------------------------------------------
-# 6. Register two dummy assets for the DELETE tests (one for Perl, one for Zig)
+# 7. Wait for RICH job to reach terminal state
+# ---------------------------------------------------------------------------
+log "Waiting for rich job $RICH_JOB_ID to complete (up to 5 minutes)..."
+if [[ "$DRY_RUN" == "false" ]]; then
+	for i in {1..150}; do
+		JOB_STATE=$($CLI jobs/"$RICH_JOB_ID" 2>/dev/null | jq -r '.job.state // empty')
+		log "Job $RICH_JOB_ID state: $JOB_STATE ($((i * 2))s elapsed)"
+		if [[ "$JOB_STATE" == "done" || "$JOB_STATE" == "cancelled" || "$JOB_STATE" == "failed" ]]; then
+			log "Rich job $RICH_JOB_ID reached terminal state: $JOB_STATE"
+			break
+		fi
+		[[ "$i" -eq 150 ]] && die "Timeout waiting for rich job $RICH_JOB_ID to complete"
+		sleep 2
+	done
+else
+	log "[DRY-RUN] Skipping job completion wait."
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Register two dummy assets for the DELETE tests (one for Perl, one for Zig)
 # ---------------------------------------------------------------------------
 log "Fetching asset ID for $ISO_NAME..."
 if [[ "$DRY_RUN" == "true" ]]; then
@@ -211,7 +312,7 @@ log "ASSET_ID=$ASSET_ID"
 log "ZIG_ASSET_ID=$ZIG_ASSET_ID"
 
 # ---------------------------------------------------------------------------
-# 7. Write seeded IDs to env file
+# 9. Write seeded IDs to env file
 # ---------------------------------------------------------------------------
 log "Writing $IDS_FILE..."
 if [[ "$DRY_RUN" == "true" ]]; then
@@ -219,6 +320,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
 else
 	cat >"$IDS_FILE" <<EOF
 JOB_ID=$JOB_ID
+RICH_JOB_ID=$RICH_JOB_ID
 ASSET_ID=$ASSET_ID
 ZIG_ASSET_ID=$ZIG_ASSET_ID
 GROUP_ID=$GROUP_ID

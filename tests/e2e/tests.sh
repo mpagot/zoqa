@@ -13,6 +13,7 @@
 #   tests_output.sh      — Section D: output formatting (verbose, pretty, name)
 #   tests_robustness.sh  — Section E: broken pipe, non-2xx stderr, --quiet
 #   tests_retry_knobs.sh — Section F: OPENQA_CLI_RETRIES / SLEEP / FACTOR env vars
+#   tests_archive.sh     — Section H: archive subcommand (SPEC §13)
 #   tests_perf.sh        — Section G: wall-clock timing and peak RSS comparisons
 #
 # Reads from the calling scope:
@@ -176,8 +177,10 @@ run_diff_test() {
 #
 _e2e_suite_enabled() {
 	local name=$1
-	# Empty → all suites enabled
-	[[ -z "$E2E_SUITES" ]] && return 0
+	# 'all' (default) → all suites enabled
+	[[ "$E2E_SUITES" == "all" ]] && return 0
+	# Empty string → skip all tests
+	[[ -z "$E2E_SUITES" ]] && return 1
 	# Check if name appears as a comma-separated token
 	local suite
 	IFS=',' read -ra _suites <<<"$E2E_SUITES"
@@ -198,7 +201,7 @@ _e2e_suite_enabled() {
 # ShellCheck cannot follow a dynamic source path; the individual tests_*.sh
 # files are checked independently when `make e2e-lint` is run.
 # shellcheck disable=SC1090
-_e2e_all_suites=(core auth data output robustness retry_knobs perf)
+_e2e_all_suites=(core auth data output robustness retry_knobs archive perf)
 for _suite in "${_e2e_all_suites[@]}"; do
 	if _e2e_suite_enabled "$_suite"; then
 		source "$_E2E_DIR/tests_${_suite}.sh"
