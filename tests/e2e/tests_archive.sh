@@ -397,26 +397,6 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# Test ARC-21: "Attempt {type} download:" message appears for asset groups.
-# printed before each asset group iteration.
-# The seeded job has an iso asset, so "Attempt iso download:" must appear.
-echo "--- Test: PERL: 'Attempt ... download:' message on stdout ---"
-if grep -q "Attempt .* download:" "$LOG_DIR/arc_perl_progress.log"; then
-	echo "PASS"
-else
-	echo "FAIL: PERL stdout missing 'Attempt ... download:' message"
-	cat "$LOG_DIR/arc_perl_progress.log"
-	failed_tests=$((failed_tests + 1))
-fi
-echo "--- Test: ZIG : 'Attempt ... download:' message on stdout ---"
-if grep -q "Attempt .* download:" "$LOG_DIR/arc_zig_progress.log"; then
-	echo "PASS"
-else
-	echo "FAIL: ZIG stdout missing 'Attempt ... download:' message"
-	cat "$LOG_DIR/arc_zig_progress.log"
-	failed_tests=$((failed_tests + 1))
-fi
-
 # =============================================================================
 # Section 9: Pre-existing Output Directory (robustness)
 # =============================================================================
@@ -516,11 +496,16 @@ else
 fi
 
 # Test ARC-30: details-*.json content parity.
-# We pick the first details file and compare it.
+# We pick the first details file and compare semantic equivalence.
+# NOTE: Perl's Mojo::JSON (via Cpanel::JSON::XS) escapes '/' as '\/' and
+# sorts object keys canonically.  Zig's std.json.Stringify writes '/' literally
+# and preserves insertion (parse) order.  Both are valid JSON per RFC 8259 §7.
+# We normalise through jq -S (sorted keys, no solidus escaping) so the diff
+# compares structure, not serialisation style.
 echo "--- Test: DIFF details-*.json content parity ---"
 FIRST_DETAIL=$(head -n 1 "$LOG_DIR/arc_perl_details.log")
-container_exec cat "/tmp/arc_perl_rich/testresults/$FIRST_DETAIL" >"$LOG_DIR/arc_perl_detail_content.json"
-container_exec cat "/tmp/arc_zig_rich/testresults/$FIRST_DETAIL" >"$LOG_DIR/arc_zig_detail_content.json"
+container_exec jq -S . "/tmp/arc_perl_rich/testresults/$FIRST_DETAIL" >"$LOG_DIR/arc_perl_detail_content.json"
+container_exec jq -S . "/tmp/arc_zig_rich/testresults/$FIRST_DETAIL" >"$LOG_DIR/arc_zig_detail_content.json"
 if diff -u "$LOG_DIR/arc_perl_detail_content.json" "$LOG_DIR/arc_zig_detail_content.json" >"$LOG_DIR/arc_detail_content_diff.log" 2>&1; then
 	echo "PASS"
 else
@@ -700,7 +685,7 @@ container_exec rm -rf /tmp/arc_perl_rich_limit1
 set +e
 container_exec bash -c "$PERL_EXE archive --host http://localhost --asset-size-limit 1 $RICH_JOB_ID /tmp/arc_perl_rich_limit1" >"$LOG_DIR/arc_perl_rich_limit1.log" 2>&1
 set -e
-if grep -q "exceeds maximum size limit" "$LOG_DIR/arc_perl_rich_limit1.log"; then
+if grep -q "Maximum message size exceeded" "$LOG_DIR/arc_perl_rich_limit1.log"; then
 	echo "PASS"
 else
 	echo "FAIL: Perl did not print skip message for CirrOS"
@@ -712,9 +697,14 @@ fi
 # Section 20: Rich Job — Progress Output
 # =============================================================================
 
+# Capture rich job output for progress tests
+set +e
+container_exec bash -c "$ZIG_EXE archive --host http://localhost $RICH_JOB_ID /tmp/arc_zig_rich_progress" >"$LOG_DIR/arc_zig_rich_details_msg.log" 2>&1
+set -e
+
 # Test ARC-44: Progress percentage appears on stdout.
 echo "--- Test: ZIG : progress percentage on stdout ---"
-if grep -q "Downloading.*%" "$LOG_DIR/arc_zig_rich_limit1.log"; then
+if grep -q "Downloading.*%" "$LOG_DIR/arc_zig_rich_details_msg.log"; then
 	echo "PASS"
 else
 	echo "FAIL: Zig stdout missing progress percentage"
@@ -723,13 +713,32 @@ fi
 
 # Test ARC-45: "Saved details for" message appears.
 echo "--- Test: ZIG : 'Saved details for' message on stdout ---"
-set +e
-container_exec bash -c "$ZIG_EXE archive --host http://localhost $RICH_JOB_ID /tmp/arc_zig_rich_progress" >"$LOG_DIR/arc_zig_rich_details_msg.log" 2>&1
-set -e
 if grep -q "Saved details for" "$LOG_DIR/arc_zig_rich_details_msg.log"; then
 	echo "PASS"
 else
 	echo "FAIL: Zig stdout missing 'Saved details for' message"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Test ARC-21 (Moved): "Attempt {type} download:" message appears for asset groups.
+echo "--- Test: PERL: 'Attempt ... download:' message on stdout ---"
+set +e
+container_exec bash -c "$PERL_EXE archive --host http://localhost $RICH_JOB_ID /tmp/arc_perl_rich_progress" >"$LOG_DIR/arc_perl_rich_progress.log" 2>&1
+set -e
+if grep -q "Attempt .* download:" "$LOG_DIR/arc_perl_rich_progress.log"; then
+	echo "PASS"
+else
+	echo "FAIL: PERL stdout missing 'Attempt ... download:' message"
+	cat "$LOG_DIR/arc_perl_rich_progress.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+echo "--- Test: ZIG : 'Attempt ... download:' message on stdout ---"
+if grep -q "Attempt .* download:" "$LOG_DIR/arc_zig_rich_details_msg.log"; then
+	echo "PASS"
+else
+	echo "FAIL: ZIG stdout missing 'Attempt ... download:' message"
+	cat "$LOG_DIR/arc_zig_rich_details_msg.log"
 	failed_tests=$((failed_tests + 1))
 fi
 

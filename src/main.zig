@@ -219,10 +219,31 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
             args.quiet = true;
             continue;
         }
-        if (std.mem.eql(u8, arg, "--links")) {
+        if (std.mem.eql(u8, arg, "-L") or std.mem.eql(u8, arg, "--links")) {
             args.links = true;
             continue;
         }
+
+        // ---- reject api-only flags when subcommand is archive ----
+        if (args.path != null and std.mem.eql(u8, args.path.?, "archive")) {
+            const is_api_only =
+                std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--form") or
+                std.mem.eql(u8, arg, "-j") or std.mem.eql(u8, arg, "--json") or
+                std.mem.eql(u8, arg, "-X") or
+                std.mem.eql(u8, arg, "-d") or
+                std.mem.eql(u8, arg, "-D") or
+                std.mem.eql(u8, arg, "-a") or
+                std.mem.eql(u8, arg, "--method") or std.mem.startsWith(u8, arg, "--method=") or
+                std.mem.eql(u8, arg, "--data") or std.mem.startsWith(u8, arg, "--data=") or
+                std.mem.eql(u8, arg, "--data-file") or std.mem.startsWith(u8, arg, "--data-file=") or
+                std.mem.eql(u8, arg, "--header") or std.mem.startsWith(u8, arg, "--header=") or
+                std.mem.eql(u8, arg, "--param-file") or std.mem.startsWith(u8, arg, "--param-file=");
+            if (is_api_only) {
+                std.debug.print("Unknown flag: {s}\n", .{arg});
+                return error.UnknownFlag;
+            }
+        }
+
         if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--form")) {
             args.form = true;
             continue;
@@ -1781,7 +1802,7 @@ pub fn main() !void {
         if (err == error.InvalidCommand) std.process.exit(255);
         std.debug.print("Argument error: {s}\n", .{@errorName(err)});
         printHelp();
-        std.process.exit(1);
+        std.process.exit(255);
     };
     defer args.deinit(gpa);
 

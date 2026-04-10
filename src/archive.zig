@@ -363,6 +363,15 @@ pub fn runArchive(
                             const name = name_val.string;
                             const json_path = try std.fmt.allocPrint(allocator, "{s}/details-{s}.json", .{ resultdir, name });
                             defer allocator.free(json_path);
+                            // JSON formatting note: std.json.Stringify with default
+                            // options produces minified JSON, preserves parse-order
+                            // keys, and does NOT escape forward slashes.
+                            // The Perl reference (Mojo::JSON::encode_json) uses
+                            // Cpanel::JSON::XS with ->escape_slash and ->canonical,
+                            // which writes '/' as '\/' and sorts keys alphabetically.
+                            // Both are valid JSON per RFC 8259 §7 (solidus escaping
+                            // is optional).  The outputs are semantically equivalent:
+                            //   jq . perl_details.json == jq . zig_details.json
                             {
                                 var file = try std.fs.cwd().createFile(json_path, .{});
                                 defer file.close();
@@ -371,6 +380,8 @@ pub fn runArchive(
                                 try std.json.Stringify.value(tr_val, .{}, &fw.interface);
                                 try fw.interface.flush();
                             }
+                            try stdout.print("Saved details for {s}\n", .{json_path});
+                            try stdout.flush();
 
                             if (tr.get("details")) |details_val| {
                                 if (details_val == .array) {
