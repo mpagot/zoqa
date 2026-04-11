@@ -49,6 +49,8 @@ test "isAbsoluteUrl: relative paths" {
 // Argument parsing
 // ---------------------------------------------------------------------------
 
+pub const Subcommand = enum { api, archive };
+
 pub const Args = struct {
     // global
     host: ?[]const u8 = null,
@@ -70,8 +72,8 @@ pub const Args = struct {
     headers: std.ArrayList([]const u8),
     param_files: std.ArrayList([]const u8),
     retries: ?u32 = null,
-    // positionals: args.path holds the subcommand token; kv_params holds PATH + KV pairs
-    path: ?[]const u8 = null,
+    // Identified subcommand. Set by parseArgs; null only when args.help is true.
+    subcmd: ?Subcommand = null,
     // Positional arguments collected after the subcommand token, stored in order
     // of appearance on the command line. The layout is fixed by convention:
     //   [0]   — the API path (relative, e.g. "jobs/1234", or an absolute URL).
@@ -102,278 +104,298 @@ pub const Args = struct {
     }
 };
 
-/// Return the value for a flag that takes a single argument, handling both
-/// the space form (`--flag VALUE`, which advances `i`) and the equals form
-/// (`--flag=VALUE`, which slices the current token).  Returns `null` when
-/// `arg` does not match `flag` at all.
+/// Returns true when `token` — a single item from the command line —
+/// matches either `long` (e.g. `"--verbose"`) or, if provided, `short`
+/// (e.g. `"-v"`).  Pass `null` for `short` when no alias exists.
+fn matchBool(token: []const u8, long: []const u8, short: ?[]const u8) bool {
+    if (std.mem.eql(u8, token, long)) return true;
+    if (short) |s| return std.mem.eql(u8, token, s);
+    return false;
+}
+
+/// Returns the value for a flag that takes an argument, handling both the space
+/// form (`--flag VALUE`) and the equals form (`--flag=VALUE`).
+/// Returns `null` when `token` does not match either form.
 ///
-/// `flag` must be the long-form name including the leading dashes, e.g.
-/// `"--host"`.  Short aliases (e.g. `-X`) are handled by the caller as a
-/// plain `eql` check before this function is called.
+/// `token`  — the current argv token being tested.
+/// `i`      — current argv index (advanced by 1 when the space form matches).
+/// `argv`   — the full argv slice (used to fetch the next token for space form).
+/// `long`   — long-form flag name, e.g. `"--method"`.
+/// `short`  — short-form alias, e.g. `"-X"`, or `null` when none exists.
 ///
 /// Errors:
 ///   - `error.MissingValue` — space form was matched but no next token exists.
-fn flagValue(
-    arg: []const u8,
+fn matchValue(
+    token: []const u8,
     i: *usize,
     argv: []const []const u8,
-    flag: []const u8,
+    long: []const u8,
+    short: ?[]const u8,
 ) !?[]const u8 {
-    if (std.mem.eql(u8, arg, flag)) {
+    if (short) |s| {
+        if (std.mem.eql(u8, token, s)) {
+            i.* += 1;
+            if (i.* >= argv.len) return error.MissingValue;
+            return argv[i.*];
+        }
+    }
+    if (std.mem.eql(u8, token, long)) {
         i.* += 1;
         if (i.* >= argv.len) return error.MissingValue;
         return argv[i.*];
     }
-    // Equals form: arg must start with "flag=" and have at least one more byte.
-    if (arg.len > flag.len + 1 and
-        std.mem.startsWith(u8, arg, flag) and
-        arg[flag.len] == '=')
+    // Equals form: token must start with "long=" and have at least one more byte.
+    if (token.len > long.len + 1 and
+        std.mem.startsWith(u8, token, long) and
+        token[long.len] == '=')
     {
-        return arg[flag.len + 1 ..];
+        return token[long.len + 1 ..];
     }
     return null;
 }
 
-/// Parse command-line arguments into an `Args` struct.
-///
-/// This function implements a CLI parser that handles:
-/// - Global options (host, osd, o3, etc.)
-/// - Subcommand identification (currently only "api")
-/// - API-specific options (method, data, data-file, etc.)
-/// - Positional arguments (API path and KEY=VALUE parameters)
-/// - Argument terminator "--"
-/// - Both space-separated (`--host openqa.org`) and equals-separated (`--host=openqa.org`) flag formats
-///
-/// Arguments:
-/// - `allocator`: Used to allocate `std.ArrayList` buffers within the `Args` struct.
-/// - `argv`: The raw command-line argument slices (including argv[0]).
-///
-/// Returns: `Args` struct on success, or an error if a flag is unknown or a value is missing.
-/// The caller owns the `ArrayList` buffers in the returned `Args` and must call `deinit()` on them.
-pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
-    var args = Args{
-        .headers = .{},
-        .param_files = .{},
-        .kv_params = .{},
-    };
+// ---------------------------------------------------------------------------
+// Scoped flag dispatchers — one function per scope
+// ---------------------------------------------------------------------------
 
-    // The first argument (after argv[0]) must be the subcommand token.
-    // If it starts with '-' (other than -h/--help or the stop-flag '--'),
-    // reject with InvalidCommand to match Perl's Mojolicious dispatcher.
-    if (argv.len > 1) {
-        const first = argv[1];
-        const is_help = std.mem.eql(u8, first, "-h") or std.mem.eql(u8, first, "--help");
-        const is_stop = std.mem.eql(u8, first, "--");
-        if (!is_help and !is_stop and std.mem.startsWith(u8, first, "-")) {
-            std.debug.print("Invalid command \"{s}\".\n", .{first});
-            return error.InvalidCommand;
-        }
+/// Try to match `token` against a global flag (accepted by all subcommands).
+/// Returns `true` when the flag was consumed, `false` if unmatched.
+///
+/// `args`  — mutable Args struct being populated.
+/// `token` — the current argv token being tested.
+/// `i`     — current argv index cursor (passed through to matchValue).
+/// `argv`  — full argv slice (passed through to matchValue).
+fn tryGlobalFlag(
+    args: *Args,
+    token: []const u8,
+    i: *usize,
+    argv: []const []const u8,
+) !bool {
+    // Boolean global flags
+    if (matchBool(token, "--help", "-h")) {
+        args.help = true;
+        return true;
+    }
+    if (matchBool(token, "--osd", null)) {
+        args.osd = true;
+        return true;
+    }
+    if (matchBool(token, "--o3", null)) {
+        args.o3 = true;
+        return true;
+    }
+    if (matchBool(token, "--odn", null)) {
+        args.odn = true;
+        return true;
+    }
+    if (matchBool(token, "--verbose", "-v")) {
+        args.verbose = true;
+        return true;
+    }
+    if (matchBool(token, "--quiet", "-q")) {
+        args.quiet = true;
+        return true;
+    }
+    if (matchBool(token, "--links", "-L")) {
+        args.links = true;
+        return true;
+    }
+    if (matchBool(token, "--pretty", "-p")) {
+        args.pretty = true;
+        return true;
     }
 
-    var i: usize = 1; // skip argv[0]
-    var past_subcmd = false;
+    // Value global flags
+    if (try matchValue(token, i, argv, "--host", null)) |v| {
+        args.host = v;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--apikey", null)) |v| {
+        args.apikey = v;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--apisecret", null)) |v| {
+        args.apisecret = v;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--name", null)) |v| {
+        args.name = v;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--retries", "-r")) |v| {
+        args.retries = std.fmt.parseInt(u32, v, 10) catch return error.InvalidRetries;
+        return true;
+    }
+
+    return false;
+}
+
+/// Try to match `token` against a flag specific to the `api` subcommand
+/// (`zoqa api ...`).
+/// Returns `true` when the flag was consumed, `false` if unmatched.
+///
+/// `args`      — mutable Args struct being populated.
+/// `allocator` — used to allocate space in `args.headers` and `args.param_files`.
+/// `token`     — the current argv token being tested.
+/// `i`         — current argv index cursor (passed through to matchValue).
+/// `argv`      — full argv slice (passed through to matchValue).
+fn tryApiFlag(
+    args: *Args,
+    allocator: std.mem.Allocator,
+    token: []const u8,
+    i: *usize,
+    argv: []const []const u8,
+) !bool {
+    // Boolean api flags
+    if (matchBool(token, "--form", "-f")) {
+        args.form = true;
+        return true;
+    }
+    if (matchBool(token, "--json", "-j")) {
+        args.json = true;
+        return true;
+    }
+
+    // Value api flags
+    if (try matchValue(token, i, argv, "--method", "-X")) |v| {
+        args.method = v;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--data", "-d")) |v| {
+        args.data = v;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--data-file", "-D")) |v| {
+        args.data_file = v;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--header", "-a")) |v| {
+        try args.headers.append(allocator, v);
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--param-file", null)) |v| {
+        try args.param_files.append(allocator, v);
+        return true;
+    }
+
+    return false;
+}
+
+/// Try to match `token` against a flag specific to the `archive` subcommand
+/// (`zoqa archive ...`).
+/// Returns `true` when the flag was consumed, `false` if unmatched.
+///
+/// `args`  — mutable Args struct being populated.
+/// `token` — the current argv token being tested.
+/// `i`     — current argv index cursor (passed through to matchValue).
+/// `argv`  — full argv slice (passed through to matchValue).
+fn tryArchiveFlag(
+    args: *Args,
+    token: []const u8,
+    i: *usize,
+    argv: []const []const u8,
+) !bool {
+    if (matchBool(token, "--with-thumbnails", "-t")) {
+        args.with_thumbnails = true;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--asset-size-limit", "-l")) |v| {
+        args.asset_size_limit = std.fmt.parseInt(u64, v, 10) catch
+            return error.InvalidAssetSizeLimit;
+        return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// parseArgs — subcommand-dispatched CLI parser
+// ---------------------------------------------------------------------------
+
+/// Parse command-line arguments into an `Args` struct.
+///
+/// The parser works in two phases:
+///   1. Extract and validate the subcommand token at argv[1].
+///   2. Loop over the remaining arguments, dispatching to scoped flag
+///      handlers based on the identified subcommand.
+///
+/// A successful return guarantees `args.subcmd` is non-null unless
+/// `args.help` is true (the bare `zoqa -h` case).
+///
+/// Errors:
+///   - `error.MissingSubcommand` — no arguments after the program name.
+///   - `error.InvalidCommand` — a flag (starting with `-`) at position 1.
+///   - `error.UnknownSubcommand` — argv[1] is not a known subcommand.
+///   - `error.UnknownFlag` — unrecognised flag after the subcommand.
+///   - `error.MissingValue` — a value-taking flag has no following token.
+pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
+    var args = Args{
+        .headers = .empty,
+        .param_files = .empty,
+        .kv_params = .empty,
+    };
+
+    // Phase 1: subcommand extraction and validation.
+    if (argv.len < 2) return error.MissingSubcommand;
+
+    const first = argv[1];
+
+    // -h / --help at position 1: return immediately with help flag set.
+    if (std.mem.eql(u8, first, "-h") or std.mem.eql(u8, first, "--help")) {
+        args.help = true;
+        return args;
+    }
+
+    // Any other flag at position 1 is an error (matches Perl's Mojolicious
+    // dispatcher which rejects flags before the subcommand).
+    if (std.mem.startsWith(u8, first, "-")) {
+        std.debug.print("Invalid command \"{s}\".\n", .{first});
+        return error.InvalidCommand;
+    }
+
+    // Validate the subcommand token.
+    args.subcmd = std.meta.stringToEnum(Subcommand, first) orelse {
+        std.debug.print("Error: Unknown subcommand '{s}'.\n", .{first});
+        return error.UnknownSubcommand;
+    };
+
+    // Phase 2: parse flags and positionals after the subcommand.
+    var i: usize = 2;
     var stop_flags = false;
 
     while (i < argv.len) : (i += 1) {
-        const arg = argv[i];
+        const token = argv[i];
 
+        // After `--`, everything is a positional.
         if (stop_flags) {
-            if (!past_subcmd) {
-                past_subcmd = true;
-                args.path = arg;
-            } else if (args.path == null) {
-                args.path = arg;
-            } else {
-                try args.kv_params.append(allocator, arg);
-            }
+            try args.kv_params.append(allocator, token);
             continue;
         }
 
-        if (std.mem.eql(u8, arg, "--")) {
+        // "--" is the POSIX argument terminator: every token after it is
+        // a positional, even if it starts with "-".
+        if (std.mem.eql(u8, token, "--")) {
             stop_flags = true;
             continue;
         }
 
-        // ---- boolean flags ----
-        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-            args.help = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--osd")) {
-            args.osd = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--o3")) {
-            args.o3 = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--odn")) {
-            args.odn = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
-            args.verbose = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
-            args.quiet = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "-L") or std.mem.eql(u8, arg, "--links")) {
-            args.links = true;
-            continue;
+        // Global flags (accepted by all subcommands)
+        if (try tryGlobalFlag(&args, token, &i, argv)) continue;
+
+        // Subcommand-specific flags
+        // Safe: phase 1 ensures args.subcmd is non-null before parsing flags
+        switch (args.subcmd.?) {
+            .api => if (try tryApiFlag(&args, allocator, token, &i, argv)) continue,
+            .archive => if (try tryArchiveFlag(&args, token, &i, argv)) continue,
         }
 
-        // ---- reject api-only flags when subcommand is archive ----
-        if (args.path != null and std.mem.eql(u8, args.path.?, "archive")) {
-            const is_api_only =
-                std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--form") or
-                std.mem.eql(u8, arg, "-j") or std.mem.eql(u8, arg, "--json") or
-                std.mem.eql(u8, arg, "-X") or
-                std.mem.eql(u8, arg, "-d") or
-                std.mem.eql(u8, arg, "-D") or
-                std.mem.eql(u8, arg, "-a") or
-                std.mem.eql(u8, arg, "--method") or std.mem.startsWith(u8, arg, "--method=") or
-                std.mem.eql(u8, arg, "--data") or std.mem.startsWith(u8, arg, "--data=") or
-                std.mem.eql(u8, arg, "--data-file") or std.mem.startsWith(u8, arg, "--data-file=") or
-                std.mem.eql(u8, arg, "--header") or std.mem.startsWith(u8, arg, "--header=") or
-                std.mem.eql(u8, arg, "--param-file") or std.mem.startsWith(u8, arg, "--param-file=");
-            if (is_api_only) {
-                std.debug.print("Unknown flag: {s}\n", .{arg});
-                return error.UnknownFlag;
-            }
-        }
-
-        if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--form")) {
-            args.form = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "-j") or std.mem.eql(u8, arg, "--json")) {
-            args.json = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--pretty")) {
-            args.pretty = true;
-            continue;
-        }
-
-        // ---- flags that take a value (space or = form) ----
-        if (try flagValue(arg, &i, argv, "--host")) |v| {
-            args.host = v;
-            continue;
-        }
-        if (try flagValue(arg, &i, argv, "--apikey")) |v| {
-            args.apikey = v;
-            continue;
-        }
-        if (try flagValue(arg, &i, argv, "--apisecret")) |v| {
-            args.apisecret = v;
-            continue;
-        }
-
-        if (std.mem.eql(u8, arg, "-X")) {
-            i += 1;
-            if (i >= argv.len) return error.MissingValue;
-            args.method = argv[i];
-            continue;
-        }
-        if (try flagValue(arg, &i, argv, "--method")) |v| {
-            args.method = v;
-            continue;
-        }
-
-        if (std.mem.eql(u8, arg, "-d")) {
-            i += 1;
-            if (i >= argv.len) return error.MissingValue;
-            args.data = argv[i];
-            continue;
-        }
-        if (try flagValue(arg, &i, argv, "--data")) |v| {
-            args.data = v;
-            continue;
-        }
-
-        if (std.mem.eql(u8, arg, "-D")) {
-            i += 1;
-            if (i >= argv.len) return error.MissingValue;
-            args.data_file = argv[i];
-            continue;
-        }
-        if (try flagValue(arg, &i, argv, "--data-file")) |v| {
-            args.data_file = v;
-            continue;
-        }
-
-        if (std.mem.eql(u8, arg, "-a")) {
-            i += 1;
-            if (i >= argv.len) return error.MissingValue;
-            try args.headers.append(allocator, argv[i]);
-            continue;
-        }
-        if (try flagValue(arg, &i, argv, "--header")) |v| {
-            try args.headers.append(allocator, v);
-            continue;
-        }
-
-        if (try flagValue(arg, &i, argv, "--param-file")) |v| {
-            try args.param_files.append(allocator, v);
-            continue;
-        }
-
-        if (std.mem.eql(u8, arg, "-r")) {
-            i += 1;
-            if (i >= argv.len) return error.MissingValue;
-            args.retries = std.fmt.parseInt(u32, argv[i], 10) catch return error.InvalidRetries;
-            continue;
-        }
-        if (try flagValue(arg, &i, argv, "--retries")) |v| {
-            args.retries = std.fmt.parseInt(u32, v, 10) catch return error.InvalidRetries;
-            continue;
-        }
-
-        if (try flagValue(arg, &i, argv, "--name")) |v| {
-            args.name = v;
-            continue;
-        }
-
-        // ---- archive-specific flags ----
-        if (args.path != null and std.mem.eql(u8, args.path.?, "archive")) {
-            if (std.mem.eql(u8, arg, "-t") or std.mem.eql(u8, arg, "--with-thumbnails")) {
-                args.with_thumbnails = true;
-                continue;
-            }
-            if (std.mem.eql(u8, arg, "-l")) {
-                i += 1;
-                if (i >= argv.len) return error.MissingValue;
-                args.asset_size_limit = std.fmt.parseInt(u64, argv[i], 10) catch
-                    return error.InvalidAssetSizeLimit;
-                continue;
-            }
-            if (try flagValue(arg, &i, argv, "--asset-size-limit")) |v| {
-                args.asset_size_limit = std.fmt.parseInt(u64, v, 10) catch
-                    return error.InvalidAssetSizeLimit;
-                continue;
-            }
-        }
-
-        // ---- positionals / unrecognized flags ----
-
-        // Any unrecognized flag after the subcommand is an error.
-        if (std.mem.startsWith(u8, arg, "-")) {
-            std.debug.print("Unknown flag: {s}\n", .{arg});
+        // Unknown flag
+        if (std.mem.startsWith(u8, token, "-")) {
+            std.debug.print("Unknown flag: {s}\n", .{token});
             return error.UnknownFlag;
         }
 
-        // First positional = subcommand name (stored in path slot).
-        // Second positional = api PATH (stored in kv_params[0]).
-        // Remaining = KEY=VALUE params (stored in kv_params[1..]).
-        if (!past_subcmd) {
-            past_subcmd = true;
-            args.path = arg; // subcommand token
-            continue;
-        }
-
-        try args.kv_params.append(allocator, arg);
+        // Positional argument
+        try args.kv_params.append(allocator, token);
     }
 
     return args;
@@ -390,7 +412,7 @@ test "parseArgs: basic flags" {
     try std.testing.expectEqualStrings("http://example.com", parsed.host.?);
     try std.testing.expect(parsed.verbose);
     try std.testing.expect(parsed.quiet);
-    try std.testing.expectEqualStrings("api", parsed.path.?);
+    try std.testing.expect(parsed.subcmd.? == .api);
     try std.testing.expectEqualStrings("jobs/overview", parsed.kv_params.items[0]);
     try std.testing.expectEqualStrings("state=running", parsed.kv_params.items[1]);
 }
@@ -509,18 +531,42 @@ test "parseArgs: -h before subcommand is allowed" {
     try std.testing.expect(parsed.help);
 }
 
-test "parseArgs: stop flag --" {
+test "parseArgs: bare zoqa returns MissingSubcommand" {
     const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{"zoqa"};
+    try std.testing.expectError(error.MissingSubcommand, parseArgs(allocator, argv));
+}
+
+test "parseArgs: unknown subcommand returns UnknownSubcommand" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{ "zoqa", "banana" };
+    try std.testing.expectError(error.UnknownSubcommand, parseArgs(allocator, argv));
+}
+
+test "parseArgs: stop flag -- at position 1 is rejected" {
+    const allocator = std.testing.allocator;
+    // -- at argv[1] is now treated as any other flag-like token → InvalidCommand.
+    // (The old behaviour accepted it and treated everything after as positionals,
+    // but the resulting "subcommand" was never valid anyway.)
     const argv: []const []const u8 = &.{
         "zoqa", "--", "--osd", "jobs",
+    };
+    try std.testing.expectError(error.InvalidCommand, parseArgs(allocator, argv));
+}
+
+test "parseArgs: stop flag -- after subcommand" {
+    const allocator = std.testing.allocator;
+    // -- after the subcommand stops flag parsing; remaining tokens are positionals.
+    const argv: []const []const u8 = &.{
+        "zoqa", "api", "--", "--osd", "jobs",
     };
     var parsed = try parseArgs(allocator, argv);
     defer parsed.deinit(allocator);
 
-    // --osd after -- is treated as subcmd, not flag
     try std.testing.expect(!parsed.osd);
-    try std.testing.expectEqualStrings("--osd", parsed.path.?);
-    try std.testing.expectEqualStrings("jobs", parsed.kv_params.items[0]);
+    try std.testing.expect(parsed.subcmd.? == .api);
+    try std.testing.expectEqualStrings("--osd", parsed.kv_params.items[0]);
+    try std.testing.expectEqualStrings("jobs", parsed.kv_params.items[1]);
 }
 
 test "parseArgs: short flags and aliases" {
@@ -541,9 +587,8 @@ test "parseArgs: short flags and aliases" {
 
 // ---------------------------------------------------------------------------
 // Cross-subcommand flag rejection: api-specific flags must be rejected
-// when used with the archive subcommand.  Currently these flags are parsed
-// unconditionally, so every sub-case below is expected to FAIL until the
-// api-specific gate is added (symmetric with the archive gate at line 319).
+// when used with the archive subcommand.  The subcommand-dispatched parser
+// handles this structurally — tryApiFlag is only called for .api.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: api-specific flags rejected for archive" {
@@ -617,9 +662,8 @@ test "parseArgs: api-specific flags rejected for archive" {
 }
 
 // ---------------------------------------------------------------------------
-// Missing -L alias: upstream openqa-cli.yaml defines "links|L" but our
-// parseArgs only handles --links, not -L.  This test will FAIL until the
-// alias is added.
+// Missing -L alias: upstream openqa-cli.yaml defines "links|L".  The
+// subcommand-dispatched parser includes -L in tryGlobalFlag via matchBool.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: -L alias for --links" {
@@ -920,6 +964,32 @@ const RequestConfig = struct {
     }
 };
 
+/// ArchiveConfig is a transitional container: it exists to bridge
+/// the gap between raw CLI argument parsing (parseArgs → Args) and
+/// the library's public API (runArchive / ArchiveOptions).
+///
+/// It encapsulates the resolved arguments necessary to perform an archive download.
+/// All slices are either borrowed from `Args` or owned by the internal `arena`.
+/// Call `deinit()` to release owned memory.
+const ArchiveConfig = struct {
+    /// Resolved base URL of the target openQA instance (e.g. "https://openqa.suse.de").
+    /// Comes from `config.resolveHost` processing aliases and `--host`.
+    host: []const u8,
+    /// The numeric openQA job identifier (base-10).
+    job_id: u64,
+    /// Local filesystem path where the downloaded archive assets will be stored.
+    output_path: []const u8,
+    /// Archive-specific options (e.g. thumbnails, asset limits) derived from CLI flags.
+    options: zoqa.ArchiveOptions,
+    /// Arena allocator owning dynamically allocated fields like `host`.
+    arena: std.heap.ArenaAllocator,
+
+    /// Releases all dynamically allocated memory owned by this configuration.
+    fn deinit(self: *ArchiveConfig) void {
+        self.arena.deinit();
+    }
+};
+
 /// Transform parsed CLI arguments into a `RequestConfig` ready for `zoqa.openQAReq()`.
 ///
 /// This is the main post-`parseArgs` processing step. It performs everything
@@ -1146,6 +1216,61 @@ pub fn buildRequest(
         .params_encoded = params.items[0..params.items.len],
         .body = req_body,
         .headers = try custom_headers.toOwnedSlice(arena_alloc),
+        .arena = arena,
+    };
+}
+
+/// Transform parsed CLI arguments into an `ArchiveConfig` ready for `zoqa.runArchive()`.
+///
+/// Validates the presence of required positional arguments (`JOB_ID` and `OUTPUT_PATH`),
+/// parses the `JOB_ID` as a base-10 integer, and resolves the target host/alias.
+///
+/// It intentionally does NOT populate connection-related options like `.credentials`,
+/// `.retries`, or `.quiet`—these are supplied by the caller in `main()` from shared
+/// environment and configuration file resolution.
+///
+/// Arguments:
+///   - `allocator`: Used for internal allocations (like host resolution buffers).
+///     Owned buffers are tracked inside the returned `ArchiveConfig` and freed by its `deinit`.
+///   - `args`: Parsed CLI arguments from `parseArgs`. Borrowed — the caller must keep
+///     it alive for the lifetime of the returned `ArchiveConfig`.
+///
+/// Returns:
+///   - `ArchiveConfig` containing the resolved arguments.
+///
+/// Errors:
+///   - `error.MissingArchiveArgs`: If fewer than 2 positional arguments were provided.
+///   - `error.InvalidJobId`: If the `JOB_ID` positional argument is not a valid integer.
+fn buildArchiveRequest(
+    allocator: std.mem.Allocator,
+    args: *const Args,
+) !ArchiveConfig {
+    if (args.kv_params.items.len < 2) return error.MissingArchiveArgs;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const job_id = std.fmt.parseInt(u64, args.kv_params.items[0], 10) catch
+        return error.InvalidJobId;
+    const output_path = args.kv_params.items[1];
+
+    const host_res = try config.resolveHost(
+        arena_alloc,
+        args.osd,
+        args.o3,
+        args.odn,
+        args.host,
+    );
+
+    return .{
+        .host = host_res.url,
+        .job_id = job_id,
+        .output_path = output_path,
+        .options = .{
+            .with_thumbnails = args.with_thumbnails,
+            .asset_size_limit = args.asset_size_limit orelse 209_715_200,
+        },
         .arena = arena,
     };
 }
@@ -1509,6 +1634,101 @@ test "buildRequest: default User-Agent is openQAclient" {
     try std.testing.expect(found);
 }
 
+test "buildArchiveRequest: valid positional arguments" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "archive", "12345", "/tmp/out",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    var cfg = try buildArchiveRequest(allocator, &parsed);
+    defer cfg.deinit();
+
+    try std.testing.expectEqual(@as(u64, 12345), cfg.job_id);
+    try std.testing.expectEqualStrings("/tmp/out", cfg.output_path);
+    try std.testing.expectEqualStrings("http://localhost", cfg.host);
+}
+
+test "buildArchiveRequest: invalid job id returns error" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "archive", "notanumber", "/tmp/out",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    try std.testing.expectError(error.InvalidJobId, buildArchiveRequest(allocator, &parsed));
+}
+
+test "buildArchiveRequest: missing positional arguments returns error" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "archive", "12345",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    try std.testing.expectError(error.MissingArchiveArgs, buildArchiveRequest(allocator, &parsed));
+}
+
+test "buildArchiveRequest: --osd flag resolves to openqa.suse.de" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "archive", "--osd", "12345", "/tmp/out",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    var cfg = try buildArchiveRequest(allocator, &parsed);
+    defer cfg.deinit();
+
+    try std.testing.expect(std.mem.indexOf(u8, cfg.host, "openqa.suse.de") != null);
+}
+
+test "buildArchiveRequest: --o3 flag resolves to openqa.opensuse.org" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "archive", "--o3", "12345", "/tmp/out",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    var cfg = try buildArchiveRequest(allocator, &parsed);
+    defer cfg.deinit();
+
+    try std.testing.expect(std.mem.indexOf(u8, cfg.host, "openqa.opensuse.org") != null);
+}
+
+test "buildArchiveRequest: archive specific flags" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "archive", "--with-thumbnails", "--asset-size-limit", "1024", "12345", "/tmp/out",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    var cfg = try buildArchiveRequest(allocator, &parsed);
+    defer cfg.deinit();
+
+    try std.testing.expect(cfg.options.with_thumbnails);
+    try std.testing.expectEqual(@as(u64, 1024), cfg.options.asset_size_limit);
+}
+
+test "buildArchiveRequest: absolute url in host adds https via resolveHost" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "archive", "--host", "myhost.example.com", "12345", "/tmp/out",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    var cfg = try buildArchiveRequest(allocator, &parsed);
+    defer cfg.deinit();
+
+    try std.testing.expect(std.mem.startsWith(u8, cfg.host, "https://myhost.example.com"));
+}
+
 /// Resolve and merge API credentials from all possible sources according to priority.
 ///
 /// Authentication to the openQA API requires two parts: a key and a secret.
@@ -1800,6 +2020,10 @@ pub fn main() !void {
 
     var args = parseArgs(gpa, argv) catch |err| {
         if (err == error.InvalidCommand) std.process.exit(255);
+        if (err == error.MissingSubcommand or err == error.UnknownSubcommand) {
+            printHelp();
+            std.process.exit(255);
+        }
         std.debug.print("Argument error: {s}\n", .{@errorName(err)});
         printHelp();
         std.process.exit(255);
@@ -1811,16 +2035,8 @@ pub fn main() !void {
         return;
     }
 
-    // args.path holds the subcommand token ("api").
-    const subcmd = args.path orelse {
-        std.debug.print("Error: Missing subcommand. Use 'api'.\n", .{});
-        std.process.exit(1);
-    };
-
-    if (!std.mem.eql(u8, subcmd, "api") and !std.mem.eql(u8, subcmd, "archive")) {
-        std.debug.print("Error: Unknown subcommand '{s}'. Only 'api' and 'archive' are supported.\n", .{subcmd});
-        std.process.exit(1);
-    }
+    // parseArgs guarantees subcmd is non-null when help is false.
+    const subcmd = args.subcmd.?;
 
     // Read --data-file content before buildRequest (filesystem I/O)
     var data_file_buf: ?[]u8 = null;
@@ -1839,25 +2055,35 @@ pub fn main() !void {
     var req_cfg: ?RequestConfig = null;
     defer if (req_cfg) |*cfg| cfg.deinit();
 
-    if (std.mem.eql(u8, subcmd, "api")) {
-        req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
-            if (err == error.MissingPath) {
-                printApiHelp();
-                std.process.exit(255);
-            }
-            std.debug.print("Request build error: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, subcmd, "archive")) {
-        if (args.kv_params.items.len < 2) {
-            printArchiveHelp();
-            std.process.exit(255);
-        }
+    var archive_cfg: ?ArchiveConfig = null;
+    defer if (archive_cfg) |*cfg| cfg.deinit();
+
+    switch (subcmd) {
+        .api => {
+            req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
+                if (err == error.MissingPath) {
+                    printApiHelp();
+                    std.process.exit(255);
+                }
+                std.debug.print("Request build error: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            };
+        },
+        .archive => {
+            archive_cfg = buildArchiveRequest(gpa, &args) catch |err| {
+                if (err == error.MissingArchiveArgs) {
+                    printArchiveHelp();
+                    std.process.exit(255);
+                }
+                std.debug.print("Archive request build error: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            };
+        },
     }
 
     // Resolve credentials
     // Extract hostname from the resolved host URL for config file lookup.
-    const host_for_uri = if (req_cfg) |cfg| cfg.host else args.host orelse "localhost";
+    const host_for_uri = if (req_cfg) |cfg| cfg.host else if (archive_cfg) |cfg| cfg.host else args.host orelse "localhost";
     const hostname = blk: {
         const uri = std.Uri.parse(host_for_uri) catch {
             break :blk host_for_uri;
@@ -1930,74 +2156,52 @@ pub fn main() !void {
         break :blk std.fmt.parseFloat(f64, env_s) catch 1.0;
     };
 
-    if (std.mem.eql(u8, subcmd, "api")) {
-        // Execute the request via the library's public API entry point.
-        var client = std.http.Client{ .allocator = gpa };
-        defer client.deinit();
+    switch (subcmd) {
+        .api => {
+            // Execute the request via the library's public API entry point.
+            var client = std.http.Client{ .allocator = gpa };
+            defer client.deinit();
 
-        const cfg = req_cfg.?;
-        const resp = zoqa.openQAReq(cfg.host, cfg.path, .{
-            .allocator = gpa,
-            .method = cfg.method,
-            .headers = cfg.headers,
-            .params = cfg.params_encoded,
-            .body = cfg.body,
-            .credentials = creds,
-            .retries = retries,
-            .quiet = args.quiet,
-            .connect_timeout_s = connect_timeout_s,
-            .retry_sleep_s = retry_sleep_s,
-            .retry_factor = retry_factor,
-        }, &client) catch |err| {
-            if (!args.quiet) std.debug.print("Fatal: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-        defer resp.deinit();
+            const cfg = req_cfg.?;
+            const resp = zoqa.openQAReq(cfg.host, cfg.path, .{
+                .allocator = gpa,
+                .method = cfg.method,
+                .headers = cfg.headers,
+                .params = cfg.params_encoded,
+                .body = cfg.body,
+                .credentials = creds,
+                .retries = retries,
+                .quiet = args.quiet,
+                .connect_timeout_s = connect_timeout_s,
+                .retry_sleep_s = retry_sleep_s,
+                .retry_factor = retry_factor,
+            }, &client) catch |err| {
+                if (!args.quiet) std.debug.print("Fatal: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            };
+            defer resp.deinit();
 
-        printResponse(gpa, resp, args.verbose, args.quiet, args.links, args.pretty);
+            printResponse(gpa, resp, args.verbose, args.quiet, args.links, args.pretty);
 
-        std.process.exit(resp.exitCode());
-    } else if (std.mem.eql(u8, subcmd, "archive")) {
-        if (args.kv_params.items.len < 2) {
-            printArchiveHelp();
-            std.process.exit(255);
-        }
-        const job_id = std.fmt.parseInt(u64, args.kv_params.items[0], 10) catch {
-            std.debug.print("Invalid JOB_ID: {s}\n", .{args.kv_params.items[0]});
-            std.process.exit(1);
-        };
-        const output_path = args.kv_params.items[1];
+            std.process.exit(resp.exitCode());
+        },
+        .archive => {
+            var cfg = &archive_cfg.?;
+            cfg.options.credentials = creds;
+            cfg.options.quiet = args.quiet;
+            cfg.options.retries = retries;
+            cfg.options.retry_sleep_s = retry_sleep_s;
+            cfg.options.retry_factor = retry_factor;
 
-        const archive_opts = zoqa.ArchiveOptions{
-            .with_thumbnails = args.with_thumbnails,
-            .asset_size_limit = args.asset_size_limit orelse 209_715_200,
-            .credentials = creds,
-            .quiet = args.quiet,
-            .retries = retries,
-            .retry_sleep_s = retry_sleep_s,
-            .retry_factor = retry_factor,
-        };
+            var client = std.http.Client{ .allocator = gpa };
+            defer client.deinit();
 
-        const host_res = config.resolveHost(
-            gpa,
-            args.osd,
-            args.o3,
-            args.odn,
-            args.host,
-        ) catch |err| {
-            std.debug.print("Host resolution error: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-        defer if (host_res.allocated) gpa.free(host_res.url);
-
-        var client = std.http.Client{ .allocator = gpa };
-        defer client.deinit();
-
-        zoqa.runArchive(gpa, &client, host_res.url, job_id, output_path, archive_opts) catch |err| {
-            std.debug.print("archive: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-        std.process.exit(0);
+            zoqa.runArchive(gpa, &client, cfg.host, cfg.job_id, cfg.output_path, cfg.options) catch |err| {
+                std.debug.print("archive: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            };
+            std.process.exit(0);
+        },
     }
 }
 
