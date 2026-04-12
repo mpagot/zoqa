@@ -56,6 +56,7 @@ single static binaries, and need zero runtime dependencies.
 | **Container-friendly** | Needs Perl + deps installed | Copy one file, done |
 | **Wall-time per request (`api`)** | ~0.6–2.2 s | ~0.020–0.085 s (30–50× faster) |
 | **Peak memory (RSS) (`api`)** | ~57 MB | ~3.7 MB |
+| **Small `archive` download (~21MB)** | ~1.0 s | ~0.3 s (3× faster) |
 | **Full `archive` download (2.6GB)** | ~15m 28s | ~10m 20s (50% faster) |
 | **Peak memory (RSS) (`archive`)** | ~69 MB | ~14 MB (4.8× less memory) |
 | **CPU user time (`archive`)** | ~111.8 s | ~7.8 s (14× less CPU time) |
@@ -149,10 +150,10 @@ The binary is at `zig-out/bin/zoqa`.
 
 ## Project status
 
-zoqa is in active development. The `api` subcommand is fully implemented, with all
-35 of 35 end-to-end tests passing against a live openQA instance.
+zoqa is in active development. The `api` and `archive` subcommands are fully implemented,
+with a comprehensive suite of end-to-end tests passing against a containerized openQA instance.
 
-The remaining `openqa-cli` subcommands (`archive`, `monitor`, `schedule`) and the
+The remaining `openqa-cli` subcommands (`monitor`, `schedule`) and the
 companion scripts (`openqa-clone-job`, `openqa-clone-custom-git-refspec`) are
 planned.
 

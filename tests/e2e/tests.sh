@@ -201,7 +201,7 @@ _e2e_suite_enabled() {
 # ShellCheck cannot follow a dynamic source path; the individual tests_*.sh
 # files are checked independently when `make e2e-lint` is run.
 # shellcheck disable=SC1090
-_e2e_all_suites=(core auth data output robustness retry_knobs archive perf)
+_e2e_all_suites=(core auth data output robustness retry_knobs archive help perf)
 for _suite in "${_e2e_all_suites[@]}"; do
 	if _e2e_suite_enabled "$_suite"; then
 		source "$_E2E_DIR/tests_${_suite}.sh"

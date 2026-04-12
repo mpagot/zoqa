@@ -125,6 +125,13 @@ if [[ -f "zig-out/bin/zoqa" ]]; then
 			echo "    zoqa mtime : $(stat -f '%Sm' "$_zoqa_bin")"
 		fi
 	fi
+	if command -v readelf >/dev/null 2>&1; then
+		if readelf -S "$_zoqa_bin" 2>/dev/null | grep -q "debug_aranges"; then
+			echo "    zoqa build : Debug"
+		else
+			echo "    zoqa build : Release"
+		fi
+	fi
 	unset _zoqa_bin
 fi
 

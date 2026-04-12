@@ -2020,18 +2020,29 @@ pub fn main() !void {
 
     var args = parseArgs(gpa, argv) catch |err| {
         if (err == error.InvalidCommand) std.process.exit(255);
-        if (err == error.MissingSubcommand or err == error.UnknownSubcommand) {
-            printHelp();
+        if (err == error.MissingSubcommand) {
+            printHelp(false);
+            return;
+        }
+        if (err == error.UnknownSubcommand) {
+            printHelp(true);
             std.process.exit(255);
         }
         std.debug.print("Argument error: {s}\n", .{@errorName(err)});
-        printHelp();
+        printHelp(true);
         std.process.exit(255);
     };
     defer args.deinit(gpa);
 
     if (args.help) {
-        printHelp();
+        if (args.subcmd) |sc| {
+            switch (sc) {
+                .api => printApiHelp(false),
+                .archive => printArchiveHelp(false),
+            }
+        } else {
+            printHelp(false);
+        }
         return;
     }
 
@@ -2062,7 +2073,7 @@ pub fn main() !void {
         .api => {
             req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
                 if (err == error.MissingPath) {
-                    printApiHelp();
+                    printApiHelp(true);
                     std.process.exit(255);
                 }
                 std.debug.print("Request build error: {s}\n", .{@errorName(err)});
@@ -2072,7 +2083,7 @@ pub fn main() !void {
         .archive => {
             archive_cfg = buildArchiveRequest(gpa, &args) catch |err| {
                 if (err == error.MissingArchiveArgs) {
-                    printArchiveHelp();
+                    printArchiveHelp(true);
                     std.process.exit(255);
                 }
                 std.debug.print("Archive request build error: {s}\n", .{@errorName(err)});
@@ -2210,74 +2221,81 @@ pub fn main() !void {
 // ---------------------------------------------------------------------------
 
 const help_global_options =
-    \\Global Options:
-    \\  --host HOST          Base URL of the OpenQA instance
-    \\  --osd                Alias for --host http://openqa.suse.de
-    \\  --o3                 Alias for --host https://openqa.opensuse.org
-    \\  --odn                Alias for --host https://openqa.debian.net
-    \\  --apikey KEY         Override API public key
-    \\  --apisecret SECRET   Override API secret
-    \\  --name STRING        User-Agent name (default: openQAclient)
-    \\  -v, --verbose        Print HTTP response status line and headers to stdout
-    \\  -q, --quiet          Suppress non-fatal error messages on stderr
-    \\  --links              Parse Link response header and print rel: url pairs to stderr
-    \\  -h, --help           Display this help and exit
+    \\Options (for all commands):
+    \\    --host STR         Base URL of the OpenQA instance
+    \\    --osd              Alias for --host http://openqa.suse.de
+    \\    --o3               Alias for --host https://openqa.opensuse.org
+    \\    --odn              Alias for --host https://openqa.debian.net
+    \\    --apikey STR       Override API public key
+    \\    --apisecret STR    Override API secret
+    \\    --name STR         User-Agent name (default: openQAclient)
+    \\    --verbose (or -v)  Print HTTP response status line and headers to stdout
+    \\    --quiet (or -q)    Suppress non-fatal error messages on stderr
+    \\    --links (or -L)    Parse Link response header and print rel: url pairs to stderr
+    \\    --pretty (or -p)   Pretty-print JSON response body
+    \\    --help (or -h)     Display this help and exit
     \\
 ;
 
 const help_api_options =
-    \\API Options:
-    \\  -X, --method METHOD        HTTP method (default: GET)
-    \\  -d, --data BODY            Raw request body
-    \\  -D, --data-file FILE       Read body from file (- = stdin)
-    \\  -f, --form                 Treat data as JSON object, re-encode as form urlencoded
-    \\  -j, --json                 Set Content-Type: application/json
-    \\  -a, --header NAME:VALUE    Extra request header (repeatable)
-    \\  --param-file KEY=FILE      Append file contents as param (repeatable)
-    \\  -r, --retries N            Retry count on 502/503/connection error (default: 0)
-    \\  -p, --pretty               Pretty-print JSON response body
+    \\Options for api:
+    \\    --method STR (or -X)     HTTP method (default: GET)
+    \\    --data STR (or -d)       Raw request body
+    \\    --data-file STR (or -D)  Read body from file (- = stdin)
+    \\    --form (or -f)           Treat data as JSON object, re-encode as form urlencoded
+    \\    --json (or -j)           Set Content-Type: application/json
+    \\    --header STR... (or -a)  Extra request header (repeatable)
+    \\    --param-file STR...      Append file contents as param (repeatable)
+    \\    --retries INT (or -r)    Retry count on 502/503/connection error (default: 0)
     \\
 ;
 
 const help_archive_options =
-    \\Archive Options:
-    \\  -t, --with-thumbnails   Download thumbnails for screenshots
-    \\  -l, --asset-size-limit  Skip downloading assets larger than this limit (default 200MiB)
+    \\Options for archive:
+    \\    --with-thumbnails (or -t)       Download thumbnails for screenshots
+    \\    --asset-size-limit INT (or -l)  Skip downloading assets larger than this limit (default 200MiB)
     \\
 ;
 
-fn printHelp() void {
-    std.debug.print(
-        "Usage: zoqa [GLOBAL OPTIONS] SUBCOMMAND [OPTIONS] ...\n\n" ++
-            "Subcommands:\n" ++
-            "  api       Make an openQA API request\n" ++
-            "  archive   Download assets and test results from a job\n\n" ++
-            help_global_options ++
-            help_api_options ++
-            help_archive_options,
-        .{},
-    );
+fn printHelp(is_error: bool) void {
+    var buf: [4096]u8 = undefined;
+    var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
+    const w = &out_writer.interface;
+    w.print(
+        "{s}\n" ++
+            " api       Make an openQA API request\n" ++
+            " archive   Download assets and test results from a job\n\n" ++
+            "See 'zoqa COMMAND --help' for more information on a specific command.\n",
+        .{help_global_options},
+    ) catch {};
+    w.flush() catch {};
 }
 
-/// Print the `api` subcommand usage block to stderr.
+/// Print the `api` subcommand usage block.
 /// Called when PATH is missing (exit 255, per Perl reference behavior).
-fn printApiHelp() void {
-    std.debug.print(
-        "Usage: zoqa api [OPTIONS] PATH [KEY=VALUE ...]\n\n" ++
-            "Make an openQA API request. PATH is the API endpoint (e.g. \"jobs\") or an absolute URL.\n\n" ++
-            help_api_options ++
-            help_global_options,
-        .{},
-    );
+fn printApiHelp(is_error: bool) void {
+    var buf: [4096]u8 = undefined;
+    var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
+    const w = &out_writer.interface;
+    w.print(
+        "Usage: zoqa api [OPTIONS] PATH [PARAMS]\n\n" ++
+            "{s}" ++
+            "{s}",
+        .{ help_global_options, help_api_options },
+    ) catch {};
+    w.flush() catch {};
 }
 
-/// Print the `archive` subcommand usage block to stderr.
-fn printArchiveHelp() void {
-    std.debug.print(
-        "Usage: zoqa archive [OPTIONS] JOB_ID OUTPUT_PATH\n\n" ++
-            "Download assets and test results from a job into a local directory.\n\n" ++
-            help_archive_options ++
-            help_global_options,
-        .{},
-    );
+/// Print the `archive` subcommand usage block.
+fn printArchiveHelp(is_error: bool) void {
+    var buf: [4096]u8 = undefined;
+    var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
+    const w = &out_writer.interface;
+    w.print(
+        "Usage: zoqa archive [OPTIONS] JOB PATH\n\n" ++
+            "{s}" ++
+            "{s}",
+        .{ help_global_options, help_archive_options },
+    ) catch {};
+    w.flush() catch {};
 }
