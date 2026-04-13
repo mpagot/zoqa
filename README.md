@@ -51,17 +51,25 @@ single static binaries, and need zero runtime dependencies.
 | **Runtime deps** | Perl 5, ~15 CPAN modules | None (static binary) |
 | **Binary size** | N/A (interpreted) | ~2 MB |
 | **Startup** | Perl interpreter + module loading | Instant (compiled native code) |
-| **Cross-compilation** | N/A | 6 targets from a single build host |
-| **Platforms shipped** | Wherever Perl runs | Linux, macOS, Windows (x86_64 + aarch64) |
+| **Platforms** | Wherever Perl runs | Linux, macOS, Windows (x86_64 + aarch64) — 6 targets from a single build host |
 | **Container-friendly** | Needs Perl + deps installed | Copy one file, done |
-| **Wall-time per request (`api`)** | ~0.6–2.2 s | ~0.020–0.085 s (30–50× faster) |
-| **Peak memory (RSS) (`api`)** | ~57 MB | ~3.7 MB |
-| **Small `archive` download (~21MB)** | ~1.0 s | ~0.3 s (3× faster) |
-| **Full `archive` download (2.6GB)** | ~15m 28s | ~10m 20s (50% faster) |
-| **Peak memory (RSS) (`archive`)** | ~69 MB | ~14 MB (4.8× less memory) |
-| **CPU user time (`archive`)** | ~111.8 s | ~7.8 s (14× less CPU time) |
+| **Wall-time per `api` call** | ~0.5–1.1 s | ~0.02–0.08 s (12–37× faster) |
+| **Peak memory (`api`)** | ~57 MB | ~3.7 MB |
+| **Wall-time `archive` (~21 MB)** | ~1.0 s | ~0.4 s (~3× faster) |
+| **Peak memory (`archive`, ~21 MB)** | ~60 MB | ~4 MB |
+| **Wall-time `archive` (2.6 GB) ‡** | ~15m 28s | ~10m 20s (~50% faster) |
+| **Peak memory (`archive`, 2.6 GB) ‡** | ~69 MB | ~14 MB (4.8× less) |
+| **CPU user time (`archive`, 2.6 GB) ‡** | ~112 s | ~8 s (14× less) |
 
-*zoqa streams large `archive` downloads directly to disk using ~192 KB of stack buffers regardless of file size. `openqa-cli` buffers each response through a `/tmp` Mojolicious temporary file before moving it — requiring double the disk space and 5× the memory.*
+<sup>‡ Measured manually on a dedicated host, not in the containerised E2E suite.</sup>
+
+The `api` speedup is **Mojolicious startup overhead** (~730 ms avg), not HTTP
+performance — both tools complete the network round-trip in similar time. The
+large-file `archive` gap is a genuine **architectural difference**: zoqa streams
+to disk; openqa-cli buffers through a `/tmp` temp file.
+
+See [docs/compare_performance.md](docs/compare_performance.md) for the full
+analysis, interpreter baseline measurements, and methodology.
 
 
 ## Quick start

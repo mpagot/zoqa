@@ -42,6 +42,15 @@
 #   If the RSS value for either process is 0 (measurement failed), a note
 #   is printed and the comparison is skipped.
 #
+# INTERPRETER BASELINE (perf_baseline):
+#   Measures the fixed overhead of loading the Perl interpreter and the
+#   Mojolicious framework, using trivial Perl one-liners that do no real work.
+#   This lets readers decompose openqa-cli timings into "framework startup"
+#   vs. "actual HTTP + business logic".  Two measurements are collected:
+#     PERF-B1: perl -e '1'                     — bare interpreter startup
+#     PERF-B2: perl -MMojo::UserAgent -e '1'   — interpreter + framework load
+#   Results are reported separately in the summary under "Interpreter Baseline".
+#
 # SCENARIOS COVERED:
 #   Plain request     — baseline GET with no extra flag (network + JSON decode only)
 #   Config-file read  — OPENQA_CONFIG=/etc/openqa forces both impls to read
@@ -175,6 +184,75 @@ _perf_timev_field() {
 	container_exec bash -c \
 		"grep '$field' /tmp/_perf_timev_${tag}.txt 2>/dev/null | cut -d: -f2 | tr -d ' \t'" \
 		</dev/null 2>/dev/null
+}
+
+# -----------------------------------------------------------------------------
+# perf_baseline LABEL CMD [RUNS]
+#
+# Measures the fixed overhead of a Perl command that does no real work.
+# Used to decompose openqa-cli timings: how much is Perl startup vs. actual
+# application logic?  Collects wall-clock timing (RUNS repetitions, default 3)
+# and peak RSS via /usr/bin/time -v.
+#
+# Results are accumulated into _perf_baseline_report for the summary block.
+# No PASS/FAIL counter is touched.
+# -----------------------------------------------------------------------------
+perf_baseline() {
+	local label=$1
+	local cmd=$2
+	local runs=${3:-3}
+
+	_perf_b_seq=$((_perf_b_seq + 1))
+	local tid="PERF-B${_perf_b_seq}"
+	echo "  $tid  $label — baseline (${runs} runs + RSS)..."
+
+	# --- Wall-clock timing ---
+	local t times=()
+	for _ in $(seq 1 "$runs"); do
+		t=$(_perf_wall_time_s "" "$cmd")
+		times+=("$t")
+	done
+
+	local agg
+	agg=$(container_exec bash -c "echo \"${times[*]}\" | awk '{min=\$1; max=\$1; sum=0; for(i=1;i<=NF;i++) {if(\$i<min) min=\$i; if(\$i>max) max=\$i; sum+=\$i} printf \"min=%.3f  avg=%.3f  max=%.3f\", min, sum/NF, max}'")
+
+	local list=""
+	for t in "${times[@]}"; do list+=" ${t}s"; done
+
+	# --- Peak RSS ---
+	local rss="0"
+	if [[ "${DRY_RUN:-false}" != "true" ]]; then
+		# Derive tag for /usr/bin/time -v temp file
+		local tag
+		tag=$(echo "$cmd" | cut -d' ' -f1 | tr -cs 'a-zA-Z0-9_-' '_')
+
+		container_exec bash -c \
+			"/usr/bin/time -v $cmd >/dev/null 2>/tmp/_perf_timev_${tag}.txt" \
+			</dev/null 2>/dev/null || true
+
+		rss=$(container_exec bash -c \
+			"grep 'Maximum resident set size' /tmp/_perf_timev_${tag}.txt | cut -d: -f2 | tr -d ' \t'" \
+			</dev/null 2>/dev/null)
+
+		local minor_faults
+		minor_faults=$(container_exec bash -c \
+			"grep 'Minor (reclaiming a frame) page faults' /tmp/_perf_timev_${tag}.txt 2>/dev/null | cut -d: -f2 | tr -d ' \t'" \
+			</dev/null 2>/dev/null)
+		local user_time
+		user_time=$(container_exec bash -c \
+			"grep 'User time' /tmp/_perf_timev_${tag}.txt 2>/dev/null | cut -d: -f2 | tr -d ' \t'" \
+			</dev/null 2>/dev/null)
+	fi
+
+	# Build report block
+	_perf_baseline_report+=("$tid  $label")
+	_perf_baseline_report+=("  wall:$list  ($agg)")
+	if [[ "${DRY_RUN:-false}" == "true" ]]; then
+		_perf_baseline_report+=("  peak RSS: [DRY-RUN]   minor faults: [DRY-RUN]   user time: [DRY-RUN]")
+	else
+		_perf_baseline_report+=("  peak RSS: ${rss:-?} kB   minor faults: ${minor_faults:-?}   user time: ${user_time:-?}s")
+	fi
+	_perf_baseline_report+=("")
 }
 
 # -----------------------------------------------------------------------------
@@ -499,14 +577,36 @@ perf_rss_monitor() {
 # Tests
 # =============================================================================
 
+# --- Interpreter baseline ----------------------------------------------------
+#
+# These measure the fixed overhead of starting Perl — with and without loading
+# the Mojolicious framework — using trivial one-liners that do no real work.
+# The results let readers decompose openqa-cli timings: of the ~0.7 s a typical
+# openqa-cli api call takes, how much is Perl interpreter startup and how much
+# is Mojolicious module loading?  The remainder is actual HTTP + business logic
+# — which is on the same order of magnitude as zoqa.
+
+# Test PERF-B1: bare Perl interpreter startup.
+# 'perl -e 1' loads only the interpreter core: argument parsing, bytecode
+# compilation of a trivial program, and immediate exit.  Expected: ~15-30 ms.
+perf_baseline "perl bare startup (perl -e '1')" "perl -e '1'" 5
+
+# Test PERF-B2: Perl + Mojolicious framework load.
+# 'perl -MMojo::UserAgent -e 1' forces Perl to locate and compile the full
+# Mojolicious dependency tree (UA, JSON, IOLoop, etc.) before exiting.
+# This is the minimum cost openqa-cli pays before executing a single line of
+# application code.  Expected: ~400-600 ms, ~45-55 MB RSS.
+perf_baseline "perl + Mojo::UserAgent load (perl -MMojo::UserAgent -e '1')" "perl -MMojo::UserAgent -e '1'" 5
+
 # --- Scenario: plain request (baseline) --------------------------------------
 #
 # No config file, no extra flags.  Exercises the minimal code path: argument
 # parsing → HTTP GET → JSON decode → stdout write.
 
 # Test PERF-T1: Wall-clock timing — jobs/overview (list endpoint).
-# openqa-cli loads the full Perl + Mojolicious runtime on every invocation.
-# zoqa is a statically linked binary; startup is typically 30-50× faster.
+# openqa-cli loads the full Perl + Mojolicious runtime on every invocation;
+# most of its wall-clock time is framework startup (see PERF-B2 above).
+# zoqa is a statically linked binary with near-instant startup.
 perf_timing "plain jobs/overview" "" "jobs/overview" 3
 
 # Test PERF-T2: Wall-clock timing — jobs/:id (single-resource endpoint).
@@ -627,6 +727,8 @@ perf_rss_monitor "monitor 5 completed jobs" "" "${_PERF_MON_IDS[*]}"
 echo ""
 echo "=== [perf] Performance Summary ==="
 echo ""
+echo "--- Interpreter Baseline (Perl-only, no network) ---"
+for line in "${_perf_baseline_report[@]}"; do echo "$line"; done
 echo "--- Timing (wall-clock seconds) ---"
 for line in "${_perf_timing_report[@]}"; do echo "$line"; done
 echo "--- RSS & Process Metrics ---"
