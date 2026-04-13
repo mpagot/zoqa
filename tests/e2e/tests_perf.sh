@@ -64,9 +64,15 @@
 #
 # Assumes from the calling scope:
 #   ZIG_EXE, PERL_EXE, LOG_DIR,
-#   JOB_ID, OPENQA_API_KEY, OPENQA_API_SECRET
+#   GROUP_ID, OPENQA_API_KEY, OPENQA_API_SECRET
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 echo "==> [perf] Running performance comparison tests..."
+
+# Ensure both jobs exist (reuses from earlier suites if already set).
+ensure_basic_job
+ensure_rich_job
 
 # -----------------------------------------------------------------------------
 # Private helpers — prefixed with _perf_ to avoid polluting the shared scope
@@ -321,17 +327,17 @@ perf_rss_archive() {
 	perl_rss=$(_perf_peak_rss_kb "$env_vars" "$PERL_EXE archive --host http://localhost $api_args /tmp/perf_arc_rss_perl")
 	zig_rss=$(_perf_peak_rss_kb "$env_vars" "$ZIG_EXE archive --host http://localhost $api_args /tmp/perf_arc_rss_zig")
 
-	if [[ "$DRY_RUN" == "false" && ( -z "$perl_rss" || "$perl_rss" -eq 0 ) ]]; then die "Perl RSS failed"; fi
-	if [[ "$DRY_RUN" == "false" && ( -z "$zig_rss" || "$zig_rss" -eq 0 ) ]]; then die "Zig RSS failed"; fi
+	if [[ "$DRY_RUN" == "false" && (-z "$perl_rss" || "$perl_rss" -eq 0) ]]; then die "Perl RSS failed"; fi
+	if [[ "$DRY_RUN" == "false" && (-z "$zig_rss" || "$zig_rss" -eq 0) ]]; then die "Zig RSS failed"; fi
 
 	_perf_rss_report+=("$tid  $label")
 	_perf_rss_report+=("  PERL peak RSS: ${perl_rss} kB   ZIG peak RSS: ${zig_rss} kB")
 	if [[ "$DRY_RUN" == "true" ]]; then
 		_perf_rss_report+=("  INFO: [DRY-RUN] skipping memory comparison")
 	elif [[ "$zig_rss" -lt "$perl_rss" ]]; then
-		_perf_rss_report+=("  INFO: Zig uses $(((perl_rss-zig_rss)*100/perl_rss))% less memory")
+		_perf_rss_report+=("  INFO: Zig uses $(((perl_rss - zig_rss) * 100 / perl_rss))% less memory")
 	else
-		_perf_rss_report+=("  INFO: Zig uses $(((zig_rss-perl_rss)*100/perl_rss))% more memory")
+		_perf_rss_report+=("  INFO: Zig uses $(((zig_rss - perl_rss) * 100 / perl_rss))% more memory")
 	fi
 	_perf_rss_report+=("")
 }
@@ -370,12 +376,12 @@ perf_rss() {
 	zig_rss=$(_perf_peak_rss_kb "$env_vars" "$ZIG_EXE api --host http://localhost $api_args")
 
 	# Guard: if Perl RSS is 0 we cannot make a meaningful comparison.
-	if [[ "$DRY_RUN" == "false" && ( -z "$perl_rss" || "$perl_rss" -eq 0 ) ]]; then
+	if [[ "$DRY_RUN" == "false" && (-z "$perl_rss" || "$perl_rss" -eq 0) ]]; then
 		die "Could not measure Perl peak RSS for $label (/usr/bin/time -v may have failed)"
 	fi
 
 	# Guard: if Zig RSS is 0 measurement failed.
-	if [[ "$DRY_RUN" == "false" && ( -z "$zig_rss" || "$zig_rss" -eq 0 ) ]]; then
+	if [[ "$DRY_RUN" == "false" && (-z "$zig_rss" || "$zig_rss" -eq 0) ]]; then
 		die "Could not measure Zig peak RSS for $label (/usr/bin/time -v may have failed)"
 	fi
 
@@ -408,6 +414,75 @@ perf_rss() {
 	z_ics=$(_perf_timev_field "$zig_tag" 'Involuntary context switches')
 
 	# Build report block
+	_perf_rss_report+=("$tid  $label")
+	_perf_rss_report+=("  PERL peak RSS: ${perl_rss} kB   ZIG peak RSS: ${zig_rss} kB")
+	_perf_rss_report+=("  $msg")
+	_perf_rss_report+=("  $(printf "%-36s  PERL: %6s   ZIG: %6s" "Major page faults (I/O-backed):" "${p_maj:-?}" "${z_maj:-?}")")
+	_perf_rss_report+=("  $(printf "%-36s  PERL: %6s   ZIG: %6s" "Minor page faults (anon/cached):" "${p_min:-?}" "${z_min:-?}")")
+	_perf_rss_report+=("  $(printf "%-36s  PERL: %8s ZIG: %8s" "User time (s):" "${p_usr:-?}" "${z_usr:-?}")")
+	_perf_rss_report+=("  $(printf "%-36s  PERL: %8s ZIG: %8s" "System time (s):" "${p_sys:-?}" "${z_sys:-?}")")
+	_perf_rss_report+=("  $(printf "%-36s  PERL: %6s   ZIG: %6s" "Voluntary context switches:" "${p_vcs:-?}" "${z_vcs:-?}")")
+	_perf_rss_report+=("  $(printf "%-36s  PERL: %6s   ZIG: %6s" "Involuntary context switches:" "${p_ics:-?}" "${z_ics:-?}")")
+	_perf_rss_report+=("")
+}
+
+# -----------------------------------------------------------------------------
+# perf_rss_monitor LABEL ENV_VARS JOB_IDS
+#
+# Measures peak RSS for each implementation using /usr/bin/time -v, specifically
+# for the monitor subcommand.
+# -----------------------------------------------------------------------------
+perf_rss_monitor() {
+	local label=$1
+	local env_vars=$2
+	local api_args=$3
+
+	_perf_r_seq=$((_perf_r_seq + 1))
+	local tid="PERF-R${_perf_r_seq}"
+	echo "  $tid  $label — RSS..."
+
+	local perl_tag zig_tag
+	perl_tag=$(echo "$PERL_EXE" | cut -d' ' -f1 | tr -cs 'a-zA-Z0-9_-' '_')
+	zig_tag=$(echo "$ZIG_EXE" | cut -d' ' -f1 | tr -cs 'a-zA-Z0-9_-' '_')
+
+	local perl_rss zig_rss
+	perl_rss=$(_perf_peak_rss_kb "$env_vars" "$PERL_EXE monitor --host http://localhost $api_args")
+	zig_rss=$(_perf_peak_rss_kb "$env_vars" "$ZIG_EXE monitor --host http://localhost $api_args")
+
+	if [[ "$DRY_RUN" == "false" && (-z "$perl_rss" || "$perl_rss" -eq 0) ]]; then
+		die "Could not measure Perl peak RSS for $label (/usr/bin/time -v may have failed)"
+	fi
+
+	if [[ "$DRY_RUN" == "false" && (-z "$zig_rss" || "$zig_rss" -eq 0) ]]; then
+		die "Could not measure Zig peak RSS for $label (/usr/bin/time -v may have failed)"
+	fi
+
+	local pct msg
+	if [[ "$DRY_RUN" == "true" ]]; then
+		msg="INFO: [DRY-RUN] skipping memory comparison"
+	elif [[ "$zig_rss" -lt "$perl_rss" ]]; then
+		pct=$(((perl_rss - zig_rss) * 100 / perl_rss))
+		msg="INFO: Zig uses less memory: ${zig_rss} kB < ${perl_rss} kB (${pct}% less)"
+	else
+		pct=$(((zig_rss - perl_rss) * 100 / perl_rss))
+		msg="INFO: Zig uses more memory: ${zig_rss} kB >= ${perl_rss} kB (${pct}% more)"
+	fi
+
+	local p_maj p_min p_usr p_sys p_vcs p_ics
+	local z_maj z_min z_usr z_sys z_vcs z_ics
+	p_maj=$(_perf_timev_field "$perl_tag" 'Major (requiring I/O) page faults')
+	p_min=$(_perf_timev_field "$perl_tag" 'Minor (reclaiming a frame) page faults')
+	p_usr=$(_perf_timev_field "$perl_tag" 'User time')
+	p_sys=$(_perf_timev_field "$perl_tag" 'System time')
+	p_vcs=$(_perf_timev_field "$perl_tag" 'Voluntary context switches')
+	p_ics=$(_perf_timev_field "$perl_tag" 'Involuntary context switches')
+	z_maj=$(_perf_timev_field "$zig_tag" 'Major (requiring I/O) page faults')
+	z_min=$(_perf_timev_field "$zig_tag" 'Minor (reclaiming a frame) page faults')
+	z_usr=$(_perf_timev_field "$zig_tag" 'User time')
+	z_sys=$(_perf_timev_field "$zig_tag" 'System time')
+	z_vcs=$(_perf_timev_field "$zig_tag" 'Voluntary context switches')
+	z_ics=$(_perf_timev_field "$zig_tag" 'Involuntary context switches')
+
 	_perf_rss_report+=("$tid  $label")
 	_perf_rss_report+=("  PERL peak RSS: ${perl_rss} kB   ZIG peak RSS: ${zig_rss} kB")
 	_perf_rss_report+=("  $msg")
@@ -514,6 +589,37 @@ perf_rss_archive "archive --asset-size-limit 1 (skip assets)" "" "--asset-size-l
 # Real I/O throughput and memory pressure.
 perf_timing_archive "archive rich job (~21MB image + artifacts)" "" "$RICH_JOB_ID" 3
 perf_rss_archive "archive rich job (~21MB image + artifacts)" "" "$RICH_JOB_ID"
+
+# --- Scenario: monitor 5 completed jobs (RSS) --------------------------------
+#
+# Schedules 5 fast simple_boot jobs, waits for all to complete, then measures
+# peak RSS of monitoring all 5 simultaneously.  All jobs are already terminal,
+# so monitor does 5 API calls and exits — no polling loop, isolating the
+# per-job overhead.
+
+echo "  [perf] Scheduling 5 monitor jobs..."
+_PERF_MON_IDS=()
+for i in $(seq 1 5); do
+	_id=$(schedule_job \
+		DISTRI=example \
+		VERSION=0 \
+		FLAVOR=DVD \
+		ARCH=x86_64 \
+		BUILD="perf-mon-$i" \
+		HDD_1="cirros-0.6.3-x86_64-disk.qcow2" \
+		ISO_1="seed-nocloud.iso" \
+		CASEDIR="/var/lib/openqa/share/tests/cirros" \
+		NEEDLES_DIR="%CASEDIR%/needles" \
+		"_GROUP_ID=${GROUP_ID:-1}")
+	echo "    Scheduled job $i: $_id" >&2
+	_PERF_MON_IDS+=("$_id")
+done
+echo "  [perf] Waiting for all 5 jobs to complete..."
+for _id in "${_PERF_MON_IDS[@]}"; do
+	wait_for_job "$_id" 300 >/dev/null || die "perf monitor: timeout on job $_id"
+done
+
+perf_rss_monitor "monitor 5 completed jobs" "" "${_PERF_MON_IDS[*]}"
 
 # =============================================================================
 # Summary Report

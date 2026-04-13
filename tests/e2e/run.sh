@@ -203,15 +203,11 @@ else
 	# Dry-run defaults
 	export OPENQA_API_KEY="MOCK_KEY"
 	export OPENQA_API_SECRET="MOCK_SECRET"
-	export JOB_ID="1"
-	export RICH_JOB_ID="2"
-	export ASSET_ID="1"
-	export ZIG_ASSET_ID="2"
 	export GROUP_ID="1"
 fi
 
 echo "==> Environment:"
-echo "    JOB_ID=$JOB_ID  RICH_JOB_ID=$RICH_JOB_ID  ASSET_ID=$ASSET_ID  ZIG_ASSET_ID=${ZIG_ASSET_ID:-}  GROUP_ID=$GROUP_ID"
+echo "    GROUP_ID=$GROUP_ID"
 [[ -n "$E2E_SUITES" ]] && echo "==> Suites filter: $E2E_SUITES"
 
 # -----------------------------------------------------------------------------
