@@ -22,12 +22,14 @@
 #   LOG_DIR       — directory where all log files are written
 #   failed_tests  — integer counter; incremented on each FAIL
 #   warned_tests  — integer counter; incremented on each WARN
-#   JOB_ID        — seeded job ID
-#   ASSET_ID      — seeded asset ID (for Perl DELETE test)
-#   ZIG_ASSET_ID  — seeded asset ID (for Zig DELETE test)
 #   GROUP_ID      — seeded job group ID
 #   OPENQA_API_KEY    — extracted API key
 #   OPENQA_API_SECRET — extracted API secret
+#
+# Job IDs (JOB_ID, RICH_JOB_ID) and asset IDs (ASSET_ID, ZIG_ASSET_ID) are
+# created on demand by individual test suites using lib.sh helper functions
+# (ensure_basic_job, ensure_rich_job, register_deletable_asset).  These
+# variables are set in the shared scope and reused by subsequent suites.
 #
 # All functions and test variables defined here intentionally live in the
 # run.sh scope (sourced, not subshell).
@@ -201,7 +203,7 @@ _e2e_suite_enabled() {
 # ShellCheck cannot follow a dynamic source path; the individual tests_*.sh
 # files are checked independently when `make e2e-lint` is run.
 # shellcheck disable=SC1090
-_e2e_all_suites=(core auth data output robustness retry_knobs archive help perf)
+_e2e_all_suites=(core auth data output robustness retry_knobs archive monitor help perf)
 for _suite in "${_e2e_all_suites[@]}"; do
 	if _e2e_suite_enabled "$_suite"; then
 		source "$_E2E_DIR/tests_${_suite}.sh"

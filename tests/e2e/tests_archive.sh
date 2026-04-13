@@ -12,13 +12,17 @@
 #
 # Assumes from the calling scope:
 #   ZIG_EXE, PERL_EXE, LOG_DIR, failed_tests, warned_tests
-#   JOB_ID, GROUP_ID, OPENQA_API_KEY, OPENQA_API_SECRET
+#   GROUP_ID, OPENQA_API_KEY, OPENQA_API_SECRET
 #   run_test(), run_comparison()
 
 # shellcheck source=SCRIPTDIR/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 echo "==> [archive] Running archive subcommand tests..."
+
+# Ensure both jobs exist (basic + rich with full test artifacts).
+ensure_basic_job
+ensure_rich_job
 
 # ---------------------------------------------------------------------------
 # Clean up any prior archive test directories inside the container

@@ -89,6 +89,7 @@ pwsh tests\e2e\run_windows.ps1 -WslDistro "openSUSE-Tumbleweed"
 | `tests_robustness.sh` | Section E — broken pipe, non-2xx stderr, `--quiet` (tests 29–31). |
 | `tests_retry_knobs.sh` | Section F — retry/timeout env var smoke tests (tests 32–35). |
 | `tests_archive.sh` | Section H — archive subcommand tests (ARC-1–ARC-25). |
+| `tests_monitor.sh` | Section I — monitor subcommand tests (MON-1–MON-51). |
 | `tests_perf.sh` | Section G — wall-clock timing and peak RSS comparisons (PERF-T1, T2, R1, R2). |
 
 `run.sh` is the only script you need to call directly in normal use. The others are
@@ -117,7 +118,7 @@ invoked automatically.
 --collect-logs      Dump openQA server-side logs to ./openqa-e2e-logs/ before stopping.
 --suites NAMES      Comma-separated list of suite names to run. Valid names:
                     core, auth, data, output, robustness, retry_knobs, archive,
-                    perf. When omitted, all suites are run (default behaviour).
+                    monitor, perf. When omitted, all suites are run (default behaviour).
 -h, --help          Show help.
 ```
 
@@ -339,6 +340,21 @@ The harness employs three primary testing patterns to validate the Zig executabl
 | ARC-23 | Short Flags -t -l | Short-form flags `-t` and `-l` are accepted. |
 | ARC-24 | --host Before archive | Global `--host` before subcommand name rejected (exit 255). |
 | ARC-25 | Default Size Limit | Default 200 MiB limit allows small files (exit 0). |
+
+### Monitor Subcommand (Section I — SPEC §14)
+| # | Test | Verification |
+|---|---|---|
+| MON-1,2 | Missing JOB_ID | `monitor` with no arguments exits 255. |
+| MON-3,4 | Non-numeric JOB_ID | `monitor abc` exits 255 in Zig. |
+| MON-5,6 | Completed Job | `monitor RICH_JOB_ID` exits based on final state (0 or 2). |
+| MON-7 | Stdout Format | Contains "Job state of job ID". |
+| MON-9,10 | Cancelled Job | `monitor JOB_ID` exits 2 when job is cancelled. |
+| MON-11,12 | Missing Job | `monitor 999999999` exits 1. |
+| MON-13,14 | --follow | Flag accepted (returns newest clone). |
+| MON-15,16 | --poll-interval | Flag accepted with numeric argument. |
+| MON-17,18 | Multiple Jobs | Multiple IDs passed; exits 2 if any fail. |
+| MON-50,51 | Invalid Flag | `monitor --extract` exits 255. |
+
 
 ---
 

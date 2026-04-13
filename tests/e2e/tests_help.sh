@@ -33,7 +33,17 @@ run_test "ZIG : archive help has global options" "$ZIG_EXE archive --help" 0 "Op
 run_test "PERL: archive help has Usage" "$PERL_EXE archive --help" 0 "Usage:"
 run_test "ZIG : archive help has Usage" "$ZIG_EXE archive --help" 0 "Usage:"
 
-# 4. Negative test (global help hides subcommand options)
+# 4. monitor help
+run_test "PERL: monitor help has Options for monitor" "$PERL_EXE monitor --help" 0 "Options for monitor:"
+run_test "ZIG : monitor help has Options for monitor" "$ZIG_EXE monitor --help" 0 "Options for monitor:"
+
+run_test "PERL: monitor help has global options" "$PERL_EXE monitor --help" 0 "Options (for all commands):"
+run_test "ZIG : monitor help has global options" "$ZIG_EXE monitor --help" 0 "Options (for all commands):"
+
+run_test "PERL: monitor help has Usage" "$PERL_EXE monitor --help" 0 "Usage:"
+run_test "ZIG : monitor help has Usage" "$ZIG_EXE monitor --help" 0 "Usage:"
+
+# 5. Negative test (global help hides subcommand options)
 run_test "PERL: Global help hides api options" "bash -c \"$PERL_EXE --help | grep -q 'Options for api:'; test \\\$? -eq 1\"" 0
 run_test "ZIG : Global help hides api options" "bash -c \"$ZIG_EXE --help | grep -q 'Options for api:'; test \\\$? -eq 1\"" 0
 

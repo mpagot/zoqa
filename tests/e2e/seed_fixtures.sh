@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# seed_fixtures.sh — Seeds the running openQA container with test data.
+# seed_fixtures.sh — Seeds the running openQA container with infrastructure.
+#
+# Sets up templates, images, and the test distribution so that test suites
+# can schedule jobs on demand via lib.sh helper functions (ensure_basic_job,
+# ensure_rich_job, schedule_job, etc.).  This script does NOT schedule any
+# openQA jobs — that responsibility belongs to the individual test suites.
 #
 # Designed to be called from setup.sh via:
 #   podman exec openqa-e2e bash /app/tests/e2e/seed_fixtures.sh
 #
 # Writes /tmp/seeded_ids.env inside the container with:
-#   JOB_ID=<id>
-#   ASSET_ID=<id>
 #   GROUP_ID=<id>
+#
+# Writes /tmp/scenario.yaml inside the container (cached for schedule_job).
 #
 # OPTIONS:
 #   --dryrun    Print commands without executing them.
@@ -29,7 +34,7 @@ source /app/tests/e2e/lib.sh
 # Argument Parsing
 # -----------------------------------------------------------------------------
 show_help() {
-	sed -n '4,17p' "${BASH_SOURCE[0]}"
+	sed -n '4,22p' "${BASH_SOURCE[0]}"
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -164,165 +169,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Schedule jobs via POST /api/v1/isos with inline SCENARIO_DEFINITIONS_YAML
+# 6. Cache scenario-definitions.yaml for use by lib.sh schedule_job()
 # ---------------------------------------------------------------------------
-log "Reading scenario-definitions.yaml..."
+log "Caching scenario-definitions.yaml to /tmp/scenario.yaml..."
 if [[ "$DRY_RUN" == "false" ]]; then
 	[[ -f "$FIXTURE_DIR/scenario-definitions.yaml" ]] ||
 		die "scenario-definitions.yaml not found at $FIXTURE_DIR"
-	SCENARIO_YAML=$(cat "$FIXTURE_DIR/scenario-definitions.yaml")
+	cp "$FIXTURE_DIR/scenario-definitions.yaml" /tmp/scenario.yaml
 else
-	SCENARIO_YAML="[DRY-RUN placeholder]"
-fi
-
-log "Scheduling basic dummy job via POST /api/v1/isos..."
-if [[ "$DRY_RUN" == "true" ]]; then
-	echo "[DRY-RUN] $CLI -X POST isos DISTRI=example VERSION=0 FLAVOR=DVD ARCH=x86_64 BUILD=e2e-test ISO=$ISO_NAME ..."
-	JOB_ID=1
-else
-	ISO_RESPONSE=$(
-		$CLI -X POST isos \
-			DISTRI=example \
-			VERSION=0 \
-			FLAVOR=DVD \
-			ARCH=x86_64 \
-			BUILD=e2e-test \
-			ISO="$ISO_NAME" \
-			CASEDIR="https://github.com/os-autoinst/os-autoinst-distri-example.git#main" \
-			NEEDLES_DIR="%%CASEDIR%%/needles" \
-			"_GROUP_ID=$GROUP_ID" \
-			"SCENARIO_DEFINITIONS_YAML=$SCENARIO_YAML" \
-			2>/dev/null
-	) || die "POST /api/v1/isos failed"
-
-	log "POST /api/v1/isos response: $ISO_RESPONSE"
-
-	JOB_ID=$(echo "$ISO_RESPONSE" | jq '.ids[0] // empty')
-	[[ -n "$JOB_ID" ]] || {
-		log "WARNING: No job IDs in response. Trying to find any existing job..."
-		JOB_ID=$($CLI jobs 2>/dev/null | jq '.jobs[0].id // empty')
-	}
-	[[ -n "$JOB_ID" ]] || die "Could not obtain any JOB_ID"
-fi
-log "JOB_ID=$JOB_ID"
-
-log "Scheduling RICH job via POST /api/v1/isos..."
-if [[ "$DRY_RUN" == "true" ]]; then
-	echo "[DRY-RUN] $CLI -X POST isos ... HDD_1=$CIRROS_IMG ISO_1=$SEED_ISO BUILD=e2e-test-rich ..."
-	RICH_JOB_ID=2
-else
-	RICH_RESPONSE=$(
-		$CLI -X POST isos \
-			DISTRI=example \
-			VERSION=0 \
-			FLAVOR=DVD \
-			ARCH=x86_64 \
-			BUILD=e2e-test-rich \
-			HDD_1="$CIRROS_IMG" \
-			ISO_1="$SEED_ISO" \
-			CASEDIR="/var/lib/openqa/share/tests/cirros" \
-			NEEDLES_DIR="%CASEDIR%/needles" \
-			"_GROUP_ID=$GROUP_ID" \
-			"SCENARIO_DEFINITIONS_YAML=$SCENARIO_YAML" \
-			2>/dev/null
-	) || die "POST /api/v1/isos (rich) failed"
-
-	log "POST /api/v1/isos (rich) response: $RICH_RESPONSE"
-	RICH_JOB_ID=$(echo "$RICH_RESPONSE" | jq '.ids[0] // empty')
-	[[ -n "$RICH_JOB_ID" ]] || die "Could not obtain RICH_JOB_ID"
-fi
-log "RICH_JOB_ID=$RICH_JOB_ID"
-
-# ---------------------------------------------------------------------------
-# 7. Wait for RICH job to reach terminal state
-# ---------------------------------------------------------------------------
-log "Waiting for rich job $RICH_JOB_ID to complete (up to 5 minutes)..."
-if [[ "$DRY_RUN" == "false" ]]; then
-	for i in {1..150}; do
-		JOB_STATE=$($CLI jobs/"$RICH_JOB_ID" 2>/dev/null | jq -r '.job.state // empty')
-		log "Job $RICH_JOB_ID state: $JOB_STATE ($((i * 2))s elapsed)"
-		if [[ "$JOB_STATE" == "done" || "$JOB_STATE" == "cancelled" || "$JOB_STATE" == "failed" ]]; then
-			log "Rich job $RICH_JOB_ID reached terminal state: $JOB_STATE"
-			break
-		fi
-		[[ "$i" -eq 150 ]] && die "Timeout waiting for rich job $RICH_JOB_ID to complete"
-		sleep 2
-	done
-else
-	log "[DRY-RUN] Skipping job completion wait."
+	echo "[DRY-RUN] cp $FIXTURE_DIR/scenario-definitions.yaml /tmp/scenario.yaml"
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Register two dummy assets for the DELETE tests (one for Perl, one for Zig)
-# ---------------------------------------------------------------------------
-log "Fetching asset ID for $ISO_NAME..."
-if [[ "$DRY_RUN" == "true" ]]; then
-	echo "[DRY-RUN] sleep 3 && $CLI assets | jq '...'"
-	ASSET_ID=1
-	ZIG_ASSET_ID=2
-else
-	# Give openQA a moment to register the ISO asset after scheduling
-	sleep 3
-	ASSETS_JSON=$($CLI assets 2>/dev/null) || die "Could not GET assets"
-	ASSET_ID=$(echo "$ASSETS_JSON" | jq --arg name "$ISO_NAME" \
-		'.assets[] | select(.name == $name) | .id // empty' | head -1)
-
-	if [[ -z "$ASSET_ID" ]]; then
-		log "ISO asset not yet registered, creating a separate 'other' asset for Perl DELETE test..."
-		OTHER_DIR="/var/lib/openqa/share/factory/other"
-		mkdir -p "$OTHER_DIR"
-		touch "$OTHER_DIR/delete-me.tar.gz"
-		# Trigger asset registration via the admin cleanup endpoint
-		$CLI -X POST assets/cleanup >/dev/null 2>&1 || true
-		sleep 2
-		ASSETS_JSON=$($CLI assets 2>/dev/null) || die "Could not GET assets (retry)"
-		ASSET_ID=$(echo "$ASSETS_JSON" | jq \
-			'.assets[] | select(.name == "delete-me.tar.gz") | .id // empty' | head -1)
-	fi
-
-	[[ -n "$ASSET_ID" ]] || {
-		log "WARNING: Could not obtain ASSET_ID for Perl DELETE test. DELETE test will be skipped."
-		ASSET_ID="SKIP"
-	}
-
-	# Create a second ISO asset exclusively for the Zig DELETE test by scheduling
-	# a second job that references a distinct ISO file.
-	log "Creating second ISO asset for Zig DELETE test..."
-	ISO2_NAME="dummy2.iso"
-	touch "$ISO_DIR/$ISO2_NAME"
-	$CLI -X POST isos \
-		DISTRI=example \
-		VERSION=0 \
-		FLAVOR=DVD \
-		ARCH=x86_64 \
-		BUILD=e2e-test-zig \
-		ISO="$ISO2_NAME" \
-		"_GROUP_ID=$GROUP_ID" \
-		>/dev/null 2>&1 || true
-	sleep 3
-	ASSETS_JSON=$($CLI assets 2>/dev/null) || die "Could not GET assets (zig asset)"
-	ZIG_ASSET_ID=$(echo "$ASSETS_JSON" | jq --arg name "$ISO2_NAME" \
-		'.assets[] | select(.name == $name) | .id // empty' | head -1)
-	[[ -n "$ZIG_ASSET_ID" ]] || {
-		log "WARNING: Could not obtain ZIG_ASSET_ID. Zig DELETE test will be skipped."
-		ZIG_ASSET_ID="SKIP"
-	}
-fi
-log "ASSET_ID=$ASSET_ID"
-log "ZIG_ASSET_ID=$ZIG_ASSET_ID"
-
-# ---------------------------------------------------------------------------
-# 9. Write seeded IDs to env file
+# 7. Write seeded IDs to env file
 # ---------------------------------------------------------------------------
 log "Writing $IDS_FILE..."
 if [[ "$DRY_RUN" == "true" ]]; then
 	echo "[DRY-RUN] cat > $IDS_FILE << EOF ... EOF"
 else
 	cat >"$IDS_FILE" <<EOF
-JOB_ID=$JOB_ID
-RICH_JOB_ID=$RICH_JOB_ID
-ASSET_ID=$ASSET_ID
-ZIG_ASSET_ID=$ZIG_ASSET_ID
 GROUP_ID=$GROUP_ID
 EOF
 	log "Seeding complete."

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests_data.sh — Section C: Seeded data tests.
 #
-# Tests against real objects created by seed_fixtures.sh: jobs, assets,
+# Tests against real objects created by ensure_basic_job(): jobs, assets,
 # job groups, machines.  Also covers pagination, output parity between Perl
 # and Zig, and relative vs absolute URL path handling.
 #
@@ -9,11 +9,20 @@
 # Do NOT execute this file directly.
 #
 # Assumes from the calling scope:
-#   ZIG_EXE, PERL_EXE, LOG_DIR, failed_tests, warned_tests
-#   JOB_ID, ASSET_ID, ZIG_ASSET_ID, GROUP_ID
+#   ZIG_EXE, PERL_EXE, LOG_DIR, failed_tests, warned_tests, GROUP_ID
 #   run_test(), run_comparison(), run_diff_test()
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
 echo "==> [data] Running seeded data tests..."
+
+# Ensure a basic job exists (reuses JOB_ID from tests_core.sh if already set).
+ensure_basic_job
+
+# Register two deletable assets (one for Perl DELETE test, one for Zig).
+echo "  [data] Registering deletable assets..."
+ASSET_ID=$(register_deletable_asset "delete-me-perl.tar.gz")
+ZIG_ASSET_ID=$(register_deletable_asset "delete-me-zig.tar.gz")
 
 # Test 18: GET jobs/overview returns non-empty list after seeding.
 run_comparison "GET jobs/overview (non-empty after seeding)" "" "jobs/overview" 0 "simple_boot"
@@ -74,7 +83,7 @@ _run_pagination_test "ZIG " "$ZIG_EXE" "zig"
 # Test 21: DELETE a real asset (successful authenticated DELETE).
 # Perl and Zig each get their own asset to avoid ordering conflicts.
 if [[ "$ASSET_ID" == "SKIP" || -z "$ASSET_ID" ]]; then
-	echo "--- Test: PERL: DELETE asset (skipped — no ASSET_ID from seeding) ---"
+	echo "--- Test: PERL: DELETE asset (skipped — no ASSET_ID available) ---"
 	warned_tests=$((warned_tests + 1))
 else
 	run_test "PERL: DELETE asset/$ASSET_ID (200)" \
@@ -82,7 +91,7 @@ else
 fi
 
 if [[ "$ZIG_ASSET_ID" == "SKIP" || -z "$ZIG_ASSET_ID" ]]; then
-	echo "--- Test: ZIG : DELETE asset (skipped — no ZIG_ASSET_ID from seeding) ---"
+	echo "--- Test: ZIG : DELETE asset (skipped — no ZIG_ASSET_ID available) ---"
 	warned_tests=$((warned_tests + 1))
 else
 	run_test "ZIG : DELETE asset/$ZIG_ASSET_ID (200)" \

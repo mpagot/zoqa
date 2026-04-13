@@ -49,7 +49,7 @@ test "isAbsoluteUrl: relative paths" {
 // Argument parsing
 // ---------------------------------------------------------------------------
 
-pub const Subcommand = enum { api, archive };
+pub const Subcommand = enum { api, archive, monitor };
 
 pub const Args = struct {
     // global
@@ -94,6 +94,10 @@ pub const Args = struct {
     // archive subcommand options
     with_thumbnails: bool = false,
     asset_size_limit: ?u64 = null,
+
+    // monitor subcommand options
+    follow: bool = false,
+    poll_interval: u64 = 10,
 
     /// Release the three owned ArrayLists.  Call this (via `defer`) immediately
     /// after a successful `parseArgs` return.
@@ -307,6 +311,24 @@ fn tryArchiveFlag(
     return false;
 }
 
+fn tryMonitorFlag(
+    args: *Args,
+    token: []const u8,
+    i: *usize,
+    argv: []const []const u8,
+) !bool {
+    if (matchBool(token, "--follow", "-f")) {
+        args.follow = true;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--poll-interval", "-i")) |v| {
+        args.poll_interval = std.fmt.parseInt(u64, v, 10) catch
+            return error.InvalidPollInterval;
+        return true;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // parseArgs — subcommand-dispatched CLI parser
 // ---------------------------------------------------------------------------
@@ -386,6 +408,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
         switch (args.subcmd.?) {
             .api => if (try tryApiFlag(&args, allocator, token, &i, argv)) continue,
             .archive => if (try tryArchiveFlag(&args, token, &i, argv)) continue,
+            .monitor => if (try tryMonitorFlag(&args, token, &i, argv)) continue,
         }
 
         // Unknown flag
@@ -1275,6 +1298,51 @@ fn buildArchiveRequest(
     };
 }
 
+const MonitorConfig = struct {
+    host: []const u8,
+    job_ids: []const u64,
+    follow: bool,
+    poll_interval: u64,
+    arena: std.heap.ArenaAllocator,
+
+    fn deinit(self: *MonitorConfig) void {
+        self.arena.deinit();
+    }
+};
+
+fn buildMonitorRequest(
+    allocator: std.mem.Allocator,
+    args: *const Args,
+) !MonitorConfig {
+    if (args.kv_params.items.len < 1) return error.MissingMonitorArgs;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var job_ids = try arena_alloc.alloc(u64, args.kv_params.items.len);
+    for (args.kv_params.items, 0..) |param, i| {
+        job_ids[i] = std.fmt.parseInt(u64, param, 10) catch
+            return error.InvalidJobId;
+    }
+
+    const host_res = try config.resolveHost(
+        arena_alloc,
+        args.osd,
+        args.o3,
+        args.odn,
+        args.host,
+    );
+
+    return .{
+        .host = host_res.url,
+        .job_ids = job_ids,
+        .follow = args.follow,
+        .poll_interval = args.poll_interval,
+        .arena = arena,
+    };
+}
+
 test "buildRequest: GET with KV params appends query string" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{
@@ -1729,6 +1797,45 @@ test "buildArchiveRequest: absolute url in host adds https via resolveHost" {
     try std.testing.expect(std.mem.startsWith(u8, cfg.host, "https://myhost.example.com"));
 }
 
+test "buildMonitorRequest: valid positional arguments" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "monitor", "12345", "67890",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    var cfg = try buildMonitorRequest(allocator, &parsed);
+    defer cfg.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), cfg.job_ids.len);
+    try std.testing.expectEqual(@as(u64, 12345), cfg.job_ids[0]);
+    try std.testing.expectEqual(@as(u64, 67890), cfg.job_ids[1]);
+    try std.testing.expectEqualStrings("http://localhost", cfg.host);
+}
+
+test "buildMonitorRequest: invalid job id returns error" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "monitor", "12345", "abc",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    try std.testing.expectError(error.InvalidJobId, buildMonitorRequest(allocator, &parsed));
+}
+
+test "buildMonitorRequest: missing positional arguments returns error" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa", "monitor",
+    };
+    var parsed = try parseArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+
+    try std.testing.expectError(error.MissingMonitorArgs, buildMonitorRequest(allocator, &parsed));
+}
+
 /// Resolve and merge API credentials from all possible sources according to priority.
 ///
 /// Authentication to the openQA API requires two parts: a key and a secret.
@@ -2039,6 +2146,7 @@ pub fn main() !void {
             switch (sc) {
                 .api => printApiHelp(false),
                 .archive => printArchiveHelp(false),
+                .monitor => printMonitorHelp(false),
             }
         } else {
             printHelp(false);
@@ -2069,6 +2177,9 @@ pub fn main() !void {
     var archive_cfg: ?ArchiveConfig = null;
     defer if (archive_cfg) |*cfg| cfg.deinit();
 
+    var monitor_cfg: ?MonitorConfig = null;
+    defer if (monitor_cfg) |*cfg| cfg.deinit();
+
     switch (subcmd) {
         .api => {
             req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
@@ -2090,11 +2201,21 @@ pub fn main() !void {
                 std.process.exit(1);
             };
         },
+        .monitor => {
+            monitor_cfg = buildMonitorRequest(gpa, &args) catch |err| {
+                if (err == error.MissingMonitorArgs or err == error.InvalidJobId) {
+                    printMonitorHelp(true);
+                    std.process.exit(255);
+                }
+                std.debug.print("Monitor request build error: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            };
+        },
     }
 
     // Resolve credentials
     // Extract hostname from the resolved host URL for config file lookup.
-    const host_for_uri = if (req_cfg) |cfg| cfg.host else if (archive_cfg) |cfg| cfg.host else args.host orelse "localhost";
+    const host_for_uri = if (req_cfg) |cfg| cfg.host else if (archive_cfg) |cfg| cfg.host else if (monitor_cfg) |cfg| cfg.host else args.host orelse "localhost";
     const hostname = blk: {
         const uri = std.Uri.parse(host_for_uri) catch {
             break :blk host_for_uri;
@@ -2213,6 +2334,74 @@ pub fn main() !void {
             };
             std.process.exit(0);
         },
+        .monitor => {
+            const cfg = &monitor_cfg.?;
+            var client = std.http.Client{ .allocator = gpa };
+            defer client.deinit();
+
+            var completed = try gpa.alloc(bool, cfg.job_ids.len);
+            defer gpa.free(completed);
+            @memset(completed, false);
+
+            var stdout_buf: [4096]u8 = undefined;
+            var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+            const stdout = &stdout_writer.interface;
+
+            var final_statuses: std.ArrayList(zoqa.JobStatus) = .{};
+            defer {
+                for (final_statuses.items) |s| gpa.free(s.raw_state);
+                final_statuses.deinit(gpa);
+            }
+
+            while (true) {
+                var any_pending = false;
+
+                for (cfg.job_ids, 0..) |job_id, i| {
+                    if (completed[i]) continue;
+
+                    any_pending = true;
+
+                    const status = zoqa.checkJobStatus(
+                        gpa,
+                        &client,
+                        cfg.host,
+                        job_id,
+                        cfg.follow,
+                        .{
+                            .allocator = gpa,
+                            .credentials = creds,
+                            .retries = retries,
+                            .quiet = args.quiet,
+                            .connect_timeout_s = connect_timeout_s,
+                            .retry_sleep_s = retry_sleep_s,
+                            .retry_factor = retry_factor,
+                        },
+                    ) catch |err| {
+                        if (!args.quiet) {
+                            std.debug.print("API error checking job {d}: {s}\n", .{ job_id, @errorName(err) });
+                        }
+                        std.process.exit(1);
+                    };
+
+                    if (status.isTerminal()) {
+                        completed[i] = true;
+                        try final_statuses.append(gpa, status);
+                    } else {
+                        stdout.print("Job state of job ID {d}: {s}, waiting {d} seconds (poll interval: {d})\n", .{
+                            job_id, status.raw_state, cfg.poll_interval, cfg.poll_interval,
+                        }) catch {};
+                        stdout.flush() catch {};
+                        gpa.free(status.raw_state);
+                    }
+                }
+
+                if (!any_pending) break;
+
+                std.Thread.sleep(cfg.poll_interval * std.time.ns_per_s);
+            }
+
+            std.process.exit(zoqa.exitCodeForStatuses(final_statuses.items));
+        },
     }
 }
 
@@ -2257,6 +2446,13 @@ const help_archive_options =
     \\
 ;
 
+const help_monitor_options =
+    \\Options for monitor:
+    \\    --follow (or -f)         Track the newest clone of each job
+    \\    --poll-interval INT (or -i) Polling interval in seconds (default: 10)
+    \\
+;
+
 fn printHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
@@ -2264,7 +2460,8 @@ fn printHelp(is_error: bool) void {
     w.print(
         "{s}\n" ++
             " api       Make an openQA API request\n" ++
-            " archive   Download assets and test results from a job\n\n" ++
+            " archive   Download assets and test results from a job\n" ++
+            " monitor   Wait until all specified jobs reach a final state\n\n" ++
             "See 'zoqa COMMAND --help' for more information on a specific command.\n",
         .{help_global_options},
     ) catch {};
@@ -2296,6 +2493,20 @@ fn printArchiveHelp(is_error: bool) void {
             "{s}" ++
             "{s}",
         .{ help_global_options, help_archive_options },
+    ) catch {};
+    w.flush() catch {};
+}
+
+/// Print the `monitor` subcommand usage block.
+fn printMonitorHelp(is_error: bool) void {
+    var buf: [4096]u8 = undefined;
+    var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
+    const w = &out_writer.interface;
+    w.print(
+        "Usage: zoqa monitor [OPTIONS] JOB_ID [JOB_ID ...]\n\n" ++
+            "{s}" ++
+            "{s}",
+        .{ help_global_options, help_monitor_options },
     ) catch {};
     w.flush() catch {};
 }

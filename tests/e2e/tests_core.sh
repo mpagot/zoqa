@@ -5,10 +5,15 @@
 # Do NOT execute this file directly.
 #
 # Assumes from the calling scope:
-#   ZIG_EXE, PERL_EXE, LOG_DIR, failed_tests, warned_tests
+#   ZIG_EXE, PERL_EXE, LOG_DIR, failed_tests, warned_tests, GROUP_ID
 #   run_test(), run_comparison(), run_diff_test()
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
 echo "==> [core] Running core protocol and CLI flag tests..."
+
+# Ensure a basic job exists (creates JOB_ID if not already set).
+ensure_basic_job
 
 # Test 1: Basic GET jobs/overview (verifies the endpoint responds)
 run_comparison "GET jobs/overview" "" "jobs/overview" 0
