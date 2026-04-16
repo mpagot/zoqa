@@ -53,20 +53,17 @@ single static binaries, and need zero runtime dependencies.
 | **Startup** | Perl interpreter + module loading | Instant (compiled native code) |
 | **Platforms** | Wherever Perl runs | Linux, macOS, Windows (x86_64 + aarch64) — 6 targets from a single build host |
 | **Container-friendly** | Needs Perl + deps installed | Copy one file, done |
-| **Wall-time per `api` call** | ~0.5–1.1 s | ~0.02–0.08 s (12–37× faster) |
-| **Peak memory (`api`)** | ~57 MB | ~3.7 MB |
-| **Wall-time `archive` (~21 MB)** | ~1.0 s | ~0.4 s (~3× faster) |
-| **Peak memory (`archive`, ~21 MB)** | ~60 MB | ~4 MB |
-| **Wall-time `archive` (2.6 GB) ‡** | ~15m 28s | ~10m 20s (~50% faster) |
-| **Peak memory (`archive`, 2.6 GB) ‡** | ~69 MB | ~14 MB (4.8× less) |
-| **CPU user time (`archive`, 2.6 GB) ‡** | ~112 s | ~8 s (14× less) |
+| **Wall-time per `api` call** | ~0.6–1.3 s | ~0.13–0.35 s (4–5× faster) |
+| **Peak memory (`api`)** | ~61 MB | ~5.3 MB (91% less) |
+| **Wall-time `archive` (~3.4 GB)** | ~18m 42s | ~14m 23s |
+| **CPU user time `archive` (~3.4 GB)** | ~151 s | ~2.9 s (52× less) |
+| **Peak memory (`archive`, ~3.4 GB)** | ~70 MB | ~11 MB (6.3× less) |
 
-<sup>‡ Measured manually on a dedicated host, not in the containerised E2E suite.</sup>
-
-The `api` speedup is **Mojolicious startup overhead** (~730 ms avg), not HTTP
-performance — both tools complete the network round-trip in similar time. The
-large-file `archive` gap is a genuine **architectural difference**: zoqa streams
-to disk; openqa-cli buffers through a `/tmp` temp file.
+Measured against a production openQA server over the network. The `api` speedup
+is **Mojolicious startup overhead** — both tools complete the network round-trip
+in similar time. The `archive` gap is a genuine **architectural difference**:
+zoqa streams to disk; openqa-cli double-writes through a temp file, using 52×
+more CPU.
 
 See [docs/compare_performance.md](docs/compare_performance.md) for the full
 analysis, interpreter baseline measurements, and methodology.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests_monitor.sh — Section I: monitor subcommand tests (SPEC §14).
+# tests_monitor.sh — Section I: monitor subcommand tests.
 #
 # Sourced by tests.sh after helper functions are defined.
 # Do NOT execute this file directly.
@@ -22,7 +22,7 @@ echo "==> [monitor] Running monitor tests..."
 ensure_rich_job
 
 # =============================================================================
-# Section 1: Argument Validation (SPEC §14.1)
+# Section 1: Argument Validation
 # =============================================================================
 
 # MON-1 (Perl behavior on missing JOB_ID)
@@ -52,7 +52,7 @@ echo "Exit code: $_perl_abc_exit (captured for reference)"
 run_test "ZIG : Non-numeric JOB_ID -> exit 255" "$ZIG_EXE monitor abc" 255
 
 # =============================================================================
-# Section 2: Completed Job (SPEC §14.3 / §14.5)
+# Section 2: Completed Job
 # RICH_JOB_ID is guaranteed to be in a terminal state by ensure_rich_job.
 # =============================================================================
 
@@ -99,8 +99,27 @@ else
 	fi
 fi
 
+# MON-19: Monitor on an already-terminal job must return well under 10s.
+# Regression test for the off-by-one sleep bug in runMonitor: any_pending was
+# set true before checking terminal state, causing a mandatory poll_interval
+# (10s) sleep even when every job was already done on the first check.
+echo "--- Test: ZIG : Monitor already-terminal job returns quickly (MON-19) ---"
+_t0=$(date +%s%3N)
+set +e
+container_exec bash -c "timeout 15 $ZIG_EXE monitor $RICH_JOB_ID" >/dev/null 2>/dev/null
+_mon_fast_exit=$?
+set -e
+_t1=$(date +%s%3N)
+_elapsed_ms=$((_t1 - _t0))
+if [[ "$_elapsed_ms" -lt 5000 ]]; then
+	echo "PASS (elapsed: ${_elapsed_ms}ms)"
+else
+	echo "FAIL: monitor took ${_elapsed_ms}ms on an already-terminal job (expected < 5000ms; off-by-one sleep bug?)"
+	failed_tests=$((failed_tests + 1))
+fi
+
 # =============================================================================
-# Section 3: Exit Code 2 (Cancelled Job) (SPEC §14.5)
+# Section 3: Exit Code 2 (Cancelled Job)
 #
 # Schedule a dedicated sleep job (SLEEPTEST=1, 300s) so that it is still
 # running when we issue the cancel.  This avoids the shared-state problem
@@ -157,7 +176,7 @@ else
 fi
 
 # =============================================================================
-# Section 4: Exit Code 1 (Missing Job) (SPEC §14.5)
+# Section 4: Exit Code 1 (Missing Job)
 # =============================================================================
 
 # MON-11
@@ -187,7 +206,7 @@ else
 fi
 
 # =============================================================================
-# Section 5: Options (SPEC §14.2)
+# Section 5: Options
 # =============================================================================
 
 # MON-13

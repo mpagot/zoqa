@@ -49,7 +49,7 @@ test "isAbsoluteUrl: relative paths" {
 // Argument parsing
 // ---------------------------------------------------------------------------
 
-pub const Subcommand = enum { api, archive, monitor };
+pub const Subcommand = enum { api, archive, monitor, schedule };
 
 pub const Args = struct {
     // global
@@ -97,7 +97,10 @@ pub const Args = struct {
 
     // monitor subcommand options
     follow: bool = false,
-    poll_interval: u64 = 10,
+    poll_interval: ?u64 = null,
+
+    // schedule subcommand options
+    schedule_monitor: bool = false,
 
     /// Release the three owned ArrayLists.  Call this (via `defer`) immediately
     /// after a successful `parseArgs` return.
@@ -311,6 +314,21 @@ fn tryArchiveFlag(
     return false;
 }
 
+/// Try to match `token` against a flag specific to the `monitor` subcommand
+/// (`zoqa monitor ...`).
+/// Returns `true` when the flag was consumed, `false` if unmatched.
+///
+/// Recognised flags:
+///   - `--follow` / `-f` — track the newest clone of each job during
+///     polling; sets `args.follow`.
+///   - `--poll-interval` / `-i` — polling interval in seconds;
+///     sets `args.poll_interval`. Defaults to `10` in `buildMonitorRequest`
+///     when absent.
+///
+/// `args`  — mutable Args struct being populated.
+/// `token` — the current argv token being tested.
+/// `i`     — current argv index cursor (passed through to matchValue).
+/// `argv`  — full argv slice (passed through to matchValue).
 fn tryMonitorFlag(
     args: *Args,
     token: []const u8,
@@ -324,6 +342,55 @@ fn tryMonitorFlag(
     if (try matchValue(token, i, argv, "--poll-interval", "-i")) |v| {
         args.poll_interval = std.fmt.parseInt(u64, v, 10) catch
             return error.InvalidPollInterval;
+        return true;
+    }
+    return false;
+}
+
+/// Try to match `token` against a flag specific to the `schedule` subcommand
+/// (`zoqa schedule ...`).
+/// Returns `true` when the flag was consumed, `false` if unmatched.
+///
+/// Recognised flags:
+///   - `--monitor` / `-m` — after scheduling, enter the blocking job monitor
+///     loop; sets `args.schedule_monitor`.
+///   - `--follow` / `-f` — track the newest clone of each job during
+///     monitoring; sets `args.follow`. Meaningful only with `--monitor`.
+///   - `--poll-interval` / `-i` — monitoring poll interval in seconds;
+///     sets `args.poll_interval`. Defaults to `1` in `buildScheduleRequest`
+///     when absent (shorter than the monitor subcommand's default of `10`).
+///   - `--param-file KEY=FILE` — read KEY's value from a file and append it
+///     to the POST body; appends to `args.param_files` (repeatable, no short
+///     form). Unlike the `api` subcommand, `schedule` has no PATH positional
+///     — every positional is a KEY=VALUE POST parameter for `/api/v1/isos`.
+///
+/// `args`      — mutable Args struct being populated.
+/// `allocator` — used to grow `args.param_files` for `--param-file` entries.
+/// `token`     — the current argv token being tested.
+/// `i`         — current argv index cursor (passed through to matchValue).
+/// `argv`      — full argv slice (passed through to matchValue).
+fn tryScheduleFlag(
+    args: *Args,
+    allocator: std.mem.Allocator,
+    token: []const u8,
+    i: *usize,
+    argv: []const []const u8,
+) !bool {
+    if (matchBool(token, "--monitor", "-m")) {
+        args.schedule_monitor = true;
+        return true;
+    }
+    if (matchBool(token, "--follow", "-f")) {
+        args.follow = true;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--poll-interval", "-i")) |v| {
+        args.poll_interval = std.fmt.parseInt(u64, v, 10) catch
+            return error.InvalidPollInterval;
+        return true;
+    }
+    if (try matchValue(token, i, argv, "--param-file", null)) |v| {
+        try args.param_files.append(allocator, v);
         return true;
     }
     return false;
@@ -409,6 +476,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
             .api => if (try tryApiFlag(&args, allocator, token, &i, argv)) continue,
             .archive => if (try tryArchiveFlag(&args, token, &i, argv)) continue,
             .monitor => if (try tryMonitorFlag(&args, token, &i, argv)) continue,
+            .schedule => if (try tryScheduleFlag(&args, allocator, token, &i, argv)) continue,
         }
 
         // Unknown flag
@@ -741,12 +809,12 @@ test "parseArgs: archive flag --asset-size-limit rejected for api" {
 }
 
 // ---------------------------------------------------------------------------
-// SPEC §13.1 compliance: --pretty and --links are "accepted but have no
+// --pretty and --links are "accepted but have no
 // observable effect" for the archive subcommand.  These tests should PASS
 // with the current code — they confirm the spec-mandated behaviour.
 // ---------------------------------------------------------------------------
 
-test "parseArgs: --pretty accepted for archive per SPEC 13.1" {
+test "parseArgs: --pretty accepted for archive no effects" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{ "zoqa", "archive", "--pretty", "12345", "/tmp/out" };
     var parsed = try parseArgs(allocator, argv);
@@ -755,7 +823,7 @@ test "parseArgs: --pretty accepted for archive per SPEC 13.1" {
     try std.testing.expect(parsed.pretty);
 }
 
-test "parseArgs: --links accepted for archive per SPEC 13.1" {
+test "parseArgs: --links accepted for archive no effects" {
     const allocator = std.testing.allocator;
     const argv: []const []const u8 = &.{ "zoqa", "archive", "--links", "12345", "/tmp/out" };
     var parsed = try parseArgs(allocator, argv);
@@ -795,7 +863,7 @@ fn jsonToFormEncoded(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
         else => return error.FormRequiresJsonObject,
     };
 
-    var buf: std.ArrayList(u8) = .{};
+    var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
 
     var first = true;
@@ -916,7 +984,7 @@ fn formEncodeAppend(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), input
 
 test "formEncodeAppend: unreserved chars pass through" {
     const allocator = std.testing.allocator;
-    var buf: std.ArrayList(u8) = .{};
+    var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
     try formEncodeAppend(allocator, &buf, "hello_world-1.0~");
     try std.testing.expectEqualStrings("hello_world-1.0~", buf.items);
@@ -924,7 +992,7 @@ test "formEncodeAppend: unreserved chars pass through" {
 
 test "formEncodeAppend: spaces become plus, specials percent-encoded" {
     const allocator = std.testing.allocator;
-    var buf: std.ArrayList(u8) = .{};
+    var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
     try formEncodeAppend(allocator, &buf, "a b=c&d");
     try std.testing.expectEqualStrings("a+b%3Dc%26d", buf.items);
@@ -932,7 +1000,7 @@ test "formEncodeAppend: spaces become plus, specials percent-encoded" {
 
 test "formEncodeAppend: empty input produces empty output" {
     const allocator = std.testing.allocator;
-    var buf: std.ArrayList(u8) = .{};
+    var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
     try formEncodeAppend(allocator, &buf, "");
     try std.testing.expectEqual(@as(usize, 0), buf.items.len);
@@ -940,7 +1008,7 @@ test "formEncodeAppend: empty input produces empty output" {
 
 test "formEncodeAppend: all special bytes percent-encoded" {
     const allocator = std.testing.allocator;
-    var buf: std.ArrayList(u8) = .{};
+    var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
     try formEncodeAppend(allocator, &buf, "\x00\x01\xff");
     try std.testing.expectEqualStrings("%00%01%FF", buf.items);
@@ -1013,6 +1081,61 @@ const ArchiveConfig = struct {
     }
 };
 
+/// Build a form-encoded parameter string from positional KEY=VALUE arguments
+/// and `--param-file KEY=FILE` entries. Used by both the `api` and `schedule`
+/// subcommands.
+///
+/// Arguments:
+///   - `allocator`: Used for file reads (`--param-file`). Temp allocations
+///     are freed before return.
+///   - `arena_alloc`: Arena allocator owning the returned string buffer.
+///   - `kv_args`: Positional KEY=VALUE slices (borrowed from argv).
+///   - `param_file_entries`: `--param-file KEY=FILE` slices (borrowed from argv).
+///
+/// Returns: The encoded string (owned by `arena_alloc`). Empty slice when
+/// there are no parameters.
+///
+/// Errors:
+///   - `error.PathContainsNullByte` — a file path contains `\x00`.
+///   - Any error from `std.fs.cwd().readFileAlloc` or allocator OOM.
+fn buildFormParams(
+    allocator: std.mem.Allocator,
+    arena_alloc: std.mem.Allocator,
+    kv_args: []const []const u8,
+    param_file_entries: []const []const u8,
+) ![]const u8 {
+    var params: std.ArrayList(u8) = .empty;
+
+    // Positional KEY=VALUE pairs
+    for (kv_args) |p| {
+        const eq = std.mem.indexOfScalar(u8, p, '=') orelse continue;
+        if (params.items.len > 0) try params.append(arena_alloc, '&');
+        try formEncodeAppend(arena_alloc, &params, p[0..eq]);
+        try params.append(arena_alloc, '=');
+        try formEncodeAppend(arena_alloc, &params, p[eq + 1 ..]);
+    }
+
+    // --param-file KEY=FILE
+    for (param_file_entries) |pf| {
+        const eq = std.mem.indexOfScalar(u8, pf, '=') orelse continue;
+        const key = pf[0..eq];
+        const file_path = pf[eq + 1 ..];
+
+        // Security check: Zig's path functions assert no null bytes.
+        if (std.mem.indexOfScalar(u8, file_path, 0) != null) return error.PathContainsNullByte;
+
+        const contents = try std.fs.cwd().readFileAlloc(allocator, file_path, 10 * 1024 * 1024);
+        defer allocator.free(contents);
+        const trimmed = std.mem.trimRight(u8, contents, "\n\r");
+        if (params.items.len > 0) try params.append(arena_alloc, '&');
+        try formEncodeAppend(arena_alloc, &params, key);
+        try params.append(arena_alloc, '=');
+        try formEncodeAppend(arena_alloc, &params, trimmed);
+    }
+
+    return params.items[0..params.items.len];
+}
+
 /// Transform parsed CLI arguments into a `RequestConfig` ready for `zoqa.openQAReq()`.
 ///
 /// This is the main post-`parseArgs` processing step. It performs everything
@@ -1076,35 +1199,8 @@ pub fn buildRequest(
     const api_path = args.kv_params.items[0];
     const kv_args = args.kv_params.items[1..];
 
-    // Collect all parameters
-    var params: std.ArrayList(u8) = .{};
-
-    // Positional KEY=VALUE pairs
-    for (kv_args) |p| {
-        const eq = std.mem.indexOfScalar(u8, p, '=') orelse continue;
-        if (params.items.len > 0) try params.append(arena_alloc, '&');
-        try formEncodeAppend(arena_alloc, &params, p[0..eq]);
-        try params.append(arena_alloc, '=');
-        try formEncodeAppend(arena_alloc, &params, p[eq + 1 ..]);
-    }
-
-    // --param-file KEY=FILE
-    for (args.param_files.items) |pf| {
-        const eq = std.mem.indexOfScalar(u8, pf, '=') orelse continue;
-        const key = pf[0..eq];
-        const file_path = pf[eq + 1 ..];
-
-        // Security check: Zig's path functions assert no null bytes.
-        if (std.mem.indexOfScalar(u8, file_path, 0) != null) return error.PathContainsNullByte;
-
-        const contents = try std.fs.cwd().readFileAlloc(allocator, file_path, 10 * 1024 * 1024);
-        defer allocator.free(contents);
-        const trimmed = std.mem.trimRight(u8, contents, "\n\r");
-        if (params.items.len > 0) try params.append(arena_alloc, '&');
-        try formEncodeAppend(arena_alloc, &params, key);
-        try params.append(arena_alloc, '=');
-        try formEncodeAppend(arena_alloc, &params, trimmed);
-    }
+    // Collect all parameters (shared helper handles KV pairs + --param-file)
+    const params_encoded = try buildFormParams(allocator, arena_alloc, kv_args, args.param_files.items);
 
     // Parse HTTP method (accept upper or lower case)
     const method = std.meta.stringToEnum(std.http.Method, args.method) orelse blk: {
@@ -1206,7 +1302,7 @@ pub fn buildRequest(
     }
 
     // Build extra request headers
-    var custom_headers: std.ArrayList(std.http.Header) = .{};
+    var custom_headers: std.ArrayList(std.http.Header) = .empty;
 
     for (args.headers.items) |h| {
         const colon = std.mem.indexOfScalar(u8, h, ':') orelse continue;
@@ -1224,7 +1320,7 @@ pub fn buildRequest(
     //   - POST/PUT/PATCH with KV params and no explicit --data/--data-file
     //     (params will become the body via openQAReq routing)
     if (args.form or ((method == .POST or method == .PUT or method == .PATCH) and
-        params.items.len > 0 and args.data == null and args.data_file == null))
+        params_encoded.len > 0 and args.data == null and args.data_file == null))
     {
         try custom_headers.append(arena_alloc, .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" });
     }
@@ -1236,7 +1332,7 @@ pub fn buildRequest(
         .method = method,
         .host = resolved_host,
         .path = relative_path,
-        .params_encoded = params.items[0..params.items.len],
+        .params_encoded = params_encoded,
         .body = req_body,
         .headers = try custom_headers.toOwnedSlice(arena_alloc),
         .arena = arena,
@@ -1338,7 +1434,76 @@ fn buildMonitorRequest(
         .host = host_res.url,
         .job_ids = job_ids,
         .follow = args.follow,
-        .poll_interval = args.poll_interval,
+        .poll_interval = args.poll_interval orelse 10,
+        .arena = arena,
+    };
+}
+
+/// ScheduleConfig is a transitional container: it bridges the gap between
+/// raw CLI argument parsing (parseArgs → Args) and the library's public API
+/// (runSchedule / ScheduleOptions).
+const ScheduleConfig = struct {
+    /// Resolved base URL of the target openQA instance.
+    host: []const u8,
+    /// Pre-encoded form body string for POST /api/v1/isos.
+    params_encoded: []const u8,
+    /// Whether --monitor was specified.
+    monitor_jobs: bool,
+    /// Whether --follow was specified.
+    follow: bool,
+    /// Polling interval in seconds (default 1 for schedule).
+    poll_interval: u64,
+    /// User-Agent header value.
+    name: []const u8,
+    arena: std.heap.ArenaAllocator,
+
+    fn deinit(self: *ScheduleConfig) void {
+        self.arena.deinit();
+    }
+};
+
+/// Transform parsed CLI arguments into a `ScheduleConfig` ready for `zoqa.runSchedule()`.
+///
+/// Validates that at least one KEY=VALUE positional argument is present,
+/// form-encodes all parameters (positional + `--param-file`), and resolves
+/// the target host.
+///
+/// Arguments:
+///   - `allocator`: Used for internal allocations.
+///   - `args`: Parsed CLI arguments from `parseArgs`.
+///
+/// Errors:
+///   - `error.MissingScheduleArgs` — no KEY=VALUE positional arguments.
+///   - `error.PathContainsNullByte` — a `--param-file` path contains `\x00`.
+///   - Any error from file I/O, host resolution, or allocator OOM.
+fn buildScheduleRequest(
+    allocator: std.mem.Allocator,
+    args: *const Args,
+) !ScheduleConfig {
+    if (args.kv_params.items.len < 1) return error.MissingScheduleArgs;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    // All kv_params are KEY=VALUE pairs (no PATH for schedule).
+    const params_encoded = try buildFormParams(allocator, arena_alloc, args.kv_params.items, args.param_files.items);
+
+    const host_res = try config.resolveHost(
+        arena_alloc,
+        args.osd,
+        args.o3,
+        args.odn,
+        args.host,
+    );
+
+    return .{
+        .host = host_res.url,
+        .params_encoded = params_encoded,
+        .monitor_jobs = args.schedule_monitor,
+        .follow = args.follow,
+        .poll_interval = args.poll_interval orelse 1,
+        .name = args.name,
         .arena = arena,
     };
 }
@@ -2147,6 +2312,7 @@ pub fn main() !void {
                 .api => printApiHelp(false),
                 .archive => printArchiveHelp(false),
                 .monitor => printMonitorHelp(false),
+                .schedule => printScheduleHelp(false),
             }
         } else {
             printHelp(false);
@@ -2180,6 +2346,9 @@ pub fn main() !void {
     var monitor_cfg: ?MonitorConfig = null;
     defer if (monitor_cfg) |*cfg| cfg.deinit();
 
+    var schedule_cfg: ?ScheduleConfig = null;
+    defer if (schedule_cfg) |*cfg| cfg.deinit();
+
     switch (subcmd) {
         .api => {
             req_cfg = buildRequest(gpa, &args, data_file_content) catch |err| {
@@ -2211,11 +2380,21 @@ pub fn main() !void {
                 std.process.exit(1);
             };
         },
+        .schedule => {
+            schedule_cfg = buildScheduleRequest(gpa, &args) catch |err| {
+                if (err == error.MissingScheduleArgs) {
+                    printScheduleHelp(true);
+                    std.process.exit(255);
+                }
+                std.debug.print("Schedule request build error: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            };
+        },
     }
 
     // Resolve credentials
     // Extract hostname from the resolved host URL for config file lookup.
-    const host_for_uri = if (req_cfg) |cfg| cfg.host else if (archive_cfg) |cfg| cfg.host else if (monitor_cfg) |cfg| cfg.host else args.host orelse "localhost";
+    const host_for_uri = if (req_cfg) |cfg| cfg.host else if (archive_cfg) |cfg| cfg.host else if (monitor_cfg) |cfg| cfg.host else if (schedule_cfg) |cfg| cfg.host else args.host orelse "localhost";
     const hostname = blk: {
         const uri = std.Uri.parse(host_for_uri) catch {
             break :blk host_for_uri;
@@ -2339,68 +2518,42 @@ pub fn main() !void {
             var client = std.http.Client{ .allocator = gpa };
             defer client.deinit();
 
-            var completed = try gpa.alloc(bool, cfg.job_ids.len);
-            defer gpa.free(completed);
-            @memset(completed, false);
+            const exit_code = zoqa.runMonitor(gpa, &client, cfg.host, cfg.job_ids, .{
+                .credentials = creds,
+                .quiet = args.quiet,
+                .retries = retries,
+                .connect_timeout_s = connect_timeout_s,
+                .retry_sleep_s = retry_sleep_s,
+                .retry_factor = retry_factor,
+                .follow = cfg.follow,
+                .poll_interval = cfg.poll_interval,
+            }) catch |err| {
+                if (!args.quiet) std.debug.print("Monitor error: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            };
+            std.process.exit(exit_code);
+        },
+        .schedule => {
+            const cfg = &schedule_cfg.?;
+            var client = std.http.Client{ .allocator = gpa };
+            defer client.deinit();
 
-            var stdout_buf: [4096]u8 = undefined;
-            var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-            const stdout = &stdout_writer.interface;
-
-            var final_statuses: std.ArrayList(zoqa.JobStatus) = .{};
-            defer {
-                for (final_statuses.items) |s| gpa.free(s.raw_state);
-                final_statuses.deinit(gpa);
-            }
-
-            while (true) {
-                var any_pending = false;
-
-                for (cfg.job_ids, 0..) |job_id, i| {
-                    if (completed[i]) continue;
-
-                    any_pending = true;
-
-                    const status = zoqa.checkJobStatus(
-                        gpa,
-                        &client,
-                        cfg.host,
-                        job_id,
-                        cfg.follow,
-                        .{
-                            .allocator = gpa,
-                            .credentials = creds,
-                            .retries = retries,
-                            .quiet = args.quiet,
-                            .connect_timeout_s = connect_timeout_s,
-                            .retry_sleep_s = retry_sleep_s,
-                            .retry_factor = retry_factor,
-                        },
-                    ) catch |err| {
-                        if (!args.quiet) {
-                            std.debug.print("API error checking job {d}: {s}\n", .{ job_id, @errorName(err) });
-                        }
-                        std.process.exit(1);
-                    };
-
-                    if (status.isTerminal()) {
-                        completed[i] = true;
-                        try final_statuses.append(gpa, status);
-                    } else {
-                        stdout.print("Job state of job ID {d}: {s}, waiting {d} seconds (poll interval: {d})\n", .{
-                            job_id, status.raw_state, cfg.poll_interval, cfg.poll_interval,
-                        }) catch {};
-                        stdout.flush() catch {};
-                        gpa.free(status.raw_state);
-                    }
-                }
-
-                if (!any_pending) break;
-
-                std.Thread.sleep(cfg.poll_interval * std.time.ns_per_s);
-            }
-
-            std.process.exit(zoqa.exitCodeForStatuses(final_statuses.items));
+            const exit_code = zoqa.runSchedule(gpa, &client, cfg.host, cfg.params_encoded, .{
+                .credentials = creds,
+                .quiet = args.quiet,
+                .retries = retries,
+                .connect_timeout_s = connect_timeout_s,
+                .retry_sleep_s = retry_sleep_s,
+                .retry_factor = retry_factor,
+                .monitor_jobs = cfg.monitor_jobs,
+                .follow = cfg.follow,
+                .poll_interval = cfg.poll_interval,
+                .name = cfg.name,
+            }) catch |err| {
+                if (!args.quiet) std.debug.print("Schedule error: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            };
+            std.process.exit(exit_code);
         },
     }
 }
@@ -2453,6 +2606,15 @@ const help_monitor_options =
     \\
 ;
 
+const help_schedule_options =
+    \\Options for schedule:
+    \\    --monitor (or -m)        After scheduling, wait for all resulting jobs to finish
+    \\    --follow (or -f)         Track the newest clone of each job (modifier for --monitor)
+    \\    --poll-interval INT (or -i) Polling interval in seconds (default: 1)
+    \\    --param-file STR...      Read parameter value from file contents (repeatable)
+    \\
+;
+
 fn printHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
@@ -2461,7 +2623,8 @@ fn printHelp(is_error: bool) void {
         "{s}\n" ++
             " api       Make an openQA API request\n" ++
             " archive   Download assets and test results from a job\n" ++
-            " monitor   Wait until all specified jobs reach a final state\n\n" ++
+            " monitor   Wait until all specified jobs reach a final state\n" ++
+            " schedule  Schedule openQA test jobs via POST /api/v1/isos\n\n" ++
             "See 'zoqa COMMAND --help' for more information on a specific command.\n",
         .{help_global_options},
     ) catch {};
@@ -2507,6 +2670,20 @@ fn printMonitorHelp(is_error: bool) void {
             "{s}" ++
             "{s}",
         .{ help_global_options, help_monitor_options },
+    ) catch {};
+    w.flush() catch {};
+}
+
+/// Print the `schedule` subcommand usage block.
+fn printScheduleHelp(is_error: bool) void {
+    var buf: [4096]u8 = undefined;
+    var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
+    const w = &out_writer.interface;
+    w.print(
+        "Usage: zoqa schedule [OPTIONS] KEY=VALUE [KEY=VALUE ...]\n\n" ++
+            "{s}" ++
+            "{s}",
+        .{ help_global_options, help_schedule_options },
     ) catch {};
     w.flush() catch {};
 }

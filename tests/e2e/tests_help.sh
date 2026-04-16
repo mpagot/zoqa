@@ -43,11 +43,21 @@ run_test "ZIG : monitor help has global options" "$ZIG_EXE monitor --help" 0 "Op
 run_test "PERL: monitor help has Usage" "$PERL_EXE monitor --help" 0 "Usage:"
 run_test "ZIG : monitor help has Usage" "$ZIG_EXE monitor --help" 0 "Usage:"
 
-# 5. Negative test (global help hides subcommand options)
+# 5. schedule help
+run_test "PERL: schedule help has Options for schedule" "$PERL_EXE schedule --help" 0 "Options for schedule:"
+run_test "ZIG : schedule help has Options for schedule" "$ZIG_EXE schedule --help" 0 "Options for schedule:"
+
+run_test "PERL: schedule help has global options" "$PERL_EXE schedule --help" 0 "Options (for all commands):"
+run_test "ZIG : schedule help has global options" "$ZIG_EXE schedule --help" 0 "Options (for all commands):"
+
+run_test "PERL: schedule help has Usage" "$PERL_EXE schedule --help" 0 "Usage:"
+run_test "ZIG : schedule help has Usage" "$ZIG_EXE schedule --help" 0 "Usage:"
+
+# 6. Negative test (global help hides subcommand options)
 run_test "PERL: Global help hides api options" "bash -c \"$PERL_EXE --help | grep -q 'Options for api:'; test \\\$? -eq 1\"" 0
 run_test "ZIG : Global help hides api options" "bash -c \"$ZIG_EXE --help | grep -q 'Options for api:'; test \\\$? -eq 1\"" 0
 
-# 5. Exit codes and stdout/stderr routing
+# 7. Exit codes and stdout/stderr routing
 run_test "PERL: --help writes to stdout, exits 0" "bash -c \"$PERL_EXE --help > /tmp/out 2> /tmp/err; test -s /tmp/out && ! test -s /tmp/err\"" 0
 run_test "ZIG : --help writes to stdout, exits 0" "bash -c \"$ZIG_EXE --help > /tmp/out 2> /tmp/err; test -s /tmp/out && ! test -s /tmp/err\"" 0
 

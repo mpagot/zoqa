@@ -6,7 +6,7 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help build release test e2e e2e-keep e2e-dryrun e2e-lint fuzz-build
+.PHONY: help build release zig-test zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint lint fuzz-build
 
 # Default target
 help:
@@ -15,14 +15,17 @@ help:
 	@echo "Targets:"
 	@echo "  build       Build the zoqa executable and static library."
 	@echo "  release     Build with release optimizations."
-	@echo "  test        Run all Zig unit tests."
+	@echo "  zig-test    Run all Zig unit tests."
 	@echo "  e2e         Build, then run the full E2E suite (starts + tears down container)."
 	@echo "              Optional: SUITES=core,auth  — run only the listed suite(s)."
 	@echo "              Optional: SUITES=           — run no tests (deployment check)."
 	@echo "  e2e-keep    Build, then run E2E keeping the container alive (--keep-container)."
 	@echo "              Optional: SUITES=           — deploy only, skip all tests."
 	@echo "  e2e-dryrun  Build, then simulate E2E run without starting container (--dryrun)."
-	@echo "  e2e-lint        Run bash -n syntax check and shellcheck on all E2E scripts."
+	@echo "  zig-lint    Check Zig source formatting (zig fmt --check src/)."
+	@echo "  e2e-lint        Run bash -n, shellcheck, and suite registry check on E2E scripts."
+	@echo "  manual-lint     Run bash -n and shellcheck on manual test scripts."
+	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint)."
 	@echo "  fuzz-build  Build the fuzzy app."
 
 # -----------------------------------------------------------------------------
@@ -43,7 +46,7 @@ fuzz-build:
 # -----------------------------------------------------------------------------
 # Unit Tests
 # -----------------------------------------------------------------------------
-test:
+zig-test:
 	zig build test --summary all
 
 # -----------------------------------------------------------------------------
@@ -80,7 +83,11 @@ E2E_SCRIPTS := \
 	tests/e2e/tests_output.sh \
 	tests/e2e/tests_retry_knobs.sh \
 	tests/e2e/tests_robustness.sh \
-	tests/e2e/tests_perf.sh
+	tests/e2e/tests_monitor.sh \
+	tests/e2e/tests_schedule.sh \
+	tests/e2e/tests_help.sh \
+	tests/e2e/tests_perf.sh \
+	tests/e2e/check_suite_registry.sh
 
 e2e-lint:
 	@echo "==> bash -n syntax check"
@@ -89,4 +96,38 @@ e2e-lint:
 	done
 	@echo "==> shellcheck"
 	@shellcheck $(E2E_SCRIPTS)
+	@echo "==> suite registry check"
+	@bash tests/e2e/check_suite_registry.sh
 	@echo "==> e2e-lint passed"
+
+# -----------------------------------------------------------------------------
+# Linting — bash syntax check + shellcheck on manual test scripts
+# -----------------------------------------------------------------------------
+MANUAL_SCRIPTS := \
+	tests/manual/lib.sh \
+	tests/manual/test_api.sh \
+	tests/manual/test_archive.sh \
+	tests/manual/test_schedule_monitor.sh
+
+manual-lint:
+	@echo "==> bash -n syntax check"
+	@for f in $(MANUAL_SCRIPTS); do \
+		bash -n "$$f" && echo "  OK  $$f" || echo "  FAIL $$f"; \
+	done
+	@echo "==> shellcheck"
+	@shellcheck -x $(MANUAL_SCRIPTS)
+	@echo "==> manual-lint passed"
+
+# -----------------------------------------------------------------------------
+# Linting — Zig source formatting check
+# -----------------------------------------------------------------------------
+zig-lint:
+	@echo "==> zig fmt --check src/"
+	@zig fmt --check src/
+	@echo "==> zig-lint passed"
+
+# -----------------------------------------------------------------------------
+# Aggregate lint target
+# -----------------------------------------------------------------------------
+lint: zig-lint e2e-lint manual-lint
+	@echo "==> all linters passed"
