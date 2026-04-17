@@ -1,5 +1,6 @@
 const std = @import("std");
 const zoqa = @import("root.zig");
+const config = zoqa.config;
 
 pub const JobState = enum {
     scheduled,
@@ -101,7 +102,7 @@ pub fn checkJobStatus(
     };
 }
 
-/// Compute the CLI exit code according to SPEC §14.5.
+/// Compute the CLI exit code
 /// 0: all passed/softfailed
 /// 2: at least one job failed/incomplete/cancelled
 /// (Exit code 1 for network/API errors should be handled by the caller before this)
@@ -137,4 +138,97 @@ test "exitCodeForStatuses - cancelled state returns 2 regardless of result" {
         .{ .state = .cancelled, .result = .passed, .raw_state = "cancelled" },
     };
     try std.testing.expectEqual(@as(u8, 2), exitCodeForStatuses(&statuses));
+}
+
+// ---------------------------------------------------------------------------
+// MonitorOptions & runMonitor — library entry point for the monitoring loop
+// ---------------------------------------------------------------------------
+
+/// Configuration for the monitoring loop. Mirrors the CLI flags of the
+/// `monitor` subcommand (§14) and is reused by `schedule --monitor` (§15.7).
+pub const MonitorOptions = struct {
+    credentials: ?config.Credentials = null,
+    quiet: bool = false,
+    retries: u32 = 0,
+    connect_timeout_s: f64 = 30.0,
+    retry_sleep_s: f64 = 3.0,
+    retry_factor: f64 = 1.0,
+    follow: bool = false,
+    poll_interval: u64 = 10,
+};
+
+/// Blocking monitoring loop: polls each job until all reach a terminal state.
+///
+/// Returns the exit code:
+///   0 — all jobs passed or softfailed
+///   1 — API/network error during polling
+///   2 — at least one job failed/cancelled
+pub fn runMonitor(
+    allocator: std.mem.Allocator,
+    client: *std.http.Client,
+    host: []const u8,
+    job_ids: []const u64,
+    options: MonitorOptions,
+) !u8 {
+    var completed = try allocator.alloc(bool, job_ids.len);
+    defer allocator.free(completed);
+    @memset(completed, false);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_writer.interface;
+
+    var final_statuses: std.ArrayList(JobStatus) = .empty;
+    defer {
+        for (final_statuses.items) |s| allocator.free(s.raw_state);
+        final_statuses.deinit(allocator);
+    }
+
+    while (true) {
+        var any_pending = false;
+
+        for (job_ids, 0..) |job_id, i| {
+            if (completed[i]) continue;
+
+            const status = checkJobStatus(
+                allocator,
+                client,
+                host,
+                job_id,
+                options.follow,
+                .{
+                    .allocator = allocator,
+                    .credentials = options.credentials,
+                    .retries = options.retries,
+                    .quiet = options.quiet,
+                    .connect_timeout_s = options.connect_timeout_s,
+                    .retry_sleep_s = options.retry_sleep_s,
+                    .retry_factor = options.retry_factor,
+                },
+            ) catch |err| {
+                if (!options.quiet) {
+                    std.debug.print("API error checking job {d}: {s}\n", .{ job_id, @errorName(err) });
+                }
+                return 1;
+            };
+
+            if (status.isTerminal()) {
+                completed[i] = true;
+                try final_statuses.append(allocator, status);
+            } else {
+                any_pending = true;
+                stdout.print("Job state of job ID {d}: {s}, waiting {d} seconds (poll interval: {d})\n", .{
+                    job_id, status.raw_state, options.poll_interval, options.poll_interval,
+                }) catch {};
+                stdout.flush() catch {};
+                allocator.free(status.raw_state);
+            }
+        }
+
+        if (!any_pending) break;
+
+        std.Thread.sleep(options.poll_interval * std.time.ns_per_s);
+    }
+
+    return exitCodeForStatuses(final_statuses.items);
 }

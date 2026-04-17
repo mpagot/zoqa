@@ -6,6 +6,7 @@ pub const auth = @import("auth.zig");
 const http_client = @import("http_client.zig");
 const archive = @import("archive.zig");
 const monitor = @import("monitor.zig");
+const schedule = @import("schedule.zig");
 
 // Re-export public types. Only types needed by external consumers are `pub`.
 // `Request`, `execute`, and `normalizePathQuery` are internal implementation
@@ -24,6 +25,11 @@ pub const JobResult = monitor.JobResult;
 pub const JobStatus = monitor.JobStatus;
 pub const checkJobStatus = monitor.checkJobStatus;
 pub const exitCodeForStatuses = monitor.exitCodeForStatuses;
+pub const MonitorOptions = monitor.MonitorOptions;
+pub const runMonitor = monitor.runMonitor;
+
+pub const ScheduleOptions = schedule.ScheduleOptions;
+pub const runSchedule = schedule.runSchedule;
 
 // Internal aliases — NOT part of the public API.
 const Request = http_client.Request;

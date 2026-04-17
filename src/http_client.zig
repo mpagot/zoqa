@@ -188,7 +188,7 @@ fn buildHeaders(
     hash_buf: *[40]u8,
     timestamp_buf: *[32]u8,
 ) !std.ArrayList(std.http.Header) {
-    var headers: std.ArrayList(std.http.Header) = .{};
+    var headers: std.ArrayList(std.http.Header) = .empty;
     errdefer headers.deinit(allocator);
 
     try headers.appendSlice(allocator, extra_headers);
@@ -211,7 +211,7 @@ fn buildHeaders(
     if (credentials) |creds| {
         // HMAC message: path + ("?" + query if query else "") + timestamp.
         // Body parameters are strictly EXCLUDED.
-        var msg_buf: std.ArrayList(u8) = .{};
+        var msg_buf: std.ArrayList(u8) = .empty;
         defer msg_buf.deinit(allocator);
 
         const w = msg_buf.writer(allocator);
@@ -356,7 +356,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         }
         var content_type_is_json = false;
         var is_gzip = false;
-        var all_headers: std.ArrayList(ResponseHeader) = .{};
+        var all_headers: std.ArrayList(ResponseHeader) = .empty;
         errdefer {
             for (all_headers.items) |h| {
                 req.allocator.free(h.name);
@@ -539,7 +539,7 @@ fn sleepForRetry(attempt: u32, sleep_s: f64, factor: f64) !void {
 
 test "normalizePathQuery: %20 becomes plus, tilde becomes %7E" {
     const testing = std.testing;
-    var buf: std.ArrayList(u8) = .{};
+    var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(testing.allocator);
     try normalizePathQuery("/api/v1/jobs?name=hello%20world&t=~1", buf.writer(testing.allocator));
     try testing.expectEqualStrings("/api/v1/jobs?name=hello+world&t=%7E1", buf.items);
@@ -547,7 +547,7 @@ test "normalizePathQuery: %20 becomes plus, tilde becomes %7E" {
 
 test "normalizePathQuery: no substitutions needed" {
     const testing = std.testing;
-    var buf: std.ArrayList(u8) = .{};
+    var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(testing.allocator);
     try normalizePathQuery("/api/v1/jobs?limit=10", buf.writer(testing.allocator));
     try testing.expectEqualStrings("/api/v1/jobs?limit=10", buf.items);

@@ -90,6 +90,8 @@ pwsh tests\e2e\run_windows.ps1 -WslDistro "openSUSE-Tumbleweed"
 | `tests_retry_knobs.sh` | Section F — retry/timeout env var smoke tests (tests 32–35). |
 | `tests_archive.sh` | Section H — archive subcommand tests (ARC-1–ARC-25). |
 | `tests_monitor.sh` | Section I — monitor subcommand tests (MON-1–MON-51). |
+| `tests_schedule.sh` | Section J — schedule subcommand tests (SCH-1–SCH-50). |
+| `tests_help.sh` | Help output structure tests (global, api, archive, monitor, schedule). |
 | `tests_perf.sh` | Section G — wall-clock timing and peak RSS comparisons (PERF-T1, T2, R1, R2). |
 
 `run.sh` is the only script you need to call directly in normal use. The others are
@@ -118,7 +120,8 @@ invoked automatically.
 --collect-logs      Dump openQA server-side logs to ./openqa-e2e-logs/ before stopping.
 --suites NAMES      Comma-separated list of suite names to run. Valid names:
                     core, auth, data, output, robustness, retry_knobs, archive,
-                    monitor, perf. When omitted, all suites are run (default behaviour).
+                    monitor, schedule, help, perf. When omitted, all suites are
+                    run (default behaviour).
 -h, --help          Show help.
 ```
 
@@ -223,6 +226,15 @@ All E2E shell scripts are checked by `bash -n` (syntax) and
 [shellcheck](https://www.shellcheck.net/). A `.shellcheckrc` in this directory
 configures source resolution so no extra flags are needed.
 
+Additionally, `check_suite_registry.sh` verifies that every `tests_*.sh` file on
+disk is properly registered in all three required locations:
+
+1. `tests/e2e/tests.sh` — `_e2e_all_suites` array
+2. `Makefile` — `E2E_SCRIPTS` list
+3. `tests/e2e/README.md` — File Layout section
+
+It also detects stale entries (registrations pointing to files that no longer exist).
+
 Run from the repository root:
 
 ```sh
@@ -312,7 +324,7 @@ The harness employs three primary testing patterns to validate the Zig executabl
 |---|---|---|
 | 24 | Verbose Header Count | Perl vs Zig header line count comparison — both print 5 header lines. |
 
-### Archive Subcommand (Section H — SPEC §13)
+### Archive Subcommand
 | # | Test | Verification |
 |---|---|---|
 | ARC-1 | Missing All Arguments | `archive` with no JOB_ID or OUTPUT_PATH exits 255 (usage error). |
@@ -341,7 +353,7 @@ The harness employs three primary testing patterns to validate the Zig executabl
 | ARC-24 | --host Before archive | Global `--host` before subcommand name rejected (exit 255). |
 | ARC-25 | Default Size Limit | Default 200 MiB limit allows small files (exit 0). |
 
-### Monitor Subcommand (Section I — SPEC §14)
+### Monitor Subcommand
 | # | Test | Verification |
 |---|---|---|
 | MON-1,2 | Missing JOB_ID | `monitor` with no arguments exits 255. |
@@ -355,12 +367,28 @@ The harness employs three primary testing patterns to validate the Zig executabl
 | MON-17,18 | Multiple Jobs | Multiple IDs passed; exits 2 if any fail. |
 | MON-50,51 | Invalid Flag | `monitor --extract` exits 255. |
 
+### Schedule Subcommand
+| # | Test | Verification |
+|---|---|---|
+| SCH-1 | Sync Schedule (inline) | Both Perl and Zig schedule via `schedule` with inline `SCENARIO_DEFINITIONS_YAML`, exit 0, stdout contains `"has/have been created"` and job URLs. |
+| SCH-2 | Sync Schedule (--param-file) | Both schedule using `--param-file SCENARIO_DEFINITIONS_YAML=/tmp/scenario.yaml`, exit 0, stdout contains `"has/have been created"`. |
+| SCH-3 | Async Without --monitor | Both schedule with `async=1` (no `--monitor`), exit 0. No `"has been created"` line expected. |
+| SCH-4 | Async With --monitor | Both schedule with `async=1 --monitor`, poll until jobs complete, exit 0. |
+| SCH-6 | --follow Without --monitor | Both schedule with `--follow` (no `--monitor`), exit 0 immediately after printing job URLs. `--follow` is a modifier, not a trigger. |
+| SCH-7 | --poll-interval + async --monitor | Both schedule with `--poll-interval 1 --monitor async=1`, poll and exit 0. |
+| SCH-8 | Missing Mandatory Params | Both schedule with `BOGUS=1` only, server returns 400, exit 1. |
+| SCH-9 | Zero Products Scheduled | Both schedule with non-matching `FLAVOR=NONEXISTENT`, exit 1. |
+| SCH-50 | Invalid Flag (--extract) | `schedule --extract` exits 255 (cross-subcommand flag rejection). |
+
 
 ---
 
 ## Expected Failures
 
-All 35 tests pass. There are no expected failures.
+All existing tests (api, auth, data, output, robustness, retry, archive, monitor,
+help, perf) pass. The **schedule** suite tests are expected to **FAIL on the Zig
+side** until the `schedule` subcommand is implemented (TDD approach — tests are
+written first). Perl-side assertions in the schedule suite should pass.
 
 ---
 
@@ -382,10 +410,23 @@ test expectations in `run.sh`.
 tests/e2e/
   .shellcheckrc               — shellcheck configuration (source-path, external-sources)
   lib.sh                      — shared functions and defaults
-  run.sh                      — main entry point (35 tests)
+  run.sh                      — main entry point
   setup.sh                    — container lifecycle + bootstrap + seeding
   teardown.sh                 — container stop + log collection + cleanup
   seed_fixtures.sh            — fixture seeding (runs inside container)
+  tests.sh                    — sources all tests_*.sh domain files
+  tests_core.sh               — Section A: core protocol and CLI flag tests
+  tests_auth.sh               — Section B: authentication tests
+  tests_data.sh               — Section C: seeded data, pagination, parity
+  tests_output.sh             — Section D: verbose, pretty, name
+  tests_robustness.sh         — Section E: broken pipe, non-2xx stderr, quiet
+  tests_retry_knobs.sh        — Section F: retry/timeout env var smoke tests
+  tests_archive.sh            — Section H: archive subcommand
+  tests_monitor.sh            — Section I: monitor subcommand
+  tests_schedule.sh           — Section J: schedule subcommand
+  tests_help.sh               — help output structure tests
+  tests_perf.sh               — Section G: wall-clock timing and peak RSS
+  check_suite_registry.sh     — lint: verify suite files are registered everywhere
   fixtures/
     templates.json            — machine/suite/product/group definitions
     scenario-definitions.yaml — job scheduling YAML
