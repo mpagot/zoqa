@@ -2483,6 +2483,7 @@ pub fn main() !void {
                 .credentials = creds,
                 .retries = retries,
                 .quiet = args.quiet,
+                .verbose = args.verbose,
                 .connect_timeout_s = connect_timeout_s,
                 .retry_sleep_s = retry_sleep_s,
                 .retry_factor = retry_factor,

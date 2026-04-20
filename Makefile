@@ -16,12 +16,13 @@ help:
 	@echo "  build       Build the zoqa executable and static library."
 	@echo "  release     Build with release optimizations."
 	@echo "  zig-test    Run all Zig unit tests."
-	@echo "  e2e         Build, then run the full E2E suite (starts + tears down container)."
+	@echo "  e2e         Run the full E2E suite (starts + tears down container)."
+	@echo "              Requires zig-out/bin/zoqa to exist."
 	@echo "              Optional: SUITES=core,auth  — run only the listed suite(s)."
 	@echo "              Optional: SUITES=           — run no tests (deployment check)."
-	@echo "  e2e-keep    Build, then run E2E keeping the container alive (--keep-container)."
+	@echo "  e2e-keep    Run E2E keeping the container alive (--keep-container)."
 	@echo "              Optional: SUITES=           — deploy only, skip all tests."
-	@echo "  e2e-dryrun  Build, then simulate E2E run without starting container (--dryrun)."
+	@echo "  e2e-dryrun  Simulate E2E run without starting container (--dryrun)."
 	@echo "  zig-lint    Check Zig source formatting (zig fmt --check src/)."
 	@echo "  e2e-lint        Run bash -n, shellcheck, and suite registry check on E2E scripts."
 	@echo "  manual-lint     Run bash -n and shellcheck on manual test scripts."
@@ -57,13 +58,21 @@ zig-test:
 # This allows 'make e2e SUITES=' to run zero tests.
 E2E_SUITES_ARG := $(if $(filter-out undefined,$(origin SUITES)),--suites "$(SUITES)",)
 
-e2e: build
+# isotovideo storage-check keep-free ratio.
+# Unset (default) = isotovideo built-in 20% keep-free check applies.
+# Set to 0 to disable the check on CI hosts with low free space:
+#   make e2e E2E_STORAGE_KEEP_FREE_RATIO=0
+ifdef E2E_STORAGE_KEEP_FREE_RATIO
+export E2E_STORAGE_KEEP_FREE_RATIO
+endif
+
+e2e:
 	bash tests/e2e/run.sh $(E2E_SUITES_ARG)
 
-e2e-keep: build
+e2e-keep:
 	bash tests/e2e/run.sh --keep-container $(E2E_SUITES_ARG)
 
-e2e-dryrun: build
+e2e-dryrun:
 	bash tests/e2e/run.sh --dryrun $(E2E_SUITES_ARG)
 
 # -----------------------------------------------------------------------------
@@ -87,6 +96,7 @@ E2E_SCRIPTS := \
 	tests/e2e/tests_schedule.sh \
 	tests/e2e/tests_help.sh \
 	tests/e2e/tests_perf.sh \
+	tests/e2e/tests_stress.sh \
 	tests/e2e/check_suite_registry.sh
 
 e2e-lint:

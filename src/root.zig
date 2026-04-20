@@ -139,6 +139,9 @@ pub const CallOptions = struct {
     /// error return. Corresponds to the `--quiet` / `-q` CLI flag.
     quiet: bool = false,
 
+    /// When `true`, prints request headers to stderr.
+    verbose: bool = false,
+
     /// TCP connect timeout in seconds. Currently parsed and validated but
     /// not yet wired into `std.http.Client` (which does not expose
     /// per-connection timeout support). Reserved for future use.
@@ -165,6 +168,7 @@ pub const RawGetOptions = struct {
     credentials: ?config.Credentials = null,
     size_limit: ?u64 = null,
     quiet: bool = false,
+    verbose: bool = false,
 };
 
 /// Perform an authenticated GET request to an arbitrary path (no /api/v1/ prefix).
@@ -195,6 +199,7 @@ pub fn openQARawGet(
         .credentials = opts.credentials,
         .retries = 0,
         .quiet = opts.quiet,
+        .verbose = opts.verbose,
         .size_limit = opts.size_limit,
     };
 
@@ -281,6 +286,7 @@ pub fn openQAReq(
         .credentials = opts.credentials,
         .retries = opts.retries,
         .quiet = opts.quiet,
+        .verbose = opts.verbose,
         .connect_timeout_s = opts.connect_timeout_s,
         .retry_sleep_s = opts.retry_sleep_s,
         .retry_factor = opts.retry_factor,
