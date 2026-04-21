@@ -268,6 +268,142 @@ podman rm -f openqa-e2e
 
 ---
 
+## Interactive Development with `e2e-keep`
+
+When iterating on a test suite or investigating performance, the full
+`make e2e` cycle (bootstrap openQA, seed fixtures, run
+all suites, tear down) takes several minutes.  The `e2e-keep` target
+short-circuits this by keeping the container alive after the automated
+run finishes.  You can then re-run individual test scripts or ad-hoc
+commands against the same seeded container as many times as you like.
+
+### Step 1 — Start the container and run a specific suite
+
+```sh
+# Build zoqa, start the container, run only the "stress" suite, keep alive.
+# E2E_STORAGE_KEEP_FREE_RATIO=0 disables isotovideo's disk-space check.
+make e2e-keep SUITES=stress E2E_STORAGE_KEEP_FREE_RATIO=0
+
+# Or start the container with NO tests at all (just seed fixtures):
+make e2e-keep SUITES=
+```
+
+After the run finishes, the output shows:
+
+```
+==> Container 'openqa-e2e' is still running (--keep-container).
+    openQA web UI: http://localhost:8080  /  https://localhost:8443
+    To stop it:  podman rm -f openqa-e2e
+```
+
+### Step 2 — Re-run a test script manually
+
+The automated test scripts (`tests_*.sh`) are designed to be sourced by
+`tests.sh` inside `run.sh`, which sets up shared variables (`ZIG_EXE`,
+`PERL_EXE`, `LOG_DIR`, `failed_tests`, etc.).  To re-run a script against
+the kept container, replicate that environment in a shell:
+
+```sh
+# Source credentials and seeded IDs written by setup.sh
+source /tmp/openqa_e2e_env.sh
+
+# Set the variables that run.sh normally provides
+export ZIG_EXE="/app/zig-out/bin/zoqa"
+export PERL_EXE="openqa-cli"
+export LOG_DIR="/tmp/zoqa_e2e_manual"
+mkdir -p "$LOG_DIR"
+export failed_tests=0
+export warned_tests=0
+export E2E_SUITES="all"          # enable all suites in the _e2e_suite_enabled check
+
+# Source the shared library and test helpers
+source tests/e2e/lib.sh
+source tests/e2e/tests.sh        # defines run_test(), run_diff_test(), etc.
+```
+
+Or source only the library and helpers, then source one specific suite:
+
+```sh
+source /tmp/openqa_e2e_env.sh
+ZIG_EXE="/app/zig-out/bin/zoqa"
+PERL_EXE="openqa-cli"
+LOG_DIR="/tmp/zoqa_e2e_manual"; mkdir -p "$LOG_DIR"
+failed_tests=0; warned_tests=0; E2E_SUITES="all"
+
+source tests/e2e/lib.sh
+
+# Source just the helpers from tests.sh without running all suites.
+# The helper functions (run_test, run_diff_test, run_comparison) are
+# defined before the suite-sourcing loop, so we can extract them with:
+_E2E_DIR="tests/e2e"
+source <(sed -n '1,/^# Source domain test files/p' tests/e2e/tests.sh)
+
+# Now run one suite:
+source tests/e2e/tests_stress.sh
+echo "Failed: $failed_tests"
+```
+
+### Step 3 — Run ad-hoc commands against the container
+
+With the container alive, you can run any command directly via
+`podman exec`.  This is useful for manual benchmarking, debugging job
+output, or verifying fixes before committing:
+
+```sh
+# Check a job's status
+podman exec openqa-e2e openqa-cli api --host http://localhost jobs/2 \
+  2>/dev/null | jq '{state: .job.state, result: .job.result}'
+
+# Measure response size
+podman exec openqa-e2e bash -c \
+  'openqa-cli api --host http://localhost jobs/2/details 2>/dev/null | wc -c'
+
+# Wall-clock timing (Perl then Zig, sequentially)
+podman exec openqa-e2e bash -c "
+  TIMEFORMAT='%R'
+  { time openqa-cli api --host http://localhost jobs/2/details \
+      >/dev/null 2>&1; } 2>&1"
+
+podman exec openqa-e2e bash -c "
+  TIMEFORMAT='%R'
+  { time /app/zig-out/bin/zoqa api --host http://localhost jobs/2/details \
+      >/dev/null 2>&1; } 2>&1"
+
+# Detailed resource usage via /usr/bin/time -v
+podman exec openqa-e2e bash -c \
+  '/usr/bin/time -v /app/zig-out/bin/zoqa api --host http://localhost \
+     jobs/2/details >/dev/null' </dev/null 2>&1
+
+# Output parity — compare md5 checksums
+podman exec openqa-e2e bash -c \
+  'openqa-cli api --host http://localhost jobs/2/details 2>/dev/null | md5sum'
+podman exec openqa-e2e bash -c \
+  '/app/zig-out/bin/zoqa api --host http://localhost jobs/2/details 2>/dev/null | md5sum'
+```
+
+### Step 4 — Rebuild zoqa and re-test without restarting the container
+
+The zoqa binary is bind-mounted from `zig-out/bin/zoqa` into the
+container at `/app/zig-out/bin/zoqa`.  A plain `zig build` on the host
+updates the binary in place, and the next `podman exec` picks up the
+new version immediately — no container restart needed:
+
+```sh
+# Edit src/http_client.zig, then:
+zig build
+# The container already sees the new binary:
+podman exec openqa-e2e /app/zig-out/bin/zoqa api --host http://localhost jobs/2/details \
+  >/dev/null 2>&1
+```
+
+### Step 5 — Tear down
+
+```sh
+podman rm -f openqa-e2e
+```
+
+---
+
 ## Testing Methodology
 
 The harness employs three primary testing patterns to validate the Zig executable:
@@ -426,6 +562,7 @@ tests/e2e/
   tests_schedule.sh           — Section J: schedule subcommand
   tests_help.sh               — help output structure tests
   tests_perf.sh               — Section G: wall-clock timing and peak RSS
+  tests_stress.sh             — Section L: large response stress tests
   check_suite_registry.sh     — lint: verify suite files are registered everywhere
   fixtures/
     templates.json            — machine/suite/product/group definitions

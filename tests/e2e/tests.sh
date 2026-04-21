@@ -15,6 +15,7 @@
 #   tests_retry_knobs.sh — Section F: OPENQA_CLI_RETRIES / SLEEP / FACTOR env vars
 #   tests_archive.sh     — Section H: archive subcommand
 #   tests_perf.sh        — Section G: wall-clock timing and peak RSS comparisons
+#   tests_stress.sh      — Section L: large response stress tests
 #
 # Reads from the calling scope:
 #   ZIG_EXE       — absolute path to the zoqa binary inside the container
@@ -203,7 +204,7 @@ _e2e_suite_enabled() {
 # ShellCheck cannot follow a dynamic source path; the individual tests_*.sh
 # files are checked independently when `make e2e-lint` is run.
 # shellcheck disable=SC1090
-_e2e_all_suites=(core auth data output robustness retry_knobs archive monitor schedule help perf)
+_e2e_all_suites=(core auth data output robustness retry_knobs archive monitor schedule help stress perf)
 for _suite in "${_e2e_all_suites[@]}"; do
 	if _e2e_suite_enabled "$_suite"; then
 		source "$_E2E_DIR/tests_${_suite}.sh"

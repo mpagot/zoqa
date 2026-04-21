@@ -48,6 +48,13 @@ OPTIONS:
                       'all' to run all suites. Pass an empty string to
                       skip all tests (e.g. --suites "").
 
+ENVIRONMENT VARIABLES:
+  E2E_STORAGE_KEEP_FREE_RATIO   isotovideo disk-space check threshold.
+                      Unset (default) = isotovideo built-in 20% keep-free.
+                      Set to 0 to disable the check entirely, useful on CI
+                      hosts with low free disk space:
+                        make e2e E2E_STORAGE_KEEP_FREE_RATIO=0
+
 DEBUGGING TIPS:
   Use --keep-container to browse the openQA web UI during or after the run.
   Use --collect-logs --keep-container to inspect logs without stopping the container.
@@ -112,6 +119,7 @@ fi
 # are available.  Both checks are optional — missing tools are silently skipped.
 if [[ -f "zig-out/bin/zoqa" ]]; then
 	_zoqa_bin="zig-out/bin/zoqa"
+	echo "    zoqa path  : $(realpath "$_zoqa_bin")"
 	if command -v md5sum >/dev/null 2>&1; then
 		echo "    zoqa md5   : $(md5sum "$_zoqa_bin" | awk '{print $1}')"
 	elif command -v md5 >/dev/null 2>&1; then
@@ -130,6 +138,13 @@ if [[ -f "zig-out/bin/zoqa" ]]; then
 			echo "    zoqa build : Debug"
 		else
 			echo "    zoqa build : Release"
+		fi
+	fi
+	if command -v stat >/dev/null 2>&1; then
+		if stat --version >/dev/null 2>&1; then
+			echo "    zoqa size  : $(stat -c '%s' "$_zoqa_bin") bytes"
+		else
+			echo "    zoqa size  : $(stat -f '%z' "$_zoqa_bin") bytes"
 		fi
 	fi
 	unset _zoqa_bin

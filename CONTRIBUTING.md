@@ -21,6 +21,8 @@ zig build test --summary all
 make e2e-lint
 
 # Near end-to-end tests (starts an openQA container via Podman)
+# Requires the binary to be built first:
+zig build
 make e2e
 ```
 
@@ -40,8 +42,8 @@ make help  # print this table
 | `build` | Build the zoqa executable and static library. |
 | `release` | Build with release optimizations (`ReleaseFast`). |
 | `test` | Run all Zig unit tests. |
-| `e2e` | Build, then run the full E2E suite (starts + tears down container). |
-| `e2e-keep` | Build, then run E2E keeping the container alive (`--keep-container`). |
+| `e2e` | Run the full E2E suite (starts + tears down container). |
+| `e2e-keep` | Run E2E keeping the container alive (`--keep-container`). |
 | `e2e-lint` | Bash `-n` syntax check and shellcheck on all E2E scripts. |
 | `fuzz-build` | Build the instrumented AFL++ fuzz binaries. |
 

@@ -115,6 +115,7 @@ pub const Request = struct {
     credentials: ?config.Credentials,
     retries: u32,
     quiet: bool,
+    verbose: bool = false,
     connect_timeout_s: f64 = 30.0,
     retry_sleep_s: f64 = 3.0,
     retry_factor: f64 = 1.0,
@@ -187,6 +188,7 @@ fn buildHeaders(
     uri: std.Uri,
     hash_buf: *[40]u8,
     timestamp_buf: *[32]u8,
+    accept_gzip: bool,
 ) !std.ArrayList(std.http.Header) {
     var headers: std.ArrayList(std.http.Header) = .empty;
     errdefer headers.deinit(allocator);
@@ -204,9 +206,11 @@ fn buildHeaders(
         try headers.append(allocator, .{ .name = "Accept", .value = "application/json" });
     }
 
-    // Disable compression: request raw bytes so the response body is
-    // always human-readable text. We still handle gzip defensively.
-    try headers.append(allocator, .{ .name = "Accept-Encoding", .value = "identity" });
+    if (accept_gzip) {
+        try headers.append(allocator, .{ .name = "Accept-Encoding", .value = "gzip, deflate" });
+    } else {
+        try headers.append(allocator, .{ .name = "Accept-Encoding", .value = "identity" });
+    }
 
     if (credentials) |creds| {
         // HMAC message: path + ("?" + query if query else "") + timestamp.
@@ -272,8 +276,16 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         const uri = try std.Uri.parse(req.url);
         var hash_buf: [40]u8 = undefined;
         var timestamp_buf: [32]u8 = undefined;
-        var headers = try buildHeaders(req.allocator, req.headers, req.credentials, uri, &hash_buf, &timestamp_buf);
+        var headers = try buildHeaders(req.allocator, req.headers, req.credentials, uri, &hash_buf, &timestamp_buf, true);
         defer headers.deinit(req.allocator);
+
+        if (req.verbose) {
+            std.debug.print("> {s} {s}\n", .{ @tagName(req.method), uri.path.percent_encoded });
+            for (headers.items) |h| {
+                std.debug.print("> {s}: {s}\n", .{ h.name, h.value });
+            }
+            std.debug.print(">\n", .{});
+        }
 
         // ----------------------------------------------------------------
         // Issue the request via the injected client
@@ -419,7 +431,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         var body_aw = std.Io.Writer.Allocating.init(req.allocator);
         defer body_aw.deinit();
 
-        var transfer_buf: [4096]u8 = undefined;
+        var transfer_buf: [65536]u8 = undefined;
         const body_reader = response.reader(&transfer_buf);
         _ = body_reader.streamRemaining(&body_aw.writer) catch |err| switch (err) {
             error.ReadFailed => {
@@ -429,27 +441,18 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
             else => |e| return e,
         };
 
-        const raw_body = body_aw.written();
-
-        // Decompress gzip body if Content-Encoding: gzip
-        var decompressed_buf: ?[]u8 = null;
-        errdefer if (decompressed_buf) |b| req.allocator.free(b);
-
-        const body_bytes: []const u8 = if (is_gzip) blk: {
+        const owned_body: []u8 = if (is_gzip) blk: {
+            const raw_body = body_aw.written();
             var in: std.Io.Reader = .fixed(raw_body);
             var decompress: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
             var out: std.Io.Writer.Allocating = .init(req.allocator);
-            defer out.deinit();
+            errdefer out.deinit();
             _ = decompress.reader.streamRemaining(&out.writer) catch |err| {
                 if (!req.quiet) std.debug.print("Decompression error: {s}\n", .{@errorName(err)});
                 return err;
             };
-            decompressed_buf = try req.allocator.dupe(u8, out.written());
-            break :blk decompressed_buf.?;
-        } else raw_body;
-
-        // Allocate owned copy of body
-        const owned_body = try req.allocator.dupe(u8, body_bytes);
+            break :blk try out.toOwnedSlice();
+        } else try body_aw.toOwnedSlice();
 
         return APIResponse{
             .allocator = req.allocator,
@@ -491,8 +494,16 @@ pub fn executeStream(
     const uri = try std.Uri.parse(req.url);
     var hash_buf: [40]u8 = undefined;
     var timestamp_buf: [32]u8 = undefined;
-    var headers = try buildHeaders(req.allocator, req.headers, req.credentials, uri, &hash_buf, &timestamp_buf);
+    var headers = try buildHeaders(req.allocator, req.headers, req.credentials, uri, &hash_buf, &timestamp_buf, false);
     defer headers.deinit(req.allocator);
+
+    if (req.verbose) {
+        std.debug.print("> {s} {s}\n", .{ @tagName(req.method), uri.path.percent_encoded });
+        for (headers.items) |h| {
+            std.debug.print("> {s}: {s}\n", .{ h.name, h.value });
+        }
+        std.debug.print(">\n", .{});
+    }
 
     var http_req = try client.request(req.method, uri, .{
         .extra_headers = headers.items,

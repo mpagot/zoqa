@@ -70,6 +70,14 @@ require_openqa_cli() {
 	echo "  openqa-cli: $(command -v openqa-cli)"
 }
 
+require_curl() {
+	if ! command -v curl &>/dev/null; then
+		echo "FATAL: curl not found in PATH."
+		exit 1
+	fi
+	echo "  curl:        $(command -v curl)"
+}
+
 require_python3() {
 	if ! command -v python3 &>/dev/null; then
 		echo "FATAL: python3 not found in PATH (needed for JSON validation)."
