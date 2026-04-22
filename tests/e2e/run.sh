@@ -44,9 +44,9 @@ OPTIONS:
   --collect-logs      Dump openQA server logs to ./openqa-e2e-logs/.
   --suites NAMES      Comma-separated list of suite names to run (no .sh
                       extension). Valid names: core, auth, data, output,
-                      robustness, retry_knobs, archive, perf. Omit or use
-                      'all' to run all suites. Pass an empty string to
-                      skip all tests (e.g. --suites "").
+                      robustness, retry_knobs, archive, monitor, schedule,
+                      help, stress, perf. Omit or use 'all' to run all suites.
+                      Pass an empty string to skip all tests (e.g. --suites "").
 
 ENVIRONMENT VARIABLES:
   E2E_STORAGE_KEEP_FREE_RATIO   isotovideo disk-space check threshold.
@@ -68,7 +68,7 @@ EOF
 # Argument Parsing
 # -----------------------------------------------------------------------------
 KEEP_CONTAINER=false
-COLLECT_LOGS=false
+# (COLLECT_LOGS defaults to false via lib.sh; --collect-logs sets it to true)
 E2E_SUITES="all"
 
 while [[ "$#" -gt 0 ]]; do
@@ -206,7 +206,7 @@ trap cleanup EXIT
 # -----------------------------------------------------------------------------
 # Load Seeded IDs and Credentials
 # -----------------------------------------------------------------------------
-ENV_FILE="/tmp/openqa_e2e_env.sh"
+# ENV_FILE is set to /tmp/openqa_e2e_env.sh by lib.sh
 if [[ -f "$ENV_FILE" ]]; then
 	# shellcheck source=/dev/null
 	source "$ENV_FILE"

@@ -10,6 +10,8 @@
 #   ZIG_EXE, PERL_EXE, LOG_DIR, failed_tests, warned_tests
 #   run_test(), run_comparison()
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
 echo "==> [output] Running output formatting tests..."
 
 # Test 25: --verbose on a real endpoint shows HTTP status line and Content-Type header.
@@ -39,29 +41,19 @@ run_comparison "--name flag accepted (exit 0)" "" \
 # stripped before the comparison).  Diagnostic counts are printed regardless of
 # pass/fail to make any regression visible in CI output.
 echo "--- Test: PERL vs ZIG : --verbose header count ---"
-set +e
-container_exec bash -c "$PERL_EXE api --host http://localhost --verbose jobs/overview \
-	2>/tmp/perl_verbose_stderr.log >/tmp/perl_verbose_stdout.log"
-container_exec cat /tmp/perl_verbose_stderr.log >"$LOG_DIR/perl_verbose_stderr.log" 2>/dev/null
-container_exec cat /tmp/perl_verbose_stdout.log >"$LOG_DIR/perl_verbose_stdout.log" 2>/dev/null
+run_perl_and_zig "verbose" "api --host http://localhost --verbose jobs/overview"
 
-container_exec bash -c "$ZIG_EXE api --host http://localhost --verbose jobs/overview \
-	2>/tmp/zig_verbose_stderr.log >/tmp/zig_verbose_stdout.log"
-container_exec cat /tmp/zig_verbose_stderr.log >"$LOG_DIR/zig_verbose_stderr.log" 2>/dev/null
-container_exec cat /tmp/zig_verbose_stdout.log >"$LOG_DIR/zig_verbose_stdout.log" 2>/dev/null
-set -e
-
-perl_stdout_headers=$(grep -cE '^[A-Za-z_-]+: ' "$LOG_DIR/perl_verbose_stdout.log" || true)
-perl_stderr_headers=$(grep -cE '^[A-Za-z_-]+: ' "$LOG_DIR/perl_verbose_stderr.log" || true)
-zig_stdout_headers=$(grep -cE '^[A-Za-z_-]+: ' "$LOG_DIR/zig_verbose_stdout.log" || true)
-zig_stderr_headers=$(grep -cE '^[A-Za-z_-]+: ' "$LOG_DIR/zig_verbose_stderr.log" || true)
+perl_stdout_headers=$(grep -cE '^[A-Za-z_-]+: ' "$LOG_DIR/verbose_perl_stdout.log" || true)
+perl_stderr_headers=$(grep -cE '^[A-Za-z_-]+: ' "$LOG_DIR/verbose_perl_stderr.log" || true)
+zig_stdout_headers=$(grep -cE '^[A-Za-z_-]+: ' "$LOG_DIR/verbose_zig_stdout.log" || true)
+zig_stderr_headers=$(grep -cE '^[A-Za-z_-]+: ' "$LOG_DIR/verbose_zig_stderr.log" || true)
 
 echo "PERL headers in stdout: $perl_stdout_headers"
 echo "PERL headers in stderr: $perl_stderr_headers"
 echo "ZIG  headers in stdout: $zig_stdout_headers"
 echo "ZIG  headers in stderr: $zig_stderr_headers"
-echo "PERL HTTP/1.1 line in stdout: $(grep -c 'HTTP/1.1 ' "$LOG_DIR/perl_verbose_stdout.log" || true)"
-echo "PERL HTTP/1.1 line in stderr: $(grep -c 'HTTP/1.1 ' "$LOG_DIR/perl_verbose_stderr.log" || true)"
+echo "PERL HTTP/1.1 line in stdout: $(grep -c 'HTTP/1.1 ' "$LOG_DIR/verbose_perl_stdout.log" || true)"
+echo "PERL HTTP/1.1 line in stderr: $(grep -c 'HTTP/1.1 ' "$LOG_DIR/verbose_perl_stderr.log" || true)"
 
 if [[ "$perl_stdout_headers" -gt 0 || "$perl_stderr_headers" -gt 0 ]]; then
 	if [[ "$zig_stdout_headers" -eq "$perl_stdout_headers" && "$zig_stderr_headers" -eq "$perl_stderr_headers" ]]; then

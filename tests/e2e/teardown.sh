@@ -26,10 +26,22 @@ cd_to_project_root "${BASH_SOURCE[0]}"
 # -----------------------------------------------------------------------------
 # Argument Parsing
 # -----------------------------------------------------------------------------
-COLLECT_LOGS=false
+# (COLLECT_LOGS defaults to false via lib.sh; --collect-logs sets it to true)
 
 show_help() {
-	sed -n '4,17p' "${BASH_SOURCE[0]}"
+	cat <<'EOF'
+# Stops and removes the openQA single-instance container and cleans up
+# temporary files created by setup.sh and run.sh.
+#
+# Usage:
+#   bash tests/e2e/teardown.sh [OPTIONS]
+#
+# OPTIONS:
+#   --collect-logs    Dump openQA server-side logs to ./openqa-e2e-logs/ before
+#                     stopping the container. Useful for post-mortem debugging.
+#   --dryrun          Print commands without executing them.
+#   -h, --help        Show this help message and exit.
+EOF
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -53,7 +65,7 @@ while [[ "$#" -gt 0 ]]; do
 	esac
 done
 
-log() { echo "[teardown] $*"; }
+# (log() is provided by lib.sh; LOG_PREFIX is set to "teardown" above)
 
 # -----------------------------------------------------------------------------
 # Log Collection (optional)
