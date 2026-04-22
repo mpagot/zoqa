@@ -78,8 +78,7 @@ EOF
 # -----------------------------------------------------------------------------
 # Argument Parsing
 # -----------------------------------------------------------------------------
-DRY_RUN=false
-COLLECT_LOGS=false
+# (DRY_RUN defaults to false and COLLECT_LOGS defaults to false via lib.sh)
 PS_ENV_FILE="/tmp/openqa_e2e_env.ps1"
 
 while [[ "$#" -gt 0 ]]; do
@@ -152,7 +151,7 @@ trap cleanup EXIT
 # -----------------------------------------------------------------------------
 # Load Seeded IDs and Credentials
 # -----------------------------------------------------------------------------
-ENV_FILE="/tmp/openqa_e2e_env.sh"
+# ENV_FILE is set to /tmp/openqa_e2e_env.sh by lib.sh
 if [[ -f "$ENV_FILE" ]]; then
 	# shellcheck source=/dev/null
 	source "$ENV_FILE"

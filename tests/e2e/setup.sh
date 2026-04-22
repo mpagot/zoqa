@@ -43,7 +43,33 @@ cd_to_project_root "${BASH_SOURCE[0]}"
 EXPOSE_PORTS=false
 
 show_help() {
-	sed -n '4,27p' "${BASH_SOURCE[0]}"
+	cat <<'EOF'
+# Starts the container, waits for bootstrap, seeds test fixtures, and writes
+# an env file that run.sh can source.
+#
+# Usage:
+#   source tests/e2e/setup.sh [OPTIONS]
+#   - or -
+#   bash tests/e2e/setup.sh [OPTIONS] && source /tmp/openqa_e2e_env.sh
+#
+# OPTIONS:
+#   --dryrun          Print commands without executing them.
+#   --keep-container  Accepted for caller compatibility; setup.sh itself does
+#                     not stop the container — that is run.sh's responsibility.
+#   --expose-ports    [INTERNAL] Publish container ports 80->8080 and 443->8443.
+#                     Forwarded automatically by run.sh when --keep-container is
+#                     used. Not intended for direct invocation by users.
+#   -h, --help        Show this help message and exit.
+#
+# Exports (written to /tmp/openqa_e2e_env.sh):
+#   CONTAINER_NAME    — name of the running container
+#   OPENQA_API_KEY    — API key extracted from /etc/openqa/client.conf
+#   OPENQA_API_SECRET — API secret
+#   JOB_ID            — scheduled job ID from seeding
+#   ASSET_ID          — registered asset ID for Perl DELETE test
+#   ZIG_ASSET_ID      — registered asset ID for Zig DELETE test
+#   GROUP_ID          — job group ID from seeding
+EOF
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -71,12 +97,7 @@ while [[ "$#" -gt 0 ]]; do
 	esac
 done
 
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-ENV_FILE="/tmp/openqa_e2e_env.sh"
-
-log() { echo "[setup] $*"; }
+# (log() and ENV_FILE are provided by lib.sh)
 
 # -----------------------------------------------------------------------------
 # Entrypoint Wrapper

@@ -60,8 +60,7 @@ done
 CLI="openqa-cli api --host http://localhost"
 FIXTURE_DIR="/app/tests/e2e/fixtures"
 IDS_FILE="/tmp/seeded_ids.env"
-
-log() { echo "[seed] $*"; }
+# (log() is provided by lib.sh; LOG_PREFIX is set to "seed" above)
 
 # ---------------------------------------------------------------------------
 # 1. Load templates (Machines, TestSuites, Products, JobGroups) from JSON
@@ -171,13 +170,13 @@ fi
 # ---------------------------------------------------------------------------
 # 6. Cache scenario-definitions.yaml for use by lib.sh schedule_job()
 # ---------------------------------------------------------------------------
-log "Caching scenario-definitions.yaml to /tmp/scenario.yaml..."
+log "Caching scenario-definitions.yaml to $_SCENARIO_YAML_PATH..."
 if [[ "$DRY_RUN" == "false" ]]; then
 	[[ -f "$FIXTURE_DIR/scenario-definitions.yaml" ]] ||
 		die "scenario-definitions.yaml not found at $FIXTURE_DIR"
-	cp "$FIXTURE_DIR/scenario-definitions.yaml" /tmp/scenario.yaml
+	cp "$FIXTURE_DIR/scenario-definitions.yaml" "$_SCENARIO_YAML_PATH"
 else
-	echo "[DRY-RUN] cp $FIXTURE_DIR/scenario-definitions.yaml /tmp/scenario.yaml"
+	echo "[DRY-RUN] cp $FIXTURE_DIR/scenario-definitions.yaml $_SCENARIO_YAML_PATH"
 fi
 
 # ---------------------------------------------------------------------------

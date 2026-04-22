@@ -40,16 +40,13 @@ _SCHED_GROUP="_GROUP_ID=${GROUP_ID:-1}"
 echo "--- Test: SCH-1: Sync schedule with inline SCENARIO_DEFINITIONS_YAML ---"
 
 # Read the scenario YAML once for inline use.
-_SCH_YAML=$(container_exec cat /tmp/scenario.yaml)
+_SCH_YAML=$(container_exec cat "$_SCENARIO_YAML_PATH")
 
 # Perl
-set +e
-container_exec bash -c "$PERL_EXE schedule --host http://localhost \
+run_capture "sch1" perl "$PERL_EXE schedule --host http://localhost \
 	$_SCHED_PARAMS $_SCHED_BUILD $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP \
-	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\"" \
-	>"$LOG_DIR/sch1_perl_stdout.log" 2>"$LOG_DIR/sch1_perl_stderr.log"
-_sch1_perl_exit=$?
-set -e
+	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\""
+_sch1_perl_exit=$_LAST_EXIT
 echo "  Perl exit: $_sch1_perl_exit"
 
 # Wait for the Perl-scheduled job to complete (free the worker).
@@ -60,13 +57,10 @@ if [[ -n "$_sch1_perl_jobid" ]]; then
 fi
 
 # Zig
-set +e
-container_exec bash -c "$ZIG_EXE schedule --host http://localhost \
+run_capture "sch1" zig "$ZIG_EXE schedule --host http://localhost \
 	$_SCHED_PARAMS $_SCHED_BUILD $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP \
-	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\"" \
-	>"$LOG_DIR/sch1_zig_stdout.log" 2>"$LOG_DIR/sch1_zig_stderr.log"
-_sch1_zig_exit=$?
-set -e
+	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\""
+_sch1_zig_exit=$_LAST_EXIT
 echo "  Zig exit: $_sch1_zig_exit"
 
 # Assert: both exit 0
@@ -116,13 +110,10 @@ fi
 echo "--- Test: SCH-2: Sync schedule with --param-file ---"
 
 # Perl
-set +e
-container_exec bash -c "$PERL_EXE schedule --host http://localhost \
-	--param-file SCENARIO_DEFINITIONS_YAML=/tmp/scenario.yaml \
-	$_SCHED_PARAMS BUILD=e2e-test-sch2 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP" \
-	>"$LOG_DIR/sch2_perl_stdout.log" 2>"$LOG_DIR/sch2_perl_stderr.log"
-_sch2_perl_exit=$?
-set -e
+run_capture "sch2" perl "$PERL_EXE schedule --host http://localhost \
+	--param-file SCENARIO_DEFINITIONS_YAML=$_SCENARIO_YAML_PATH \
+	$_SCHED_PARAMS BUILD=e2e-test-sch2 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP"
+_sch2_perl_exit=$_LAST_EXIT
 echo "  Perl exit: $_sch2_perl_exit"
 
 # Wait for Perl job to finish.
@@ -132,13 +123,10 @@ if [[ -n "$_sch2_perl_jobid" ]]; then
 fi
 
 # Zig
-set +e
-container_exec bash -c "$ZIG_EXE schedule --host http://localhost \
-	--param-file SCENARIO_DEFINITIONS_YAML=/tmp/scenario.yaml \
-	$_SCHED_PARAMS BUILD=e2e-test-sch2 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP" \
-	>"$LOG_DIR/sch2_zig_stdout.log" 2>"$LOG_DIR/sch2_zig_stderr.log"
-_sch2_zig_exit=$?
-set -e
+run_capture "sch2" zig "$ZIG_EXE schedule --host http://localhost \
+	--param-file SCENARIO_DEFINITIONS_YAML=$_SCENARIO_YAML_PATH \
+	$_SCHED_PARAMS BUILD=e2e-test-sch2 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP"
+_sch2_zig_exit=$_LAST_EXIT
 echo "  Zig exit: $_sch2_zig_exit"
 
 _sch2_pass=true
@@ -185,23 +173,17 @@ fi
 echo "--- Test: SCH-3: Async schedule without --monitor ---"
 
 # Perl
-set +e
-container_exec bash -c "$PERL_EXE schedule --host http://localhost \
+run_capture "sch3" perl "$PERL_EXE schedule --host http://localhost \
 	$_SCHED_PARAMS BUILD=e2e-test-sch3 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP \
-	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1" \
-	>"$LOG_DIR/sch3_perl_stdout.log" 2>"$LOG_DIR/sch3_perl_stderr.log"
-_sch3_perl_exit=$?
-set -e
+	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1"
+_sch3_perl_exit=$_LAST_EXIT
 echo "  Perl exit: $_sch3_perl_exit"
 
 # Zig
-set +e
-container_exec bash -c "$ZIG_EXE schedule --host http://localhost \
+run_capture "sch3" zig "$ZIG_EXE schedule --host http://localhost \
 	$_SCHED_PARAMS BUILD=e2e-test-sch3 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP \
-	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1" \
-	>"$LOG_DIR/sch3_zig_stdout.log" 2>"$LOG_DIR/sch3_zig_stderr.log"
-_sch3_zig_exit=$?
-set -e
+	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1"
+_sch3_zig_exit=$_LAST_EXIT
 echo "  Zig exit: $_sch3_zig_exit"
 
 _sch3_pass=true
@@ -242,23 +224,17 @@ fi
 echo "--- Test: SCH-4: Async schedule with --monitor ---"
 
 # Perl
-set +e
-container_exec bash -c "timeout 300 $PERL_EXE schedule --host http://localhost --monitor \
+run_capture "sch4" perl "timeout 300 $PERL_EXE schedule --host http://localhost --monitor \
 	$_SCHED_PARAMS BUILD=e2e-test-sch4 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP \
-	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1" \
-	>"$LOG_DIR/sch4_perl_stdout.log" 2>"$LOG_DIR/sch4_perl_stderr.log"
-_sch4_perl_exit=$?
-set -e
+	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1"
+_sch4_perl_exit=$_LAST_EXIT
 echo "  Perl exit: $_sch4_perl_exit"
 
 # Zig
-set +e
-container_exec bash -c "timeout 300 $ZIG_EXE schedule --host http://localhost --monitor \
+run_capture "sch4" zig "timeout 300 $ZIG_EXE schedule --host http://localhost --monitor \
 	$_SCHED_PARAMS BUILD=e2e-test-sch4 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP \
-	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1" \
-	>"$LOG_DIR/sch4_zig_stdout.log" 2>"$LOG_DIR/sch4_zig_stderr.log"
-_sch4_zig_exit=$?
-set -e
+	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1"
+_sch4_zig_exit=$_LAST_EXIT
 echo "  Zig exit: $_sch4_zig_exit"
 
 _sch4_pass=true
@@ -288,13 +264,10 @@ fi
 echo "--- Test: SCH-6: --follow without --monitor (no monitoring) ---"
 
 # Perl
-set +e
-container_exec bash -c "$PERL_EXE schedule --host http://localhost --follow \
+run_capture "sch6" perl "$PERL_EXE schedule --host http://localhost --follow \
 	$_SCHED_PARAMS BUILD=e2e-test-sch6 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP \
-	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\"" \
-	>"$LOG_DIR/sch6_perl_stdout.log" 2>"$LOG_DIR/sch6_perl_stderr.log"
-_sch6_perl_exit=$?
-set -e
+	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\""
+_sch6_perl_exit=$_LAST_EXIT
 echo "  Perl exit: $_sch6_perl_exit"
 
 # Wait for Perl job to finish.
@@ -304,13 +277,10 @@ if [[ -n "$_sch6_perl_jobid" ]]; then
 fi
 
 # Zig
-set +e
-container_exec bash -c "$ZIG_EXE schedule --host http://localhost --follow \
+run_capture "sch6" zig "$ZIG_EXE schedule --host http://localhost --follow \
 	$_SCHED_PARAMS BUILD=e2e-test-sch6 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP \
-	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\"" \
-	>"$LOG_DIR/sch6_zig_stdout.log" 2>"$LOG_DIR/sch6_zig_stderr.log"
-_sch6_zig_exit=$?
-set -e
+	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\""
+_sch6_zig_exit=$_LAST_EXIT
 echo "  Zig exit: $_sch6_zig_exit"
 
 _sch6_pass=true
@@ -355,25 +325,19 @@ fi
 echo "--- Test: SCH-7: --poll-interval 1 with async --monitor ---"
 
 # Perl
-set +e
-container_exec bash -c "timeout 300 $PERL_EXE schedule --host http://localhost \
+run_capture "sch7" perl "timeout 300 $PERL_EXE schedule --host http://localhost \
 	--monitor --poll-interval 1 \
 	$_SCHED_PARAMS BUILD=e2e-test-sch7 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP \
-	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1" \
-	>"$LOG_DIR/sch7_perl_stdout.log" 2>"$LOG_DIR/sch7_perl_stderr.log"
-_sch7_perl_exit=$?
-set -e
+	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1"
+_sch7_perl_exit=$_LAST_EXIT
 echo "  Perl exit: $_sch7_perl_exit"
 
 # Zig
-set +e
-container_exec bash -c "timeout 300 $ZIG_EXE schedule --host http://localhost \
+run_capture "sch7" zig "timeout 300 $ZIG_EXE schedule --host http://localhost \
 	--monitor --poll-interval 1 \
 	$_SCHED_PARAMS BUILD=e2e-test-sch7 $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP \
-	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1" \
-	>"$LOG_DIR/sch7_zig_stdout.log" 2>"$LOG_DIR/sch7_zig_stderr.log"
-_sch7_zig_exit=$?
-set -e
+	\"SCENARIO_DEFINITIONS_YAML=$_SCH_YAML\" async=1"
+_sch7_zig_exit=$_LAST_EXIT
 echo "  Zig exit: $_sch7_zig_exit"
 
 _sch7_pass=true
@@ -402,19 +366,13 @@ fi
 echo "--- Test: SCH-8: Missing mandatory params -> exit 1 ---"
 
 # Perl
-set +e
-container_exec bash -c "$PERL_EXE schedule --host http://localhost BOGUS=1" \
-	>"$LOG_DIR/sch8_perl_stdout.log" 2>"$LOG_DIR/sch8_perl_stderr.log"
-_sch8_perl_exit=$?
-set -e
+run_capture "sch8" perl "$PERL_EXE schedule --host http://localhost BOGUS=1"
+_sch8_perl_exit=$_LAST_EXIT
 echo "  Perl exit: $_sch8_perl_exit"
 
 # Zig
-set +e
-container_exec bash -c "$ZIG_EXE schedule --host http://localhost BOGUS=1" \
-	>"$LOG_DIR/sch8_zig_stdout.log" 2>"$LOG_DIR/sch8_zig_stderr.log"
-_sch8_zig_exit=$?
-set -e
+run_capture "sch8" zig "$ZIG_EXE schedule --host http://localhost BOGUS=1"
+_sch8_zig_exit=$_LAST_EXIT
 echo "  Zig exit: $_sch8_zig_exit"
 
 _sch8_pass=true
@@ -444,21 +402,15 @@ fi
 echo "--- Test: SCH-9: Zero products scheduled -> exit 1 ---"
 
 # Perl
-set +e
-container_exec bash -c "$PERL_EXE schedule --host http://localhost \
-	DISTRI=example VERSION=0 FLAVOR=NONEXISTENT ARCH=x86_64 BUILD=e2e-sch9" \
-	>"$LOG_DIR/sch9_perl_stdout.log" 2>"$LOG_DIR/sch9_perl_stderr.log"
-_sch9_perl_exit=$?
-set -e
+run_capture "sch9" perl "$PERL_EXE schedule --host http://localhost \
+	DISTRI=example VERSION=0 FLAVOR=NONEXISTENT ARCH=x86_64 BUILD=e2e-sch9"
+_sch9_perl_exit=$_LAST_EXIT
 echo "  Perl exit: $_sch9_perl_exit"
 
 # Zig
-set +e
-container_exec bash -c "$ZIG_EXE schedule --host http://localhost \
-	DISTRI=example VERSION=0 FLAVOR=NONEXISTENT ARCH=x86_64 BUILD=e2e-sch9" \
-	>"$LOG_DIR/sch9_zig_stdout.log" 2>"$LOG_DIR/sch9_zig_stderr.log"
-_sch9_zig_exit=$?
-set -e
+run_capture "sch9" zig "$ZIG_EXE schedule --host http://localhost \
+	DISTRI=example VERSION=0 FLAVOR=NONEXISTENT ARCH=x86_64 BUILD=e2e-sch9"
+_sch9_zig_exit=$_LAST_EXIT
 echo "  Zig exit: $_sch9_zig_exit"
 
 _sch9_pass=true
@@ -489,14 +441,11 @@ container_exec bash -c "printf 'example' > /tmp/pf_sch10_distri.txt"
 container_exec bash -c "printf 'e2e-test-sch10' > /tmp/pf_sch10_build.txt"
 
 # Perl
-set +e
-container_exec bash -c "$PERL_EXE schedule --host http://localhost \
-	--param-file SCENARIO_DEFINITIONS_YAML=/tmp/scenario.yaml \
+run_capture "sch10" perl "$PERL_EXE schedule --host http://localhost \
+	--param-file SCENARIO_DEFINITIONS_YAML=$_SCENARIO_YAML_PATH \
 	--param-file BUILD=/tmp/pf_sch10_build.txt \
-	$_SCHED_PARAMS $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP" \
-	>"$LOG_DIR/sch10_perl_stdout.log" 2>"$LOG_DIR/sch10_perl_stderr.log"
-_sch10_perl_exit=$?
-set -e
+	$_SCHED_PARAMS $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP"
+_sch10_perl_exit=$_LAST_EXIT
 echo "  Perl exit: $_sch10_perl_exit"
 
 _sch10_perl_jobid=$(grep -oP '(?<=tests/)\d+' "$LOG_DIR/sch10_perl_stdout.log" | head -1) || true
@@ -505,14 +454,11 @@ if [[ -n "$_sch10_perl_jobid" ]]; then
 fi
 
 # Zig
-set +e
-container_exec bash -c "$ZIG_EXE schedule --host http://localhost \
-	--param-file SCENARIO_DEFINITIONS_YAML=/tmp/scenario.yaml \
+run_capture "sch10" zig "$ZIG_EXE schedule --host http://localhost \
+	--param-file SCENARIO_DEFINITIONS_YAML=$_SCENARIO_YAML_PATH \
 	--param-file BUILD=/tmp/pf_sch10_build.txt \
-	$_SCHED_PARAMS $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP" \
-	>"$LOG_DIR/sch10_zig_stdout.log" 2>"$LOG_DIR/sch10_zig_stderr.log"
-_sch10_zig_exit=$?
-set -e
+	$_SCHED_PARAMS $_SCHED_ASSETS $_SCHED_DIRS $_SCHED_GROUP"
+_sch10_zig_exit=$_LAST_EXIT
 echo "  Zig exit: $_sch10_zig_exit"
 
 _sch10_zig_jobid=$(grep -oP '(?<=tests/)\d+' "$LOG_DIR/sch10_zig_stdout.log" | head -1) || true

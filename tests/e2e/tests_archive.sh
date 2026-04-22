@@ -18,6 +18,95 @@
 # shellcheck source=SCRIPTDIR/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
+# ---------------------------------------------------------------------------
+# Local assert helpers
+# ---------------------------------------------------------------------------
+
+# assert_path_exists LABEL FLAG PATH
+# Passes when `container_exec test FLAG PATH` succeeds.
+assert_path_exists() {
+	local label="$1" flag="$2" path="$3"
+	echo "--- Test: $label ---"
+	if container_exec test "$flag" "$path"; then
+		echo "PASS"
+	else
+		echo "FAIL: $path does not exist"
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# assert_path_absent LABEL FLAG PATH REASON
+# Passes when the path does NOT exist; fails (and increments failed_tests) if it does.
+assert_path_absent() {
+	local label="$1" flag="$2" path="$3" reason="$4"
+	echo "--- Test: $label ---"
+	if container_exec test "$flag" "$path" 2>/dev/null; then
+		echo "FAIL: $path should not exist ($reason)"
+		failed_tests=$((failed_tests + 1))
+	else
+		echo "PASS"
+	fi
+}
+
+# assert_listing_parity LABEL PERL_DIR ZIG_DIR FIND_ARGS LOG_SUFFIX
+# Compares sorted `find . FIND_ARGS` output between PERL_DIR and ZIG_DIR.
+# Log files are written to $LOG_DIR/arc_perl_LOG_SUFFIX.log and
+# $LOG_DIR/arc_zig_LOG_SUFFIX.log for use by subsequent tests.
+assert_listing_parity() {
+	local label="$1" perl_dir="$2" zig_dir="$3" find_args="$4" log_suffix="$5"
+	echo "--- Test: $label ---"
+	set +e
+	container_exec bash -c "cd $perl_dir && find . $find_args | sort" \
+		>"$LOG_DIR/arc_perl_${log_suffix}.log" 2>/dev/null
+	container_exec bash -c "cd $zig_dir && find . $find_args | sort" \
+		>"$LOG_DIR/arc_zig_${log_suffix}.log" 2>/dev/null
+	set -e
+	if diff -u "$LOG_DIR/arc_perl_${log_suffix}.log" "$LOG_DIR/arc_zig_${log_suffix}.log" \
+		>"$LOG_DIR/arc_${log_suffix}_diff.log" 2>&1; then
+		echo "PASS (listings identical)"
+	else
+		echo "FAIL: $label listings differ:"
+		cat "$LOG_DIR/arc_${log_suffix}_diff.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# assert_ls_parity LABEL PERL_DIR ZIG_DIR GLOB LOG_SUFFIX
+# Compares sorted `ls GLOB` output between PERL_DIR and ZIG_DIR.
+# Log files are written to $LOG_DIR/arc_perl_LOG_SUFFIX.log and
+# $LOG_DIR/arc_zig_LOG_SUFFIX.log for use by subsequent tests.
+assert_ls_parity() {
+	local label="$1" perl_dir="$2" zig_dir="$3" glob="$4" log_suffix="$5"
+	echo "--- Test: $label ---"
+	set +e
+	container_exec bash -c "cd $perl_dir && ls $glob | sort" \
+		>"$LOG_DIR/arc_perl_${log_suffix}.log" 2>/dev/null
+	container_exec bash -c "cd $zig_dir && ls $glob | sort" \
+		>"$LOG_DIR/arc_zig_${log_suffix}.log" 2>/dev/null
+	set -e
+	if diff -u "$LOG_DIR/arc_perl_${log_suffix}.log" "$LOG_DIR/arc_zig_${log_suffix}.log" \
+		>"$LOG_DIR/arc_${log_suffix}_diff.log" 2>&1; then
+		echo "PASS"
+	else
+		echo "FAIL: $label listings differ:"
+		cat "$LOG_DIR/arc_${log_suffix}_diff.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# assert_glob_exists LABEL GLOB
+# Passes when at least one file matching GLOB exists inside the container.
+assert_glob_exists() {
+	local label="$1" glob="$2"
+	echo "--- Test: $label ---"
+	if container_exec bash -c "ls $glob >/dev/null 2>&1"; then
+		echo "PASS"
+	else
+		echo "FAIL: No files matching $glob"
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
 echo "==> [archive] Running archive subcommand tests..."
 
 # Ensure both jobs exist (basic + rich with full test artifacts).
@@ -89,20 +178,8 @@ run_test "ZIG : archive seeded job (exit 0)" \
 
 # Test ARC-5: Output directory was created.
 # After a successful archive, the output directory must exist.
-echo "--- Test: PERL: archive output directory exists ---"
-if container_exec test -d /tmp/arc_perl; then
-	echo "PASS"
-else
-	echo "FAIL: /tmp/arc_perl does not exist after archive"
-	failed_tests=$((failed_tests + 1))
-fi
-echo "--- Test: ZIG : archive output directory exists ---"
-if container_exec test -d /tmp/arc_zig; then
-	echo "PASS"
-else
-	echo "FAIL: /tmp/arc_zig does not exist after archive"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_path_exists "PERL: archive output directory exists" -d /tmp/arc_perl
+assert_path_exists "ZIG : archive output directory exists" -d /tmp/arc_zig
 
 # =============================================================================
 # Section 3: Directory Structure
@@ -111,104 +188,38 @@ fi
 # Test ARC-6: Directory structure parity — Perl vs Zig.
 # Run `find` on both output trees, normalize to relative paths, sort, and diff.
 # Both implementations must produce the same directory layout.
-echo "--- Test: DIFF archive directory structure parity ---"
-set +e
-container_exec bash -c "cd /tmp/arc_perl && find . -type d | sort" \
-	>"$LOG_DIR/arc_perl_dirs.log" 2>/dev/null
-container_exec bash -c "cd /tmp/arc_zig && find . -type d | sort" \
-	>"$LOG_DIR/arc_zig_dirs.log" 2>/dev/null
-set -e
-if diff -u "$LOG_DIR/arc_perl_dirs.log" "$LOG_DIR/arc_zig_dirs.log" \
-	>"$LOG_DIR/arc_dirs_diff.log" 2>&1; then
-	echo "PASS (directory structures identical)"
-else
-	echo "FAIL: Perl and Zig archive directory structures differ:"
-	cat "$LOG_DIR/arc_dirs_diff.log"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_listing_parity "DIFF archive directory structure parity" \
+	/tmp/arc_perl /tmp/arc_zig "-type d" "dirs"
 
 # Test ARC-7: testresults/ directory created.
-echo "--- Test: PERL: testresults/ directory exists ---"
-if container_exec test -d /tmp/arc_perl/testresults; then
-	echo "PASS"
-else
-	echo "FAIL: /tmp/arc_perl/testresults does not exist"
-	failed_tests=$((failed_tests + 1))
-fi
-echo "--- Test: ZIG : testresults/ directory exists ---"
-if container_exec test -d /tmp/arc_zig/testresults; then
-	echo "PASS"
-else
-	echo "FAIL: /tmp/arc_zig/testresults does not exist"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_path_exists "PERL: testresults/ directory exists" -d /tmp/arc_perl/testresults
+assert_path_exists "ZIG : testresults/ directory exists" -d /tmp/arc_zig/testresults
 
 # Test ARC-8: testresults/ulogs/ directory created.
-echo "--- Test: PERL: testresults/ulogs/ directory exists ---"
-if container_exec test -d /tmp/arc_perl/testresults/ulogs; then
-	echo "PASS"
-else
-	echo "FAIL: /tmp/arc_perl/testresults/ulogs does not exist"
-	failed_tests=$((failed_tests + 1))
-fi
-echo "--- Test: ZIG : testresults/ulogs/ directory exists ---"
-if container_exec test -d /tmp/arc_zig/testresults/ulogs; then
-	echo "PASS"
-else
-	echo "FAIL: /tmp/arc_zig/testresults/ulogs does not exist"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_path_exists "PERL: testresults/ulogs/ directory exists" -d /tmp/arc_perl/testresults/ulogs
+assert_path_exists "ZIG : testresults/ulogs/ directory exists" -d /tmp/arc_zig/testresults/ulogs
 
 # Test ARC-9: No thumbnails/ directory without --with-thumbnails.
 # The thumbnails/ directory must only be created when --with-thumbnails is set.
-echo "--- Test: PERL: no thumbnails/ without --with-thumbnails ---"
-if container_exec test -d /tmp/arc_perl/testresults/thumbnails 2>/dev/null; then
-	echo "FAIL: thumbnails/ directory should not exist without --with-thumbnails"
-	failed_tests=$((failed_tests + 1))
-else
-	echo "PASS"
-fi
-echo "--- Test: ZIG : no thumbnails/ without --with-thumbnails ---"
-if container_exec test -d /tmp/arc_zig/testresults/thumbnails 2>/dev/null; then
-	echo "FAIL: thumbnails/ directory should not exist without --with-thumbnails"
-	failed_tests=$((failed_tests + 1))
-else
-	echo "PASS"
-fi
+assert_path_absent "PERL: no thumbnails/ without --with-thumbnails" \
+	-d /tmp/arc_perl/testresults/thumbnails \
+	"thumbnails/ should not exist without --with-thumbnails"
+assert_path_absent "ZIG : no thumbnails/ without --with-thumbnails" \
+	-d /tmp/arc_zig/testresults/thumbnails \
+	"thumbnails/ should not exist without --with-thumbnails"
 
 # Test ARC-10: repo/ assets are skipped (Archive.pm:34).
 # Even if the job has repo-type assets, no repo/ directory should be created.
-echo "--- Test: PERL: no repo/ directory (repo assets skipped) ---"
-if container_exec test -d /tmp/arc_perl/repo 2>/dev/null; then
-	echo "FAIL: repo/ directory should not exist (repo assets must be skipped)"
-	failed_tests=$((failed_tests + 1))
-else
-	echo "PASS"
-fi
-echo "--- Test: ZIG : no repo/ directory (repo assets skipped) ---"
-if container_exec test -d /tmp/arc_zig/repo 2>/dev/null; then
-	echo "FAIL: repo/ directory should not exist (repo assets must be skipped)"
-	failed_tests=$((failed_tests + 1))
-else
-	echo "PASS"
-fi
+assert_path_absent "PERL: no repo/ directory (repo assets skipped)" \
+	-d /tmp/arc_perl/repo \
+	"repo assets must be skipped"
+assert_path_absent "ZIG : no repo/ directory (repo assets skipped)" \
+	-d /tmp/arc_zig/repo \
+	"repo assets must be skipped"
 
 # Test ARC-11: File listing parity — all files created by both must match.
-echo "--- Test: DIFF archive file listing parity ---"
-set +e
-container_exec bash -c "cd /tmp/arc_perl && find . -type f | sort" \
-	>"$LOG_DIR/arc_perl_files.log" 2>/dev/null
-container_exec bash -c "cd /tmp/arc_zig && find . -type f | sort" \
-	>"$LOG_DIR/arc_zig_files.log" 2>/dev/null
-set -e
-if diff -u "$LOG_DIR/arc_perl_files.log" "$LOG_DIR/arc_zig_files.log" \
-	>"$LOG_DIR/arc_files_diff.log" 2>&1; then
-	echo "PASS (file listings identical)"
-else
-	echo "FAIL: Perl and Zig archive file listings differ:"
-	cat "$LOG_DIR/arc_files_diff.log"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_listing_parity "DIFF archive file listing parity" \
+	/tmp/arc_perl /tmp/arc_zig "-type f" "files"
 
 # =============================================================================
 # Section 4: --with-thumbnails Flag
@@ -222,37 +233,14 @@ run_test "PERL: archive --with-thumbnails (exit 0)" \
 run_test "ZIG : archive --with-thumbnails (exit 0)" \
 	"$ZIG_EXE archive --host http://localhost --with-thumbnails $JOB_ID /tmp/arc_zig_thumb" 0
 
-echo "--- Test: PERL: thumbnails/ directory exists with --with-thumbnails ---"
-if container_exec test -d /tmp/arc_perl_thumb/testresults/thumbnails; then
-	echo "PASS"
-else
-	echo "FAIL: /tmp/arc_perl_thumb/testresults/thumbnails does not exist"
-	failed_tests=$((failed_tests + 1))
-fi
-echo "--- Test: ZIG : thumbnails/ directory exists with --with-thumbnails ---"
-if container_exec test -d /tmp/arc_zig_thumb/testresults/thumbnails; then
-	echo "PASS"
-else
-	echo "FAIL: /tmp/arc_zig_thumb/testresults/thumbnails does not exist"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_path_exists "PERL: thumbnails/ directory exists with --with-thumbnails" \
+	-d /tmp/arc_perl_thumb/testresults/thumbnails
+assert_path_exists "ZIG : thumbnails/ directory exists with --with-thumbnails" \
+	-d /tmp/arc_zig_thumb/testresults/thumbnails
 
 # Test ARC-13: --with-thumbnails directory structure parity.
-echo "--- Test: DIFF archive --with-thumbnails directory structure parity ---"
-set +e
-container_exec bash -c "cd /tmp/arc_perl_thumb && find . -type d | sort" \
-	>"$LOG_DIR/arc_perl_thumb_dirs.log" 2>/dev/null
-container_exec bash -c "cd /tmp/arc_zig_thumb && find . -type d | sort" \
-	>"$LOG_DIR/arc_zig_thumb_dirs.log" 2>/dev/null
-set -e
-if diff -u "$LOG_DIR/arc_perl_thumb_dirs.log" "$LOG_DIR/arc_zig_thumb_dirs.log" \
-	>"$LOG_DIR/arc_thumb_dirs_diff.log" 2>&1; then
-	echo "PASS (--with-thumbnails directory structures identical)"
-else
-	echo "FAIL: Perl and Zig --with-thumbnails directory structures differ:"
-	cat "$LOG_DIR/arc_thumb_dirs_diff.log"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_listing_parity "DIFF archive --with-thumbnails directory structure parity" \
+	/tmp/arc_perl_thumb /tmp/arc_zig_thumb "-type d" "thumb_dirs"
 
 # =============================================================================
 # Section 5: --asset-size-limit
@@ -536,41 +524,22 @@ run_test "ZIG : archive rich job (exit 0)" \
 	"$ZIG_EXE archive --host http://localhost $RICH_JOB_ID /tmp/arc_zig_rich" 0
 
 # Test ARC-27: Output directory exists.
-echo "--- Test: PERL: rich archive output directory exists ---"
-if container_exec test -d /tmp/arc_perl_rich; then echo "PASS"; else
-	echo "FAIL"
-	failed_tests=$((failed_tests + 1))
-fi
-echo "--- Test: ZIG : rich archive output directory exists ---"
-if container_exec test -d /tmp/arc_zig_rich; then echo "PASS"; else
-	echo "FAIL"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_path_exists "PERL: rich archive output directory exists" -d /tmp/arc_perl_rich
+assert_path_exists "ZIG : rich archive output directory exists" -d /tmp/arc_zig_rich
 
 # =============================================================================
 # Section 14: Rich Job — Test Results
 # =============================================================================
 
 # Test ARC-28: details-*.json files exist (Zig).
-echo "--- Test: ZIG : details-*.json files exist ---"
-if container_exec bash -c "ls /tmp/arc_zig_rich/testresults/details-*.json >/dev/null 2>&1"; then
-	echo "PASS"
-else
-	echo "FAIL: No details-*.json found in /tmp/arc_zig_rich/testresults/"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_glob_exists "ZIG : details-*.json files exist" \
+	"/tmp/arc_zig_rich/testresults/details-*.json"
 
 # Test ARC-29: details-*.json parity (Perl vs Zig).
-echo "--- Test: DIFF details-*.json listing parity ---"
-container_exec bash -c "cd /tmp/arc_perl_rich/testresults && ls details-*.json | sort" >"$LOG_DIR/arc_perl_details.log"
-container_exec bash -c "cd /tmp/arc_zig_rich/testresults && ls details-*.json | sort" >"$LOG_DIR/arc_zig_details.log"
-if diff -u "$LOG_DIR/arc_perl_details.log" "$LOG_DIR/arc_zig_details.log" >"$LOG_DIR/arc_details_diff.log" 2>&1; then
-	echo "PASS"
-else
-	echo "FAIL: details-*.json listings differ"
-	cat "$LOG_DIR/arc_details_diff.log"
-	failed_tests=$((failed_tests + 1))
-fi
+# Log files are reused by ARC-30 to pick the first detail file.
+assert_ls_parity "DIFF details-*.json listing parity" \
+	/tmp/arc_perl_rich/testresults /tmp/arc_zig_rich/testresults \
+	"details-*.json" "details"
 
 # Test ARC-30: details-*.json content parity.
 # We pick the first details file and compare semantic equivalence.
@@ -596,25 +565,14 @@ fi
 # =============================================================================
 
 # Test ARC-31: Screenshot .png files exist (Zig).
-echo "--- Test: ZIG : screenshot .png files exist ---"
-if container_exec bash -c "ls /tmp/arc_zig_rich/testresults/*.png >/dev/null 2>&1"; then
-	echo "PASS"
-else
-	echo "FAIL: No .png found in /tmp/arc_zig_rich/testresults/"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_glob_exists "ZIG : screenshot .png files exist" \
+	"/tmp/arc_zig_rich/testresults/*.png"
 
 # Test ARC-32: Screenshot file listing parity.
-echo "--- Test: DIFF screenshot listing parity ---"
-container_exec bash -c "cd /tmp/arc_perl_rich/testresults && ls *.png | sort" >"$LOG_DIR/arc_perl_pngs.log"
-container_exec bash -c "cd /tmp/arc_zig_rich/testresults && ls *.png | sort" >"$LOG_DIR/arc_zig_pngs.log"
-if diff -u "$LOG_DIR/arc_perl_pngs.log" "$LOG_DIR/arc_zig_pngs.log" >"$LOG_DIR/arc_pngs_diff.log" 2>&1; then
-	echo "PASS"
-else
-	echo "FAIL: .png listings differ"
-	cat "$LOG_DIR/arc_pngs_diff.log"
-	failed_tests=$((failed_tests + 1))
-fi
+# Log files are reused by ARC-33 to pick the first PNG for size comparison.
+assert_ls_parity "DIFF screenshot listing parity" \
+	/tmp/arc_perl_rich/testresults /tmp/arc_zig_rich/testresults \
+	"*.png" "pngs"
 
 # Test ARC-33: Screenshot file size parity.
 echo "--- Test: DIFF screenshot file size parity ---"
@@ -642,50 +600,27 @@ run_test "PERL: archive --with-thumbnails rich job (exit 0)" \
 run_test "ZIG : archive --with-thumbnails rich job (exit 0)" \
 	"$ZIG_EXE archive --host http://localhost --with-thumbnails $RICH_JOB_ID /tmp/arc_zig_rich_thumb" 0
 
-echo "--- Test: ZIG : thumbnail files exist ---"
-if container_exec bash -c "ls /tmp/arc_zig_rich_thumb/testresults/thumbnails/*.png >/dev/null 2>&1"; then
-	echo "PASS"
-else
-	echo "FAIL: No thumbnails found in /tmp/arc_zig_rich_thumb/testresults/thumbnails/"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_glob_exists "ZIG : thumbnail files exist" \
+	"/tmp/arc_zig_rich_thumb/testresults/thumbnails/*.png"
 
 # Test ARC-35: Thumbnail file listing parity.
-echo "--- Test: DIFF thumbnail listing parity ---"
-container_exec bash -c "cd /tmp/arc_perl_rich_thumb/testresults/thumbnails && ls *.png | sort" >"$LOG_DIR/arc_perl_thumbs.log"
-container_exec bash -c "cd /tmp/arc_zig_rich_thumb/testresults/thumbnails && ls *.png | sort" >"$LOG_DIR/arc_zig_thumbs.log"
-if diff -u "$LOG_DIR/arc_perl_thumbs.log" "$LOG_DIR/arc_zig_thumbs.log" >"$LOG_DIR/arc_thumbs_diff.log" 2>&1; then
-	echo "PASS"
-else
-	echo "FAIL: thumbnail listings differ"
-	cat "$LOG_DIR/arc_thumbs_diff.log"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_ls_parity "DIFF thumbnail listing parity" \
+	/tmp/arc_perl_rich_thumb/testresults/thumbnails \
+	/tmp/arc_zig_rich_thumb/testresults/thumbnails \
+	"*.png" "thumbs"
 
 # =============================================================================
 # Section 17: Rich Job — Logs
 # =============================================================================
 
 # Test ARC-36: autoinst-log.txt exists (Zig).
-echo "--- Test: ZIG : autoinst-log.txt exists ---"
-if container_exec test -f /tmp/arc_zig_rich/testresults/autoinst-log.txt; then
-	echo "PASS"
-else
-	echo "FAIL: autoinst-log.txt missing"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_path_exists "ZIG : autoinst-log.txt exists" \
+	-f /tmp/arc_zig_rich/testresults/autoinst-log.txt
 
 # Test ARC-37: Log file listing parity.
-echo "--- Test: DIFF log listing parity ---"
-container_exec bash -c "cd /tmp/arc_perl_rich/testresults && ls *.txt | sort" >"$LOG_DIR/arc_perl_logs.log"
-container_exec bash -c "cd /tmp/arc_zig_rich/testresults && ls *.txt | sort" >"$LOG_DIR/arc_zig_logs.log"
-if diff -u "$LOG_DIR/arc_perl_logs.log" "$LOG_DIR/arc_zig_logs.log" >"$LOG_DIR/arc_logs_diff.log" 2>&1; then
-	echo "PASS"
-else
-	echo "FAIL: log listings differ"
-	cat "$LOG_DIR/arc_logs_diff.log"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_ls_parity "DIFF log listing parity" \
+	/tmp/arc_perl_rich/testresults /tmp/arc_zig_rich/testresults \
+	"*.txt" "logs"
 
 # Test ARC-38: Log file content parity.
 echo "--- Test: DIFF autoinst-log.txt content parity ---"
@@ -704,11 +639,7 @@ fi
 # =============================================================================
 
 # Test ARC-39: HDD asset directory exists.
-echo "--- Test: ZIG : hdd/ directory exists ---"
-if container_exec test -d /tmp/arc_zig_rich/hdd; then echo "PASS"; else
-	echo "FAIL"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_path_exists "ZIG : hdd/ directory exists" -d /tmp/arc_zig_rich/hdd
 
 # Test ARC-40: Asset file size is non-zero (CirrOS image).
 echo "--- Test: ZIG : CirrOS image size is non-zero ---"
@@ -824,28 +755,12 @@ fi
 # =============================================================================
 
 # Test ARC-46: Complete directory structure parity.
-echo "--- Test: DIFF rich archive full directory structure parity ---"
-container_exec bash -c "cd /tmp/arc_perl_rich && find . -type d | sort" >"$LOG_DIR/arc_perl_rich_dirs.log"
-container_exec bash -c "cd /tmp/arc_zig_rich && find . -type d | sort" >"$LOG_DIR/arc_zig_rich_dirs.log"
-if diff -u "$LOG_DIR/arc_perl_rich_dirs.log" "$LOG_DIR/arc_zig_rich_dirs.log" >"$LOG_DIR/arc_rich_dirs_diff.log" 2>&1; then
-	echo "PASS"
-else
-	echo "FAIL: Directory structures differ"
-	cat "$LOG_DIR/arc_rich_dirs_diff.log"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_listing_parity "DIFF rich archive full directory structure parity" \
+	/tmp/arc_perl_rich /tmp/arc_zig_rich "-type d" "rich_dirs"
 
 # Test ARC-47: Complete file listing parity.
-echo "--- Test: DIFF rich archive full file listing parity ---"
-container_exec bash -c "cd /tmp/arc_perl_rich && find . -type f | sort" >"$LOG_DIR/arc_perl_rich_files.log"
-container_exec bash -c "cd /tmp/arc_zig_rich && find . -type f | sort" >"$LOG_DIR/arc_zig_rich_files.log"
-if diff -u "$LOG_DIR/arc_perl_rich_files.log" "$LOG_DIR/arc_zig_rich_files.log" >"$LOG_DIR/arc_rich_files_diff.log" 2>&1; then
-	echo "PASS"
-else
-	echo "FAIL: File listings differ"
-	cat "$LOG_DIR/arc_rich_files_diff.log"
-	failed_tests=$((failed_tests + 1))
-fi
+assert_listing_parity "DIFF rich archive full file listing parity" \
+	/tmp/arc_perl_rich /tmp/arc_zig_rich "-type f" "rich_files"
 
 # =============================================================================
 # Section 50: Cross-Subcommand Flag Rejection

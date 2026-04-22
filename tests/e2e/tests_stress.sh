@@ -109,43 +109,14 @@ fi
 echo ""
 echo "--- Info: Stress response performance comparison ---"
 
-# --- helpers (scoped to this file) ---
-_stress_wall_time_s() {
-	local cmd=$1
-	container_exec bash -c "
-TIMEFORMAT='%R'
-{ time $cmd >/dev/null 2>&1; } 2>/tmp/_stress_wall.out
-cat /tmp/_stress_wall.out
-" 2>/dev/null
-}
-
-_stress_peak_rss_kb() {
-	local cmd=$1
-	local tag=$2
-
-	container_exec bash -c \
-		"/usr/bin/time -v $cmd >/dev/null 2>/tmp/_stress_timev_${tag}.txt" \
-		</dev/null 2>/dev/null || true
-
-	container_exec bash -c \
-		"grep 'Maximum resident set size' /tmp/_stress_timev_${tag}.txt | cut -d: -f2 | tr -d ' \t'" \
-		</dev/null 2>/dev/null
-}
-
-_stress_timev_field() {
-	local tag=$1
-	local field=$2
-	container_exec bash -c \
-		"grep '$field' /tmp/_stress_timev_${tag}.txt 2>/dev/null | cut -d: -f2 | tr -d ' \t'" \
-		</dev/null 2>/dev/null
-}
+# _perf_wall_time_s, _perf_peak_rss_kb, _perf_timev_field are defined in lib.sh.
 
 # --- Wall-clock timing (single run each — large responses are slow) ---
 _stress_api_args="jobs/$STRESS_JOB_ID/details"
 
-_stress_perl_time=$(_stress_wall_time_s \
+_stress_perl_time=$(_perf_wall_time_s "" \
 	"$PERL_EXE api --host http://localhost $_stress_api_args")
-_stress_zig_time=$(_stress_wall_time_s \
+_stress_zig_time=$(_perf_wall_time_s "" \
 	"$ZIG_EXE api --host http://localhost $_stress_api_args")
 
 echo "  Wall-clock:  PERL ${_stress_perl_time}s   ZIG ${_stress_zig_time}s"
@@ -164,20 +135,20 @@ if [[ -n "$_stress_perl_time" && -n "$_stress_zig_time" &&
 fi
 
 # --- Peak RSS ---
-_stress_perl_rss=$(_stress_peak_rss_kb \
+_stress_perl_rss=$(_perf_peak_rss_kb "" \
 	"$PERL_EXE api --host http://localhost $_stress_api_args" "stress_perl")
-_stress_zig_rss=$(_stress_peak_rss_kb \
+_stress_zig_rss=$(_perf_peak_rss_kb "" \
 	"$ZIG_EXE api --host http://localhost $_stress_api_args" "stress_zig")
 
 echo "  Peak RSS:    PERL ${_stress_perl_rss:-?} kB   ZIG ${_stress_zig_rss:-?} kB"
 
 # Additional metrics from /usr/bin/time -v
-_stress_perl_user=$(_stress_timev_field "stress_perl" "User time")
-_stress_zig_user=$(_stress_timev_field "stress_zig" "User time")
-_stress_perl_sys=$(_stress_timev_field "stress_perl" "System time")
-_stress_zig_sys=$(_stress_timev_field "stress_zig" "System time")
-_stress_perl_minor=$(_stress_timev_field "stress_perl" "Minor .reclaiming a frame. page faults")
-_stress_zig_minor=$(_stress_timev_field "stress_zig" "Minor .reclaiming a frame. page faults")
+_stress_perl_user=$(_perf_timev_field "stress_perl" "User time")
+_stress_zig_user=$(_perf_timev_field "stress_zig" "User time")
+_stress_perl_sys=$(_perf_timev_field "stress_perl" "System time")
+_stress_zig_sys=$(_perf_timev_field "stress_zig" "System time")
+_stress_perl_minor=$(_perf_timev_field "stress_perl" "Minor .reclaiming a frame. page faults")
+_stress_zig_minor=$(_perf_timev_field "stress_zig" "Minor .reclaiming a frame. page faults")
 
 echo "  User time:   PERL ${_stress_perl_user:-?}s   ZIG ${_stress_zig_user:-?}s"
 echo "  System time: PERL ${_stress_perl_sys:-?}s   ZIG ${_stress_zig_sys:-?}s"
