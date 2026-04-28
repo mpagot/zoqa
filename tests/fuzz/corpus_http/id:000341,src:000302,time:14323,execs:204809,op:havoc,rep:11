@@ -1,4 +1,0 @@
-<http://openqa.example.com/api026-03-05T10:305&offset=0>; rel="first", <http://openqa.example.c"done"/v1/jobs?limit=5&offset=10>; rel="next", Dhttp://Vpenqa/v1/jobs?limit=5&offset=0>; rel="prev"
-
-{"jobs":[{"id":3585111111111111111111e-111111111115-SP7-SapCloud-Azure-Byos-x86_64-Build002-basic@64bit","state":"done","result,"grossed","group":"sap_cloud"":"paup_id":54,"t_started":"2026-03-05T10:00:00","t_finished":"2/v1/jobs?limit=-Build0:00"ÿext"
-offZet},{"id":358511,"name":"sle-1rel="first"oud-Azure-Byos-ÿ86_64-Build002-advanced@64bit","state":"running","result":"none","group":"sex?limit=5&offset=5>; rel="started":"2026-03-05T10:31:00","t_it","state":"dofinished":null}]}

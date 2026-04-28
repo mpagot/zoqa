@@ -6,7 +6,7 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help build release zig-test zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint lint fuzz-build
+.PHONY: help build release zig-test zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint fuzz-lint lint fuzz-build
 
 # Default target
 help:
@@ -26,7 +26,8 @@ help:
 	@echo "  zig-lint    Check Zig source formatting (zig fmt --check src/)."
 	@echo "  e2e-lint        Run bash -n, shellcheck, and suite registry check on E2E scripts."
 	@echo "  manual-lint     Run bash -n and shellcheck on manual test scripts."
-	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint)."
+	@echo "  fuzz-lint       Run bash -n and shellcheck on tests/fuzz/ scripts."
+	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint, fuzz-lint)."
 	@echo "  fuzz-build  Build the fuzzy app."
 
 # -----------------------------------------------------------------------------
@@ -129,6 +130,25 @@ manual-lint:
 	@echo "==> manual-lint passed"
 
 # -----------------------------------------------------------------------------
+# Linting — bash syntax check + shellcheck on fuzz harness scripts
+# -----------------------------------------------------------------------------
+FUZZ_SCRIPTS := \
+	tests/fuzz/build.sh \
+	tests/fuzz/cmin.sh \
+	tests/fuzz/coverage.sh \
+	tests/fuzz/distill.sh \
+	tests/fuzz/run.sh
+
+fuzz-lint:
+	@echo "==> bash -n syntax check"
+	@for f in $(FUZZ_SCRIPTS); do \
+		bash -n "$$f" && echo "  OK  $$f" || echo "  FAIL $$f"; \
+	done
+	@echo "==> shellcheck"
+	@shellcheck $(FUZZ_SCRIPTS)
+	@echo "==> fuzz-lint passed"
+
+# -----------------------------------------------------------------------------
 # Linting — Zig source formatting check
 # -----------------------------------------------------------------------------
 zig-lint:
@@ -139,5 +159,5 @@ zig-lint:
 # -----------------------------------------------------------------------------
 # Aggregate lint target
 # -----------------------------------------------------------------------------
-lint: zig-lint e2e-lint manual-lint
+lint: zig-lint e2e-lint manual-lint fuzz-lint
 	@echo "==> all linters passed"

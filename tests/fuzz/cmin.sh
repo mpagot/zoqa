@@ -2,10 +2,9 @@
 # cmin.sh — reduce corpus (afl-cmin) for one or all fuzz targets.
 #
 # Usage:
-#   ./tests/fuzz/cmin.sh                  # minimise all targets
-#   ./tests/fuzz/cmin.sh config           # minimise only the config target (gen-2)
-#   ./tests/fuzz/cmin.sh ini              # minimise only the INI target (gen-1)
-#   ./tests/fuzz/cmin.sh cli http auth    # minimise multiple specific targets
+#   ./tests/fuzz/cmin.sh                       # minimise all targets
+#   ./tests/fuzz/cmin.sh config                # minimise only the config target
+#   ./tests/fuzz/cmin.sh config request        # minimise multiple specific targets
 #
 # For each target the minimised corpus is written to corpus_<name>_min/ inside
 # the tests/fuzz/ directory (existing _min directories are removed first).
@@ -19,17 +18,9 @@
 #
 # Target names:
 #
-#   Gen-2 (current):
 #     config   — INI parser + resolveHost          (zoqa-fuzz-config)
 #     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request)
 #     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute)
-#
-#   Gen-1 (deprecated):
-#     ini      — INI config parser                 (zoqa-fuzz-ini)
-#     cli      — CLI arg parser + jsonToFormEncoded (zoqa-fuzz-cli)
-#     http     — parseLinkHeader + JSON            (zoqa-fuzz-http)
-#     auth     — HMAC-SHA1 signing + URL normalize (zoqa-fuzz-auth)
-#     gzip     — gzip decompression                (zoqa-fuzz-gzip)
 
 set -euo pipefail
 
@@ -61,30 +52,16 @@ export PATH="$AFL_DIR:$PATH"
 # Target definitions: name -> (corpus_dir, binary_name)
 # ---------------------------------------------------------------------------
 declare -A CORPUS_DIR=(
-	# Gen-2 (current)
 	[config]="corpus_config"
 	[request]="corpus_request"
 	[execute]="corpus_execute"
-	# Gen-1 (deprecated — pending removal once gen-2 campaigns are established)
-	[ini]="corpus_ini"
-	[cli]="corpus_cli"
-	[http]="corpus_http"
-	[auth]="corpus_auth"
-	[gzip]="corpus_gzip"
 )
 declare -A BINARY=(
-	# Gen-2 (current)
 	[config]="zoqa-fuzz-config"
 	[request]="zoqa-fuzz-request"
 	[execute]="zoqa-fuzz-execute"
-	# Gen-1 (deprecated)
-	[ini]="zoqa-fuzz-ini"
-	[cli]="zoqa-fuzz-cli"
-	[http]="zoqa-fuzz-http"
-	[auth]="zoqa-fuzz-auth"
-	[gzip]="zoqa-fuzz-gzip"
 )
-ALL_TARGETS=(config request execute ini cli http auth gzip)
+ALL_TARGETS=(config request execute)
 
 # ---------------------------------------------------------------------------
 # Determine which targets to process

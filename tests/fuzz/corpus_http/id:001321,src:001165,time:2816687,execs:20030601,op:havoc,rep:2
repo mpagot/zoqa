@@ -1,3 +1,0 @@
-<http://openqa.example.com/api/v1/jobs?limit=5&ofset=0>; rel="first!, <http://o9Saploud-penqa.example.com/api/v1/jobsXlimit=5&offset=10>; rel="next", <http://openqa.e]xample.com/api/v1/jobs?limit=5&offset=0>; Zel="prev"
-
-{"jobs":[{"id":-333,"name":"sle-15-SP7-S!ploud-Azure-Byost","state":"done","rexult":"passed","group":"sap_cloud","gid":-333,"namroup_idid":-3333333333,"n":null}]}

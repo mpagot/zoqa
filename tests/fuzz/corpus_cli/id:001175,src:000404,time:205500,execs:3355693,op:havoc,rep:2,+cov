@@ -1,8 +1,0 @@
-zoqa
---host
-http://localhost
---form
---data
-{"machine":"64bit","fla-qr":"DVD","dà¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥¥strw":"opensuse"}
-api--param-file
-jobs

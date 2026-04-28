@@ -51,7 +51,7 @@
 // ProgrammableMockClient
 // ---------------------------------------------------------------------------
 //
-// Follows the MockClient pattern from fuzz_auth.zig, extended with:
+// Drives openQAReq through a duck-typed MockClient with knobs for:
 //   - fail_attempts: returns error.ConnectionRefused N times before succeeding
 //   - response_status: configurable HTTP status code
 //   - response_gzip: when true, includes Content-Encoding: gzip header

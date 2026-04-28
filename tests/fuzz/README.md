@@ -5,27 +5,11 @@ in Persistent Mode with LLVM instrumentation.
 
 ## Fuzz Targets
 
-There are two generations of harnesses. Gen-2 is the active set; gen-1 is kept
-for performance comparison until gen-2 campaigns are established, then will be
-removed.
-
-### Gen-2 (current)
-
 | Binary | Harness | Corpus | Dict | What it tests |
 |---|---|---|---|---|
-| `zoqa-fuzz-config` | `fuzz_config.zig` | `corpus_config/` | `ini.dict` | INI parser + `resolveHost` all 7 branches (`src/config.zig`) |
+| `zoqa-fuzz-config` | `fuzz_config.zig` | `corpus_config/` | `config.dict` | INI parser + `resolveHost` all 7 branches (`src/config.zig`) |
 | `zoqa-fuzz-request` | `fuzz_request.zig` | `corpus_request/` | `cli.dict` | CLI args + `buildRequest` + `parseLinkHeader` + JSON (`src/main.zig`, `src/http_client.zig`) |
 | `zoqa-fuzz-execute` | `fuzz_execute.zig` | `corpus_execute/` | — | Full pipeline: auth + retry + gzip + `openQAReq` (`src/http_client.zig`, `src/auth.zig`) |
-
-### Gen-1 (deprecated — pending removal)
-
-| Binary | Harness | Corpus | Dict | Superseded by |
-|---|---|---|---|---|
-| `zoqa-fuzz-ini` | `fuzz_ini.zig` | `corpus_ini/` | `ini.dict` | `zoqa-fuzz-config` |
-| `zoqa-fuzz-cli` | `fuzz_cli.zig` | `corpus_cli/` | `cli.dict` | `zoqa-fuzz-request` |
-| `zoqa-fuzz-http` | `fuzz_http.zig` | `corpus_http/` | `http.dict` | `zoqa-fuzz-request` |
-| `zoqa-fuzz-auth` | `fuzz_auth.zig` | `corpus_auth/` | `auth.dict` | `zoqa-fuzz-execute` |
-| `zoqa-fuzz-gzip` | `fuzz_gzip.zig` | `corpus_gzip/` | — | `zoqa-fuzz-execute` |
 
 ## Setup
 
@@ -41,7 +25,7 @@ is also needed to compile AFL++ itself.
 
 ```sh
 # openSUSE / Tumbleweed — required
-sudo zypper install gcc gcc-c++ make llvm21-devel clang21 lld21
+sudo zypper install gcc gcc-c++ make llvm21-devel clang21 lld21 kcov
 
 # Recommended (optional — improves AFL++ performance)
 sudo zypper install zlib-devel diffutils
@@ -315,7 +299,7 @@ The easiest way to build, run, and analyse coverage in one step is the
 `coverage.sh` wrapper (see [Helper Scripts](#coveragesh--build-run-and-analyse-coverage)):
 
 ```sh
-# Build + run kcov + print analysis for all gen-2 targets
+# Build + run kcov + print analysis for all targets
 ./tests/fuzz/coverage.sh
 
 # Analyse existing coverage data without rebuilding
@@ -328,10 +312,10 @@ The easiest way to build, run, and analyse coverage in one step is the
 The underlying `zig build` commands can also be invoked directly:
 
 ```sh
-# Coverage for a single gen-2 target (seeds from corpus_config/)
+# Coverage for a single target (seeds from corpus_config/)
 zig build -p . --build-file tests/fuzz/cov_build.zig coverage-config
 
-# Coverage for all three gen-2 targets
+# Coverage for all three targets
 zig build -p . --build-file tests/fuzz/cov_build.zig coverage
 
 # Open the report
@@ -387,7 +371,7 @@ corresponding `corpus_<name>_min/` directories.
 ./tests/fuzz/cmin.sh config request execute
 ```
 
-Valid target names: `config`, `request`, `execute`, `ini`, `cli`, `http`, `auth`, `gzip`.
+Valid target names: `config`, `request`, `execute`.
 
 ### `run.sh` — run a single fuzzer
 

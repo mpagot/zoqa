@@ -51,17 +51,9 @@
 #
 # Target names:
 #
-#   Gen-2 (current):
 #     config   — INI parser + resolveHost          (zoqa-fuzz-config)
 #     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request)
 #     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute)
-#
-#   Gen-1 (deprecated):
-#     ini      — INI config parser                 (zoqa-fuzz-ini)
-#     cli      — CLI arg parser + jsonToFormEncoded (zoqa-fuzz-cli)
-#     http     — parseLinkHeader + JSON            (zoqa-fuzz-http)
-#     auth     — HMAC-SHA1 signing + URL normalize (zoqa-fuzz-auth)
-#     gzip     — gzip decompression                (zoqa-fuzz-gzip)
 
 set -euo pipefail
 
@@ -112,30 +104,16 @@ export PATH="$AFL_DIR:$PATH"
 # Target definitions: name -> (corpus_dir, binary_name)
 # ---------------------------------------------------------------------------
 declare -A CORPUS_DIR=(
-	# Gen-2 (current)
 	[config]="corpus_config"
 	[request]="corpus_request"
 	[execute]="corpus_execute"
-	# Gen-1 (deprecated — pending removal once gen-2 campaigns are established)
-	[ini]="corpus_ini"
-	[cli]="corpus_cli"
-	[http]="corpus_http"
-	[auth]="corpus_auth"
-	[gzip]="corpus_gzip"
 )
 declare -A BINARY=(
-	# Gen-2 (current)
 	[config]="zoqa-fuzz-config"
 	[request]="zoqa-fuzz-request"
 	[execute]="zoqa-fuzz-execute"
-	# Gen-1 (deprecated)
-	[ini]="zoqa-fuzz-ini"
-	[cli]="zoqa-fuzz-cli"
-	[http]="zoqa-fuzz-http"
-	[auth]="zoqa-fuzz-auth"
-	[gzip]="zoqa-fuzz-gzip"
 )
-ALL_TARGETS=(config request execute ini cli http auth gzip)
+ALL_TARGETS=(config request execute)
 
 # ---------------------------------------------------------------------------
 # Parse arguments

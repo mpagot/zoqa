@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# coverage.sh — build, run kcov, and analyse coverage for all gen-2 fuzz targets.
+# coverage.sh — build, run kcov, and analyse coverage for all fuzz targets.
 #
 # Usage:
 #   ./tests/fuzz/coverage.sh                  # build + run + analyse all targets
@@ -35,7 +35,7 @@
 #   --skip-build    Skip the build+run phase; analyse existing coverage/ output.
 #                   Useful when coverage data already exists from a prior run.
 #
-# Target names (gen-2 only):
+# Target names:
 #   config   — INI parser + resolveHost          (corpus_config/)
 #   request  — CLI args + buildRequest + JSON    (corpus_request/)
 #   execute  — full pipeline: auth+retry+gzip    (corpus_execute/)
