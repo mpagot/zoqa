@@ -43,8 +43,9 @@
 // zig_fuzz_init
 // ---------------------------------------------------------------------------
 //
-// Sets OPENQA_CLI_RETRY_SLEEP_TIME_S=0 so retry sleeps are instant during
-// fuzzing, preventing slowdowns from the exponential backoff in sleepForRetry.
+// No setup needed. The harness sets `retry_sleep_s = 0` directly on the
+// CallOptions passed to openQAReq below — env vars (OPENQA_CLI_RETRY_*) are
+// only read by main.zig's CLI parsing layer and never reach the library code.
 //
 // ---------------------------------------------------------------------------
 // ProgrammableMockClient
@@ -65,9 +66,6 @@
 //
 const std = @import("std");
 const zoqa = @import("zoqa");
-
-// std.posix.setenv does not exist in Zig 0.15.2; call libc directly.
-extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
 // ---------------------------------------------------------------------------
 // ProgrammableMockClient
@@ -163,10 +161,7 @@ const ProgrammableMockClient = struct {
 // zig_fuzz_init — called once per AFL++ worker process
 // ---------------------------------------------------------------------------
 
-pub export fn zig_fuzz_init() void {
-    // Make retry sleeps instant so AFL++ isn't slowed by backoff delays.
-    _ = setenv("OPENQA_CLI_RETRY_SLEEP_TIME_S", "0", 1);
-}
+pub export fn zig_fuzz_init() void {}
 
 // ---------------------------------------------------------------------------
 // zig_fuzz_test — called in a tight loop by AFL++ persistent mode
@@ -274,6 +269,11 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
             // Up to 3 retries — matches fail_attempts range (0–3).
             .retries = 3,
             .quiet = true,
+            // Skip the production 3-second backoff between retry attempts so
+            // AFL persistent-mode iterations stay in the microsecond range.
+            // Must be set on the struct directly: env vars are only read by
+            // main.zig's CLI parser, never by the library code.
+            .retry_sleep_s = 0,
         },
         &mock,
     ) catch return;

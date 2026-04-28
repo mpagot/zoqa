@@ -29,25 +29,54 @@ removed.
 
 ## Setup
 
-AFL++ is vendored at `vendor/aflplusplus/` (git-ignored).
+AFL++ lives under `vendor/aflplusplus/`. The directory is **git-ignored** — it
+is not checked into the repository, so you must clone it yourself after cloning
+`openQAclient`.
 
-### 1. Install LLVM
+### 1. Install system dependencies
 
-AFL++'s LLVM mode requires `llvm-config` and `clang` from the same LLVM version (recommended: 18 or newer).
+AFL++'s LLVM mode requires `llvm-config`, `clang`, and `lld` from the same LLVM
+version (recommended: 18 or newer). A C/C++ toolchain (`gcc`, `gcc-c++`, `make`)
+is also needed to compile AFL++ itself.
 
 ```sh
-# openSUSE / Tumbleweed
-sudo zypper install llvm21-devel clang21
+# openSUSE / Tumbleweed — required
+sudo zypper install gcc gcc-c++ make llvm21-devel clang21 lld21
+
+# Recommended (optional — improves AFL++ performance)
+sudo zypper install zlib-devel diffutils
 ```
 
-### 2. Build the vendored AFL++
+`zlib-devel` enables the `HAVE_ZLIB` performance optimisation inside AFL++.
+`diffutils` provides `cmp`, used by AFL++'s self-tests during the build.
+Both are optional — the build succeeds without them.
+
+### 2. Clone AFL++ into the vendor directory
+
+```sh
+git clone https://github.com/AFLplusplus/AFLplusplus vendor/aflplusplus
+```
+
+This checks out the default (`stable`) branch. The clone is a one-time step;
+subsequent `git pull` inside the directory is enough to update.
+
+### 3. Build AFL++
 
 ```sh
 make source-only -j$(nproc) -C vendor/aflplusplus
 # Produces: vendor/aflplusplus/afl-fuzz, vendor/aflplusplus/afl-cc, ...
 ```
 
-### 3. Build the instrumented binaries
+The build prints warnings for `gcc_plugin` and `nyx_mode` — these are expected
+and can be safely ignored. This project only uses LLVM mode. The critical lines
+to look for are:
+
+```
+[+] LLVM mode successfully built
+[+] All done! You can now use './afl-cc' to compile programs.
+```
+
+### 4. Build the instrumented binaries
 
 `afl-cc` must be on `PATH`. Pass `-Dfuzz` to activate the fuzz build step:
 
