@@ -149,8 +149,9 @@ pub fn runSchedule(
 
     const scheduled_product_id: ?u64 = if (root.get("scheduled_product_id")) |sp| blk: {
         break :blk switch (sp) {
-            // BUG: @intCast panics on negative integers (Gap 12)
-            .integer => @intCast(@as(i64, sp.integer)),
+            // std.math.cast returns null on overflow (incl. negative → unsigned),
+            // matching the existing `else => null` shape for non-integer values.
+            .integer => std.math.cast(u64, sp.integer),
             else => null,
         };
     } else null;
@@ -431,8 +432,10 @@ fn extractJobIds(
 
     for (job_ids_array.items, 0..) |id_val, i| {
         const id_int: u64 = switch (id_val) {
-            // BUG: @intCast panics on negative integers (Gap 12)
-            .integer => @intCast(@as(i64, id_val.integer)),
+            .integer => std.math.cast(u64, id_val.integer) orelse {
+                if (!options.quiet) std.debug.print("schedule: negative job ID in response\n", .{});
+                return error.InvalidJobId;
+            },
             else => {
                 if (!options.quiet) std.debug.print("schedule: non-integer job ID in response\n", .{});
                 return error.InvalidJobId;
@@ -549,4 +552,25 @@ test "extractJobIds: empty array returns error" {
     var w: std.Io.Writer = .fixed(&buf);
 
     try testing.expectError(error.NoJobsCreated, extractJobIds(allocator, .{ .quiet = true }, "http://localhost", &w, arr));
+}
+
+// Regression test for Gap 12 — see ideas/HARNESS_AUDIT.md.
+// AFL discovered this crash via the schedule fuzzer on 2026-04-29.
+// Before the fix at schedule.zig:435, this test PANICS with
+// "integer does not fit in destination type" because @intCast aborts on
+// negative inputs. After the fix (using std.math.cast), it should return
+// error.InvalidJobId cleanly.
+test "extractJobIds: negative integer is rejected (Gap 12 reproduction)" {
+    const allocator = testing.allocator;
+    const json_str =
+        \\[-1]
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    const arr = parsed.value.array;
+    var buf: [1024]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+
+    try testing.expectError(error.InvalidJobId, extractJobIds(allocator, .{ .quiet = true }, "http://localhost", &w, arr));
 }
