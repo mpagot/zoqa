@@ -29,14 +29,27 @@ pub const ScheduleOptions = struct {
 ///   1. POST `/api/v1/isos` with form-encoded params.
 ///   2. Handle synchronous response (extract `ids`) or async response
 ///      (`scheduled_product_id` without `ids`).
-///   3. Print job URLs to stdout (§15.5).
+///   3. Print job URLs to stdout
 ///   4. If `--monitor` is active and job IDs are available (sync or after
-///      async polling), enter the monitoring loop (§15.7).
+///      async polling), enter the monitoring loop.
 ///
-/// Returns the exit code per §15.9:
-///   0 — jobs scheduled successfully (without monitoring), or all passed/softfailed
-///   1 — scheduling error, network error, server error
-///   2 — any monitored job failed/cancelled
+/// Arguments:
+///   - `allocator`: Used for JSON parsing and string formatting.
+///   - `client`: Duck-typed HTTP client. Production callers pass `*std.http.Client`;
+///               fuzz harnesses pass a `*ProgrammableMockClient` (see
+///               `tests/fuzz/mock_client.zig`). Forwarded to `zoqa.openQAReq`,
+///               which already accepts `anytype`.
+///   - `host`: The resolved base URL of the target openQA instance.
+///   - `params_encoded`: Form-encoded parameter string for the POST request body.
+///   - `options`: Execution options governing credentials, retries, output, and monitoring.
+///
+/// Returns: The exit code per:
+///   - `0` — jobs scheduled successfully (without monitoring), or all passed/softfailed.
+///   - `1` — scheduling error, network error, server error.
+///   - `2` — any monitored job failed/cancelled.
+///
+/// Errors:
+///   - Any allocator or I/O error from nested monitor execution or extraction routines.
 pub fn runSchedule(
     allocator: std.mem.Allocator,
     client: *std.http.Client,
@@ -48,7 +61,7 @@ pub fn runSchedule(
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_writer.interface;
 
-    // Step 1: POST /api/v1/isos
+    // POST /api/v1/isos
     const resp = zoqa.openQAReq(host, "isos", .{
         .allocator = allocator,
         .method = .POST,
@@ -79,13 +92,41 @@ pub fn runSchedule(
         return 1;
     }
 
-    // Step 2: Parse JSON response
+    // Parse JSON response
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, resp.body, .{}) catch {
         if (!options.quiet) std.debug.print("schedule: invalid JSON in response\n", .{});
         return 1;
     };
     defer parsed.deinit();
 
+    // The JSON parser returns a `std.json.Value`, which is a tagged union —
+    // it can hold one of several types (.object, .array, .string, .integer, etc.).
+    //
+    // This switch expression does three things in one line:
+    //
+    //   .object => |o| o,
+    //   ^^^^^^^    ^^^  ^
+    //     │         │   └─ (3) Return expression: pass the captured ObjectMap
+    //     │         │       through as the value of the whole switch expression,
+    //     │         │       which gets assigned to `root`.
+    //     │         │
+    //     │         └─ (2) Payload capture: the .object variant carries an inner
+    //     │              value of type std.json.ObjectMap (a hashmap of string
+    //     │              keys → JSON values). The |o| syntax extracts that inner
+    //     │              data and binds it to the local name `o`.
+    //     │
+    //     └─ (1) Switch prong: matches the .object variant of the tagged union.
+    //          "Prong" is Zig's term for one arm/branch of a switch (like "case"
+    //          in C).
+    //
+    //   else => { ... return 1; }
+    //     If the JSON is anything other than an object (array, string, number,
+    //     null), print an error to stderr (unless --quiet) and return exit code 1.
+    //
+    // Why use a switch instead of `parsed.value.object` directly? Because
+    // accessing the wrong variant of a tagged union is safety-checked undefined
+    // behavior in Zig — it would panic at runtime. The switch forces every
+    // variant to be handled explicitly at compile time.
     const root = switch (parsed.value) {
         .object => |o| o,
         else => {
@@ -94,7 +135,7 @@ pub fn runSchedule(
         },
     };
 
-    // Check for `failed` entries (§15.8)
+    // Check for `failed` entries
     if (checkFailedEntries(root)) {
         return 1;
     }
@@ -115,13 +156,13 @@ pub fn runSchedule(
     } else null;
 
     if (has_ids) {
-        // Synchronous response: extract job IDs and print job URLs (§15.5)
+        // Synchronous response: extract job IDs and print job URLs
         const job_ids = extractJobIds(allocator, options, host, stdout, ids_val.?.array) catch return 1;
         defer allocator.free(job_ids);
 
         if (!options.monitor_jobs) return 0;
 
-        // Enter monitoring loop (§15.7)
+        // Enter monitoring loop
         return monitor.runMonitor(allocator, client, host, job_ids, .{
             .credentials = options.credentials,
             .quiet = options.quiet,
@@ -133,11 +174,11 @@ pub fn runSchedule(
             .poll_interval = options.poll_interval,
         });
     } else if (ids_present) {
-        // Sync response with empty ids array — zero products matched (§15.8).
+        // Sync response with empty ids array — zero products matched
         if (!options.quiet) std.debug.print("schedule: no jobs scheduled\n", .{});
         return 1;
     } else if (scheduled_product_id != null and options.monitor_jobs) {
-        // Async response with --monitor: poll for completion (§15.6)
+        // Async response with --monitor: poll for completion
         stdout.flush() catch {};
         return asyncPollAndMonitor(allocator, client, host, scheduled_product_id.?, stdout, options);
     } else if (scheduled_product_id != null) {
@@ -145,7 +186,7 @@ pub fn runSchedule(
         stdout.flush() catch {};
         return 0;
     } else {
-        // No ids and no scheduled_product_id — error (§15.8)
+        // No ids and no scheduled_product_id — error
         if (!options.quiet) std.debug.print("schedule: no jobs scheduled and no scheduled_product_id in response\n", .{});
         return 1;
     }
@@ -172,10 +213,21 @@ pub fn runSchedule(
 /// intentional and matches the Perl reference (`_wait_for_jobs` also loops
 /// indefinitely).
 ///
-/// Returns the exit code:
-///   0 — all monitored jobs passed or soft-failed (from `runMonitor`)
-///   1 — network/parse error, or cancelled/unexpected status
-///   2 — one or more monitored jobs failed (from `runMonitor`)
+/// Arguments:
+///   - `allocator`: Used for building the URL path, parsing JSON responses, and allocating job ID arrays.
+///   - `client`: Duck-typed HTTP client (same contract as `runSchedule`'s `client`).
+///   - `host`: The resolved base URL of the target openQA instance.
+///   - `scheduled_product_id`: The product ID returned from the initial scheduling POST.
+///   - `stdout`: Writer for outputting job creation summaries and URLs.
+///   - `options`: Execution options governing credentials, retries, and the polling interval.
+///
+/// Returns: The exit code:
+///   - `0` — all monitored jobs passed or soft-failed (from `runMonitor`).
+///   - `1` — network/parse error, or cancelled/unexpected status.
+///   - `2` — one or more monitored jobs failed (from `runMonitor`).
+///
+/// Errors:
+///   - Allocator out-of-memory errors or I/O errors from underlying operations.
 fn asyncPollAndMonitor(
     allocator: std.mem.Allocator,
     client: *std.http.Client,
@@ -299,8 +351,10 @@ fn asyncPollAndMonitor(
 /// carries an `"error_message"` string field. Output is unconditional —
 /// `options.quiet` does not suppress it.
 ///
-/// Returns `true` if any failed entries were found (caller should return 1),
-/// `false` otherwise.
+/// Arguments:
+///   - `obj`: The JSON object map to inspect for a "failed" key.
+///
+/// Returns: `true` if any failed entries were found (caller should return 1), `false` otherwise.
 fn checkFailedEntries(obj: std.json.ObjectMap) bool {
     if (obj.get("failed")) |failed_val| {
         if (failed_val == .object and failed_val.object.count() > 0) {
@@ -340,15 +394,19 @@ fn checkFailedEntries(obj: std.json.ObjectMap) bool {
 ///   6. Flush stdout.
 ///   7. Return the slice — **the caller is responsible for freeing it**.
 ///
-/// Parameters:
-///   - `allocator`: used to allocate the returned slice; must outlive the slice.
-///   - `options`: only `options.quiet` is read.
-///   - `host`: base URL printed in job links (e.g. `"https://openqa.suse.de"`).
-///   - `stdout`: writer for job-creation output.
+/// Arguments:
+///   - `allocator`: Used to allocate the returned slice; must outlive the slice.
+///   - `options`: Execution options (only `options.quiet` is read).
+///   - `host`: Base URL printed in job links (e.g. `"https://openqa.suse.de"`).
+///   - `stdout`: Writer for job-creation output.
 ///   - `job_ids_array`: JSON array of integer job IDs from the server response.
 ///
-/// Errors: `error.NoJobsCreated`, `error.InvalidJobId`, or allocator errors.
-/// Memory: freed internally on error; caller owns the slice on success.
+/// Returns: An allocated `[]u64` containing the job IDs. The caller owns the slice and must free it.
+///
+/// Errors:
+///   - `error.NoJobsCreated` — if the array is empty.
+///   - `error.InvalidJobId` — if an element is not an integer.
+///   - Allocator OOM or I/O writer errors.
 fn extractJobIds(
     allocator: std.mem.Allocator,
     options: ScheduleOptions,

@@ -6,12 +6,16 @@ pub fn build(b: *std.Build) void {
     const strip = b.option(bool, "strip", "Strip debug symbols from the binary");
 
     // Library module — exposed to consumers of this package.
+    // Note: Zig uses a root source file approach. Only files that are explicitly
+    // @import'ed from src/root.zig (or its imported files) will be part of the library.
     const lib_mod = b.addModule("zoqa", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
 
     // Executable
+    // Similarly, only files @import'ed from src/main.zig will be part of the executable.
+    // The executable also imports the library module below so it can use its public API.
     const exe = b.addExecutable(.{
         .name = "zoqa",
         .root_module = b.createModule(.{
