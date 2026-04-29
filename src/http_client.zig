@@ -644,6 +644,482 @@ test "execute: MockClient returns APIResponse" {
     try testing.expectEqualStrings("{\"jobs\":[]}", resp.body);
 }
 
+// ---------------------------------------------------------------------------
+// CallOptions / RawGetOptions — high-level option structs for openQAReq family
+// ---------------------------------------------------------------------------
+
+/// Configuration for a single openQA API call via `openQAReq`.
+///
+/// This struct bundles every tuneable aspect of a request — HTTP method,
+/// parameters, body, authentication credentials, retry policy, and
+/// diagnostics — into a single value that is passed to `openQAReq`.
+/// All fields except `allocator` have sensible defaults, so callers only
+/// need to set the fields that differ from a simple unauthenticated GET.
+///
+/// **Ownership:** `CallOptions` does **not** own any of the slices or
+/// pointers it holds (`headers`, `params`, `body`, `credentials`). The
+/// caller must ensure these remain valid for the duration of the
+/// `openQAReq` call. There is no `deinit` — nothing to free.
+pub const CallOptions = struct {
+    /// General-purpose allocator used by `openQAReq` for all internal
+    /// allocations. Must remain valid until `APIResponse.deinit()` is called.
+    allocator: std.mem.Allocator,
+
+    /// HTTP method for the request. Defaults to `.GET`.
+    /// Also controls how `params` is routed (query for GET/DELETE, body for
+    /// POST/PUT/PATCH unless an explicit `body` is set).
+    method: std.http.Method = .GET,
+
+    /// Extra request headers. **Not owned** — caller keeps the memory alive.
+    headers: []const std.http.Header = &.{},
+
+    /// Pre-encoded URL query / form-encoded parameter string.
+    /// Routed by HTTP method: query string (GET/DELETE) or body (POST/PUT/PATCH).
+    /// **Not owned**.
+    params: []const u8 = "",
+
+    /// Optional raw request body. Takes precedence over `params` for write
+    /// methods. **Not owned**.
+    body: ?[]const u8 = null,
+
+    /// Resolved API credentials for HMAC-SHA1 signing. `null` = unauthenticated.
+    /// **Not owned**.
+    credentials: ?config.Credentials = null,
+
+    /// Number of automatic retries on transient failures (connection errors and
+    /// HTTP 502/503). Defaults to 0.
+    retries: u32 = 0,
+
+    /// Suppress non-fatal diagnostics. Defaults to false.
+    quiet: bool = false,
+
+    /// Print request headers to stderr. Defaults to false.
+    verbose: bool = false,
+
+    /// TCP connect timeout in seconds. Reserved for future use.
+    connect_timeout_s: f64 = 30.0,
+
+    /// Base sleep duration in seconds between retry attempts.
+    /// Actual sleep = `retry_sleep_s * retry_factor^attempt`.
+    retry_sleep_s: f64 = 3.0,
+
+    /// Exponential backoff multiplier applied per retry attempt.
+    retry_factor: f64 = 1.0,
+};
+
+/// Options for `openQARawGet`.
+pub const RawGetOptions = struct {
+    allocator: std.mem.Allocator,
+    credentials: ?config.Credentials = null,
+    size_limit: ?u64 = null,
+    quiet: bool = false,
+    verbose: bool = false,
+};
+
+// ---------------------------------------------------------------------------
+// openQARawGet — authenticated GET to an absolute path (no /api/v1/ prefix)
+// ---------------------------------------------------------------------------
+
+/// Perform an authenticated GET request to an arbitrary path (no /api/v1/ prefix).
+/// Streams the response body into `writer`. Before streaming starts, deposits
+/// the Content-Length header value into `content_length_out` (if non-null),
+/// allowing callers to set up progress tracking.
+/// No retry — intended for large file downloads.
+pub fn openQARawGet(
+    host: []const u8,
+    absolute_path: []const u8, // must start with "/"
+    opts: RawGetOptions,
+    client: anytype,
+    writer: *std.Io.Writer,
+    content_length_out: ?*?u64,
+) !StreamResult {
+    const host_res = try config.resolveHost(opts.allocator, false, false, false, host);
+    defer if (host_res.allocated) opts.allocator.free(host_res.url);
+
+    const url = try std.fmt.allocPrint(opts.allocator, "{s}{s}", .{ host_res.url, absolute_path });
+    defer opts.allocator.free(url);
+
+    const req = Request{
+        .allocator = opts.allocator,
+        .method = .GET,
+        .url = url,
+        .headers = &.{},
+        .body = null,
+        .credentials = opts.credentials,
+        .retries = 0,
+        .quiet = opts.quiet,
+        .verbose = opts.verbose,
+        .size_limit = opts.size_limit,
+    };
+
+    return executeStream(req, client, writer, content_length_out);
+}
+
+// ---------------------------------------------------------------------------
+// openQAReq — construct URL and execute a request
+// ---------------------------------------------------------------------------
+
+/// Perform an authenticated request against an openQA instance.
+///
+/// This is the **primary public entry point** of the library. It orchestrates:
+///   1. Host resolution (bare hostname → full base URL via `config.resolveHost`).
+///   2. URL construction (`host/api/v1/path`, with params routing).
+///   3. HMAC-SHA1 signature generation (via resolved credentials).
+///   4. HTTP execution and response decompression (via the injected `client`).
+///
+/// Params routing:
+///   - GET / DELETE:  `opts.params` is appended to the URL as a query string.
+///   - POST / PUT / PATCH: `opts.params` is used as the request body, unless
+///     `opts.body` is already set (explicit body takes precedence).
+pub fn openQAReq(
+    host: []const u8,
+    path: []const u8,
+    opts: CallOptions,
+    client: anytype,
+) !APIResponse {
+    const host_res = try config.resolveHost(opts.allocator, false, false, false, host);
+    defer if (host_res.allocated) opts.allocator.free(host_res.url);
+
+    const clean_path = if (std.mem.startsWith(u8, path, "/")) path[1..] else path;
+
+    const base_url = try std.fmt.allocPrint(opts.allocator, "{s}/api/v1/{s}", .{ host_res.url, clean_path });
+    defer opts.allocator.free(base_url);
+
+    var url_buf: ?[]u8 = null;
+    defer if (url_buf) |b| opts.allocator.free(b);
+
+    const final_url: []const u8 = if ((opts.method == .GET or opts.method == .DELETE) and opts.params.len > 0) blk: {
+        const sep: []const u8 = if (std.mem.indexOfScalar(u8, base_url, '?') != null) "&" else "?";
+        url_buf = try std.fmt.allocPrint(opts.allocator, "{s}{s}{s}", .{ base_url, sep, opts.params });
+        break :blk url_buf.?;
+    } else base_url;
+
+    const effective_body: ?[]const u8 = if (opts.body) |b|
+        b
+    else if ((opts.method == .POST or opts.method == .PUT or opts.method == .PATCH) and opts.params.len > 0)
+        opts.params
+    else
+        null;
+
+    const req = Request{
+        .allocator = opts.allocator,
+        .method = opts.method,
+        .url = final_url,
+        .headers = opts.headers,
+        .body = effective_body,
+        .credentials = opts.credentials,
+        .retries = opts.retries,
+        .quiet = opts.quiet,
+        .verbose = opts.verbose,
+        .connect_timeout_s = opts.connect_timeout_s,
+        .retry_sleep_s = opts.retry_sleep_s,
+        .retry_factor = opts.retry_factor,
+    };
+
+    return execute(req, client);
+}
+
+// ---------------------------------------------------------------------------
+// openQAReq tests — mock client captures the Request that execute() builds
+// ---------------------------------------------------------------------------
+
+/// Minimal mock HTTP client for openQAReq unit tests.
+///
+/// Captures the URL (reconstructed from the `std.Uri` that `execute` passes
+/// to `client.request`) and the request body (via `sendBodyComplete`), so
+/// test assertions can verify URL construction, params routing, and body
+/// selection without making real HTTP calls.
+const TestMockClient = struct {
+    const Self = @This();
+
+    const MockHead = struct {
+        status: std.http.Status = .ok,
+        content_type: ?[]const u8 = "application/json",
+        content_length: ?u64 = null,
+
+        const HeaderIterator = struct {
+            done: bool = false,
+            pub fn next(self: *HeaderIterator) ?std.http.Header {
+                if (self.done) return null;
+                self.done = true;
+                return .{ .name = "Content-Type", .value = "application/json" };
+            }
+        };
+
+        pub fn iterateHeaders(_: *const MockHead) HeaderIterator {
+            return .{};
+        }
+    };
+
+    const MockReader = struct {
+        done: bool = false,
+        pub fn streamRemaining(self: *MockReader, w: anytype) anyerror!usize {
+            if (self.done) return 0;
+            self.done = true;
+            const body = "{}";
+            try w.writeAll(body);
+            return body.len;
+        }
+    };
+
+    const MockResponse = struct {
+        head: MockHead = .{},
+        mock_reader: MockReader = .{},
+        parent: *Self,
+
+        pub fn deinit(_: *MockResponse) void {}
+        pub fn sendBodiless(self: *MockResponse) !void {
+            self.parent.captured_bodiless = true;
+        }
+        pub fn sendBodyComplete(self: *MockResponse, body: []u8) !void {
+            const len = @min(body.len, self.parent.captured_body.len);
+            @memcpy(self.parent.captured_body[0..len], body[0..len]);
+            self.parent.captured_body_len = len;
+        }
+        pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+            return &self.mock_reader;
+        }
+        pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+            return self;
+        }
+    };
+
+    captured_url: [1024]u8 = [_]u8{0} ** 1024,
+    captured_url_len: usize = 0,
+    captured_body: [1024]u8 = [_]u8{0} ** 1024,
+    captured_body_len: usize = 0,
+    captured_method: std.http.Method = .GET,
+    captured_bodiless: bool = false,
+    response: ?MockResponse = null,
+
+    pub fn request(self: *Self, method: std.http.Method, uri: std.Uri, _: anytype) !*MockResponse {
+        self.response = .{ .parent = self };
+        self.captured_method = method;
+        var buf: [1024]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        const writer = stream.writer();
+        writer.writeAll(uri.scheme) catch {};
+        writer.writeAll("://") catch {};
+        if (uri.host) |h| {
+            writer.writeAll(h.percent_encoded) catch {};
+        }
+        if (uri.port) |p| {
+            writer.print(":{d}", .{p}) catch {};
+        }
+        writer.writeAll(uri.path.percent_encoded) catch {};
+        if (uri.query) |q| {
+            writer.writeByte('?') catch {};
+            writer.writeAll(q.percent_encoded) catch {};
+        }
+        const len = stream.pos;
+        @memcpy(self.captured_url[0..len], buf[0..len]);
+        self.captured_url_len = len;
+        return &self.response.?;
+    }
+
+    fn getCapturedUrl(self: *const Self) []const u8 {
+        return self.captured_url[0..self.captured_url_len];
+    }
+
+    fn getCapturedBody(self: *const Self) []const u8 {
+        return self.captured_body[0..self.captured_body_len];
+    }
+};
+
+test "openQAReq: basic URL construction from host and path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const resp = try openQAReq("http://localhost", "jobs", .{
+        .allocator = allocator,
+    }, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqualStrings("http://localhost/api/v1/jobs", mock.getCapturedUrl());
+    try testing.expect(mock.captured_method == .GET);
+}
+
+test "openQAReq: leading slash in path is stripped" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const resp = try openQAReq("http://localhost", "/jobs/1234", .{
+        .allocator = allocator,
+    }, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqualStrings("http://localhost/api/v1/jobs/1234", mock.getCapturedUrl());
+}
+
+test "openQAReq: GET params appended as query string" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const resp = try openQAReq("http://localhost", "jobs", .{
+        .allocator = allocator,
+        .method = .GET,
+        .params = "DISTRI=sle&VERSION=15",
+    }, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqualStrings(
+        "http://localhost/api/v1/jobs?DISTRI=sle&VERSION=15",
+        mock.getCapturedUrl(),
+    );
+    try testing.expect(mock.captured_bodiless);
+}
+
+test "openQAReq: DELETE params appended as query string" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const resp = try openQAReq("http://localhost", "assets/42", .{
+        .allocator = allocator,
+        .method = .DELETE,
+        .params = "force=1",
+    }, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqualStrings(
+        "http://localhost/api/v1/assets/42?force=1",
+        mock.getCapturedUrl(),
+    );
+}
+
+test "openQAReq: POST params used as body (no explicit body)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const resp = try openQAReq("http://localhost", "isos", .{
+        .allocator = allocator,
+        .method = .POST,
+        .params = "DISTRI=test&VERSION=1",
+    }, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqualStrings("http://localhost/api/v1/isos", mock.getCapturedUrl());
+    try testing.expectEqualStrings("DISTRI=test&VERSION=1", mock.getCapturedBody());
+}
+
+test "openQAReq: POST explicit body takes precedence over params" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const resp = try openQAReq("http://localhost", "jobs", .{
+        .allocator = allocator,
+        .method = .POST,
+        .params = "ignored=true",
+        .body = "{\"key\":\"value\"}",
+    }, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqualStrings("http://localhost/api/v1/jobs", mock.getCapturedUrl());
+    try testing.expectEqualStrings("{\"key\":\"value\"}", mock.getCapturedBody());
+}
+
+test "openQAReq: PUT params routed as body" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const resp = try openQAReq("http://localhost", "jobs/1", .{
+        .allocator = allocator,
+        .method = .PUT,
+        .params = "STATE=done",
+    }, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqualStrings("http://localhost/api/v1/jobs/1", mock.getCapturedUrl());
+    try testing.expectEqualStrings("STATE=done", mock.getCapturedBody());
+}
+
+test "openQAReq: no params produces clean URL and null body" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const resp = try openQAReq("http://localhost", "workers", .{
+        .allocator = allocator,
+    }, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqualStrings("http://localhost/api/v1/workers", mock.getCapturedUrl());
+    try testing.expect(mock.captured_bodiless);
+    try testing.expect(mock.captured_body_len == 0);
+}
+
+test "openQAReq: bare hostname gets https:// prefix" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const resp = try openQAReq("openqa.opensuse.org", "jobs", .{
+        .allocator = allocator,
+    }, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqualStrings("https://openqa.opensuse.org/api/v1/jobs", mock.getCapturedUrl());
+}
+
+test "openQAReq: response fields are propagated" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const resp = try openQAReq("http://localhost", "jobs", .{
+        .allocator = allocator,
+    }, &mock);
+    defer resp.deinit();
+
+    try testing.expect(resp.status == .ok);
+    try testing.expect(resp.exitCode() == 0);
+    try testing.expectEqualStrings("{}", resp.body);
+}
+
+test "openQARawGet: URL construction without /api/v1/ prefix" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    var buf: [4096]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+
+    _ = openQARawGet("http://localhost", "/tests/123/asset/repo/file.txt", .{
+        .allocator = allocator,
+    }, &mock, &w, null) catch {};
+
+    try testing.expectEqualStrings("http://localhost/tests/123/asset/repo/file.txt", mock.getCapturedUrl());
+    try testing.expect(mock.captured_method == .GET);
+}
+
+test "openQARawGet: HMAC auth headers attached when credentials provided" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const creds = config.Credentials{
+        .allocator = allocator,
+        .key = "fake_key",
+        .secret = "fake_secret",
+    };
+
+    var buf: [4096]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+
+    _ = openQARawGet("http://localhost", "/tests/123/file.txt", .{
+        .allocator = allocator,
+        .credentials = creds,
+    }, &mock, &w, null) catch {};
+
+    try testing.expectEqualStrings("http://localhost/tests/123/file.txt", mock.getCapturedUrl());
+}
+
 test "execute: hop-by-hop headers are excluded from response_headers" {
     const testing = std.testing;
     const allocator = testing.allocator;

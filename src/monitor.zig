@@ -1,6 +1,6 @@
 const std = @import("std");
-const zoqa = @import("root.zig");
-const config = zoqa.config;
+const config = @import("config.zig");
+const http_client = @import("http_client.zig");
 
 pub const JobState = enum {
     scheduled,
@@ -47,13 +47,17 @@ fn parseResult(s: []const u8) JobResult {
 
 /// Single HTTP call to check the status of a job.
 /// Returns a parsed JobStatus. The caller is responsible for polling.
+///
+/// `client` is duck-typed: production callers pass `*std.http.Client`; fuzz
+/// harnesses pass a `*ProgrammableMockClient` (see `tests/fuzz/mock_client.zig`).
+/// Forwarded to `http_client.openQAReq`, which already accepts `anytype`.
 pub fn checkJobStatus(
     allocator: std.mem.Allocator,
-    client: *std.http.Client,
+    client: anytype,
     host: []const u8,
     job_id: u64,
     follow: bool,
-    call_options: zoqa.CallOptions,
+    call_options: http_client.CallOptions,
 ) !JobStatus {
     const path_query = if (follow)
         try std.fmt.allocPrint(allocator, "experimental/jobs/{d}/status?follow=1", .{job_id})
@@ -65,7 +69,7 @@ pub fn checkJobStatus(
     var options = call_options;
     options.method = .GET;
 
-    const resp = try zoqa.openQAReq(host, path_query, options, client);
+    const resp = try http_client.openQAReq(host, path_query, options, client);
     defer resp.deinit();
 
     if (resp.status != .ok) {
@@ -159,13 +163,15 @@ pub const MonitorOptions = struct {
 
 /// Blocking monitoring loop: polls each job until all reach a terminal state.
 ///
+/// `client` is duck-typed: see `checkJobStatus` for the contract.
+///
 /// Returns the exit code:
 ///   0 — all jobs passed or softfailed
 ///   1 — API/network error during polling
 ///   2 — at least one job failed/cancelled
 pub fn runMonitor(
     allocator: std.mem.Allocator,
-    client: *std.http.Client,
+    client: anytype,
     host: []const u8,
     job_ids: []const u64,
     options: MonitorOptions,

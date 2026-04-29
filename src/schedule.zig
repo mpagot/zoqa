@@ -1,6 +1,6 @@
 const std = @import("std");
-const zoqa = @import("root.zig");
-const config = zoqa.config;
+const config = @import("config.zig");
+const http_client = @import("http_client.zig");
 const monitor = @import("monitor.zig");
 
 /// Configuration for `runSchedule`. Covers the POST to `/api/v1/isos`,
@@ -37,7 +37,7 @@ pub const ScheduleOptions = struct {
 ///   - `allocator`: Used for JSON parsing and string formatting.
 ///   - `client`: Duck-typed HTTP client. Production callers pass `*std.http.Client`;
 ///               fuzz harnesses pass a `*ProgrammableMockClient` (see
-///               `tests/fuzz/mock_client.zig`). Forwarded to `zoqa.openQAReq`,
+///               `tests/fuzz/mock_client.zig`). Forwarded to `http_client.openQAReq`,
 ///               which already accepts `anytype`.
 ///   - `host`: The resolved base URL of the target openQA instance.
 ///   - `params_encoded`: Form-encoded parameter string for the POST request body.
@@ -52,7 +52,7 @@ pub const ScheduleOptions = struct {
 ///   - Any allocator or I/O error from nested monitor execution or extraction routines.
 pub fn runSchedule(
     allocator: std.mem.Allocator,
-    client: *std.http.Client,
+    client: anytype,
     host: []const u8,
     params_encoded: []const u8,
     options: ScheduleOptions,
@@ -62,7 +62,7 @@ pub fn runSchedule(
     const stdout = &stdout_writer.interface;
 
     // POST /api/v1/isos
-    const resp = zoqa.openQAReq(host, "isos", .{
+    const resp = http_client.openQAReq(host, "isos", .{
         .allocator = allocator,
         .method = .POST,
         .params = params_encoded,
@@ -230,7 +230,7 @@ pub fn runSchedule(
 ///   - Allocator out-of-memory errors or I/O errors from underlying operations.
 fn asyncPollAndMonitor(
     allocator: std.mem.Allocator,
-    client: *std.http.Client,
+    client: anytype,
     host: []const u8,
     scheduled_product_id: u64,
     stdout: *std.Io.Writer,
@@ -240,7 +240,7 @@ fn asyncPollAndMonitor(
     defer allocator.free(poll_path);
 
     while (true) {
-        const poll_resp = zoqa.openQAReq(host, poll_path, .{
+        const poll_resp = http_client.openQAReq(host, poll_path, .{
             .allocator = allocator,
             .method = .GET,
             .credentials = options.credentials,
@@ -506,11 +506,9 @@ test "extractJobIds: valid positive integers" {
 
     const arr = parsed.value.array;
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
-    var io_writer = writer.interface;
+    var w: std.Io.Writer = .fixed(&buf);
 
-    const ids = try extractJobIds(allocator, .{}, "http://localhost", &io_writer, arr);
+    const ids = try extractJobIds(allocator, .{}, "http://localhost", &w, arr);
     defer allocator.free(ids);
 
     try testing.expectEqual(@as(usize, 3), ids.len);
@@ -518,7 +516,7 @@ test "extractJobIds: valid positive integers" {
     try testing.expectEqual(@as(u64, 102), ids[1]);
     try testing.expectEqual(@as(u64, 103), ids[2]);
 
-    const output = fbs.getWritten();
+    const output = w.buffered();
     try testing.expect(std.mem.indexOf(u8, output, "3 jobs have been created") != null);
     try testing.expect(std.mem.indexOf(u8, output, "http://localhost/tests/101") != null);
 }
@@ -533,11 +531,9 @@ test "extractJobIds: non-integer value returns error" {
 
     const arr = parsed.value.array;
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
-    var io_writer = writer.interface;
+    var w: std.Io.Writer = .fixed(&buf);
 
-    try testing.expectError(error.InvalidJobId, extractJobIds(allocator, .{ .quiet = true }, "http://localhost", &io_writer, arr));
+    try testing.expectError(error.InvalidJobId, extractJobIds(allocator, .{ .quiet = true }, "http://localhost", &w, arr));
 }
 
 test "extractJobIds: empty array returns error" {
@@ -550,9 +546,7 @@ test "extractJobIds: empty array returns error" {
 
     const arr = parsed.value.array;
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
-    var io_writer = writer.interface;
+    var w: std.Io.Writer = .fixed(&buf);
 
-    try testing.expectError(error.NoJobsCreated, extractJobIds(allocator, .{ .quiet = true }, "http://localhost", &io_writer, arr));
+    try testing.expectError(error.NoJobsCreated, extractJobIds(allocator, .{ .quiet = true }, "http://localhost", &w, arr));
 }

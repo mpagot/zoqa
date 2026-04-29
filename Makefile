@@ -6,7 +6,7 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help build release zig-test zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint fuzz-lint lint fuzz-build
+.PHONY: help build release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint fuzz-lint lint fuzz-build
 
 # Default target
 help:
@@ -16,6 +16,9 @@ help:
 	@echo "  build       Build the zoqa executable and static library."
 	@echo "  release     Build with release optimizations."
 	@echo "  zig-test    Run all Zig unit tests."
+	@echo "  zig-test-discovery  Verify every \`test\` block in src/ is actually run."
+	@echo "                      Catches Zig issue #10018 (lazy-analysis silently"
+	@echo "                      drops tests in unreferenced files). Runs the suite."
 	@echo "  e2e         Run the full E2E suite (starts + tears down container)."
 	@echo "              Requires zig-out/bin/zoqa to exist."
 	@echo "              Optional: SUITES=core,auth  — run only the listed suite(s)."
@@ -50,6 +53,13 @@ fuzz-build:
 # -----------------------------------------------------------------------------
 zig-test:
 	zig build test --summary all
+
+# Verify every `test` block declared in src/*.zig is actually executed by the
+# runner. Catches Zig's lazy-analysis silently dropping test blocks in files
+# that are imported but never fully analyzed (issue #10018). Runs `zig build
+# test` internally as part of the check.
+zig-test-discovery:
+	bash tools/check_test_count.sh .
 
 # -----------------------------------------------------------------------------
 # Near End-to-End Tests
