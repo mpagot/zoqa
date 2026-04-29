@@ -16,6 +16,7 @@
 #     zoqa-fuzz-config   — INI parser + resolveHost (all 7 branches)
 #     zoqa-fuzz-request  — CLI arg parser + buildRequest + parseLinkHeader + JSON
 #     zoqa-fuzz-execute  — full pipeline: auth + retry + gzip + openQAReq
+#     zoqa-fuzz-schedule — runSchedule + extractJobIds (stub: sync path only)
 
 set -euo pipefail
 

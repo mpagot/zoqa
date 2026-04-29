@@ -39,6 +39,8 @@
 #   config   — INI parser + resolveHost          (corpus_config/)
 #   request  — CLI args + buildRequest + JSON    (corpus_request/)
 #   execute  — full pipeline: auth+retry+gzip    (corpus_execute/)
+#   schedule — runSchedule + extractJobIds       (corpus_schedule/)
+#              NOTE: coverage data unavailable until corpus_schedule/ is populated.
 
 set -euo pipefail
 
@@ -58,7 +60,7 @@ fi
 FUZZ_DIR="$ROOT/tests/fuzz"
 COV_DIR="$ROOT/coverage"
 REPORT_FILE="$FUZZ_DIR/coverage_report.txt"
-ALL_TARGETS=(config request execute)
+ALL_TARGETS=(config request execute schedule)
 
 # ---------------------------------------------------------------------------
 # Parse arguments

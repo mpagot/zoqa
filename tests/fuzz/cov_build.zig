@@ -128,6 +128,19 @@ pub fn build(b: *std.Build) void {
         },
         .corpus = "corpus_execute",
     });
+
+    // schedule: stub harness for runSchedule. corpus_schedule/ does not yet
+    // exist; addCoverageTarget detects the missing directory at build-graph
+    // construction time and skips the target with a warning, so this entry
+    // only becomes active once seeds are added.
+    addCoverageTarget(b, target, optimize, coverage_step, .{
+        .name = "schedule",
+        .harness = "cov_harness_schedule.zig",
+        .imports = &.{
+            .{ .name = "zoqa", .module = lib_mod },
+        },
+        .corpus = "corpus_schedule",
+    });
 }
 
 // ---------------------------------------------------------------------------

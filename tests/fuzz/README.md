@@ -10,6 +10,7 @@ in Persistent Mode with LLVM instrumentation.
 | `zoqa-fuzz-config` | `fuzz_config.zig` | `corpus_config/` | `config.dict` | INI parser + `resolveHost` all 7 branches (`src/config.zig`) |
 | `zoqa-fuzz-request` | `fuzz_request.zig` | `corpus_request/` | `cli.dict` | CLI args + `buildRequest` + `parseLinkHeader` + JSON (`src/main.zig`, `src/http_client.zig`) |
 | `zoqa-fuzz-execute` | `fuzz_execute.zig` | `corpus_execute/` | — | Full pipeline: auth + retry + gzip + `openQAReq` (`src/http_client.zig`, `src/auth.zig`) |
+| `zoqa-fuzz-schedule` | `fuzz_schedule.zig` | `corpus_schedule/` *(TODO)* | — | **Stub** — sync path of `runSchedule` + `extractJobIds` + `checkFailedEntries` (`src/schedule.zig`). Corpus and async/monitor coverage land in a follow-up. |
 
 ## Setup
 

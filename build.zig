@@ -127,4 +127,10 @@ fn setupFuzzing(
     addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-execute", "tests/fuzz/fuzz_execute.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },
     });
+
+    // zoqa-fuzz-schedule: schedule subcommand — runSchedule + extractJobIds
+    // (stub: sync path only, see tests/fuzz/fuzz_schedule.zig STATUS section).
+    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-schedule", "tests/fuzz/fuzz_schedule.zig", &.{
+        .{ .name = "zoqa", .module = lib_mod },
+    });
 }

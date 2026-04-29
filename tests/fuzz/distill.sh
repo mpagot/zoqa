@@ -54,6 +54,9 @@
 #     config   — INI parser + resolveHost          (zoqa-fuzz-config)
 #     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request)
 #     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute)
+#     schedule — runSchedule + extractJobIds       (zoqa-fuzz-schedule)
+#                NOTE: distill skips targets with no queue output; without a
+#                fuzzing campaign for schedule there is nothing to distill.
 
 set -euo pipefail
 
@@ -107,13 +110,15 @@ declare -A CORPUS_DIR=(
 	[config]="corpus_config"
 	[request]="corpus_request"
 	[execute]="corpus_execute"
+	[schedule]="corpus_schedule"
 )
 declare -A BINARY=(
 	[config]="zoqa-fuzz-config"
 	[request]="zoqa-fuzz-request"
 	[execute]="zoqa-fuzz-execute"
+	[schedule]="zoqa-fuzz-schedule"
 )
-ALL_TARGETS=(config request execute)
+ALL_TARGETS=(config request execute schedule)
 
 # ---------------------------------------------------------------------------
 # Parse arguments
