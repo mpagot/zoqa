@@ -1,6 +1,6 @@
 const std = @import("std");
-const zoqa = @import("root.zig");
-const config = zoqa.config;
+const config = @import("config.zig");
+const http_client = @import("http_client.zig");
 
 pub const ArchiveOptions = struct {
     with_thumbnails: bool = false,
@@ -115,7 +115,7 @@ fn downloadFile(
     var pw = ProgressWriter.init(&file_writer.interface, display_name, &cl, &pw_buf);
     var writer = &pw.writer;
 
-    const result = zoqa.openQARawGet(host, url_path, .{
+    const result = http_client.openQARawGet(host, url_path, .{
         .allocator = allocator,
         .credentials = options.credentials,
         .size_limit = options.asset_size_limit,
@@ -173,7 +173,7 @@ fn downloadFileNoProgress(
 
     var buf: [65536]u8 = undefined;
     var fw = file.writer(&buf);
-    const result = zoqa.openQARawGet(host, url_path, .{
+    const result = http_client.openQARawGet(host, url_path, .{
         .allocator = allocator,
         .credentials = options.credentials,
         .size_limit = options.asset_size_limit,
@@ -273,7 +273,7 @@ pub fn runArchive(
     const detail_path = try std.fmt.allocPrint(allocator, "jobs/{d}/details", .{job_id});
     defer allocator.free(detail_path);
 
-    const resp = zoqa.openQAReq(host, detail_path, .{
+    const resp = http_client.openQAReq(host, detail_path, .{
         .allocator = allocator,
         .credentials = options.credentials,
         .retries = options.retries,

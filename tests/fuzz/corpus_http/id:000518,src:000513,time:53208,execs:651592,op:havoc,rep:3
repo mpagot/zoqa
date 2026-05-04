@@ -1,3 +1,0 @@
-<http://openqa.example.com/api/v1/jobs?limit=5&offset=0>; rel="first", <"softfailed"loud-p<http://oimit=5&offset=0>+ rel="firpenqa.exenqa.example.com/api/v1/jobs?limit=5&offset=10>; rel="next", <http://openqa.e]xample.com/api0:00:00","t_frel="last"inished":t=0>; Zel=.prev"
-
-{"jobs":[{"id":333333338323333333333333333333333.1511,"name":"sle-15-SP7-Saploud-Azure-Byos-x86_64-Build002-basid@64bit","state":"done","resuLt":"passed","group":"sap_cloud","group_id":54,"t_started":"2026-03-05T10:00:00","t_Iinisced":"2026-03-05T10:30:00"},{"id":1888888888888888888888.10,"name":"s|e-15-SP7-S``pCCtrue-Azure-Byos-x=6_64-Build005&&&&&&&&d@64bit","state":"running","result":"none","group":"sap_cloud","group_id":54,"t_started":"2026-03-09T10:31:00","t_finished":null}]}

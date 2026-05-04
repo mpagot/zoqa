@@ -1,6 +1,6 @@
-// cov_build.zig — coverage build for the three gen-2 fuzz harnesses.
+// cov_build.zig — coverage build for the three fuzz harnesses.
 //
-// Builds non-instrumented (plain Debug) executables from the gen-2 coverage
+// Builds non-instrumented (plain Debug) executables from the coverage
 // harnesses and wires kcov steps so a single `zig build -p . coverage-<name>`
 // command runs all corpus seeds through the harness under kcov and writes an
 // HTML+JSON report to zig-out/coverage/<name>/.
@@ -96,10 +96,10 @@ pub fn build(b: *std.Build) void {
     // ---------------------------------------------------------------------------
     // Top-level "coverage" step — depends on all three targets
     // ---------------------------------------------------------------------------
-    const coverage_step = b.step("coverage", "Run kcov coverage over all gen-2 corpora");
+    const coverage_step = b.step("coverage", "Run kcov coverage over all corpora");
 
     // ---------------------------------------------------------------------------
-    // Register the three gen-2 coverage targets
+    // Register the three coverage targets
     // ---------------------------------------------------------------------------
     addCoverageTarget(b, target, optimize, coverage_step, .{
         .name = "config",
@@ -127,6 +127,19 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zoqa", .module = lib_mod },
         },
         .corpus = "corpus_execute",
+    });
+
+    // schedule: stub harness for runSchedule. corpus_schedule/ does not yet
+    // exist; addCoverageTarget detects the missing directory at build-graph
+    // construction time and skips the target with a warning, so this entry
+    // only becomes active once seeds are added.
+    addCoverageTarget(b, target, optimize, coverage_step, .{
+        .name = "schedule",
+        .harness = "cov_harness_schedule.zig",
+        .imports = &.{
+            .{ .name = "zoqa", .module = lib_mod },
+        },
+        .corpus = "corpus_schedule",
     });
 }
 

@@ -25,17 +25,12 @@
 #
 # Target names:
 #
-#   Gen-2 (current):
-#     config   — INI parser + resolveHost          (zoqa-fuzz-config, ini.dict)
+#     config   — INI parser + resolveHost          (zoqa-fuzz-config, config.dict)
 #     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request, cli.dict)
 #     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute, no dict)
-#
-#   Gen-1 (deprecated):
-#     ini      — INI config parser                 (zoqa-fuzz-ini,  ini.dict)
-#     cli      — CLI arg parser + jsonToFormEncoded (zoqa-fuzz-cli,  cli.dict)
-#     http     — parseLinkHeader + JSON            (zoqa-fuzz-http, http.dict)
-#     auth     — HMAC-SHA1 signing + URL normalize (zoqa-fuzz-auth, auth.dict)
-#     gzip     — gzip decompression                (zoqa-fuzz-gzip, no dict)
+#     schedule — runSchedule + extractJobIds       (zoqa-fuzz-schedule, no dict)
+#                NOTE: corpus_schedule_min/ is not yet populated; run will
+#                error with a helpful message until seeds are added via cmin.sh.
 
 set -euo pipefail
 
@@ -67,31 +62,19 @@ export PATH="$AFL_DIR:$PATH"
 # Target definitions
 # ---------------------------------------------------------------------------
 declare -A BINARY=(
-	# Gen-2 (current)
 	[config]="zoqa-fuzz-config"
 	[request]="zoqa-fuzz-request"
 	[execute]="zoqa-fuzz-execute"
-	# Gen-1 (deprecated)
-	[ini]="zoqa-fuzz-ini"
-	[cli]="zoqa-fuzz-cli"
-	[http]="zoqa-fuzz-http"
-	[auth]="zoqa-fuzz-auth"
-	[gzip]="zoqa-fuzz-gzip"
+	[schedule]="zoqa-fuzz-schedule"
 )
 # Optional dictionary per target; empty string means no -x flag.
 declare -A DICT=(
-	# Gen-2 (current)
 	[config]="config.dict"
 	[request]="cli.dict"
 	[execute]=""
-	# Gen-1 (deprecated)
-	[ini]="ini.dict"
-	[cli]="cli.dict"
-	[http]="http.dict"
-	[auth]="auth.dict"
-	[gzip]=""
+	[schedule]=""
 )
-ALL_TARGETS=(config request execute ini cli http auth gzip)
+ALL_TARGETS=(config request execute schedule)
 
 # ---------------------------------------------------------------------------
 # Parse arguments

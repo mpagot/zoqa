@@ -104,8 +104,12 @@ jobs:
         run: make e2e-lint
       - name: Run Manual Lint
         run: make manual-lint
+      - name: Run Fuzz Lint
+        run: make fuzz-lint
       - name: Run E2E Dry-run
         run: make e2e-dryrun
+      - name: Run Zig Test Discovery
+        run: make zig-test-discovery
 
   # Aggregation job for branch protection required status checks.
   # Handles the GitHub quirk where skipped jobs count as "success".

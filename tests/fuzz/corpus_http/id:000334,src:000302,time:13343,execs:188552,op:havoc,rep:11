@@ -1,3 +1,0 @@
-<http; ://openqa.example.com/api/v1/jobs?limit=5&offset=0>; rel="f                     irst", <http://openqa.example.com/api/v1/jobs?limit=5&offset=10>; rel="Oext", <http://openqa.example.com/api/v1/jobs?limit=5&offset=0>; rel="prev"
-
-{"jobs":[  irst", <httpou{"id":358511111111ne","result":"passed","grud-Azure-Byos-x86_64-Build002-basic@64bit","state":"done","result":"passed"            irst", <httpoup_id":54,"t_started":#2026-03-05T10:00:00","t_finished":"2026-03-05T10:30-Build0:00"},{"id":358511,"name":"sle-15-SP7-SapCÿoud-Azure-Byos-x86_64-Build002-advanced@64bit","state":"running","result":"jone","group":"sap_cloud","g¶oup_id":54,"t_started":"2026-falseT10:31:00","t_it","state":"dofrnished":null}]}

@@ -6,12 +6,16 @@ pub fn build(b: *std.Build) void {
     const strip = b.option(bool, "strip", "Strip debug symbols from the binary");
 
     // Library module — exposed to consumers of this package.
+    // Note: Zig uses a root source file approach. Only files that are explicitly
+    // @import'ed from src/root.zig (or its imported files) will be part of the library.
     const lib_mod = b.addModule("zoqa", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
 
     // Executable
+    // Similarly, only files @import'ed from src/main.zig will be part of the executable.
+    // The executable also imports the library module below so it can use its public API.
     const exe = b.addExecutable(.{
         .name = "zoqa",
         .root_module = b.createModule(.{
@@ -97,7 +101,7 @@ fn setupFuzzing(
 
     const lib_mod = b.modules.get("zoqa").?;
 
-    // Build a module for src/main.zig so fuzz_cli/fuzz_request can import it as "main".
+    // Build a module for src/main.zig so fuzz_request can import it as "main".
     // It depends on the library module for config/http_client access.
     const main_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -107,44 +111,6 @@ fn setupFuzzing(
             .{ .name = "zoqa", .module = lib_mod },
         },
     });
-
-    // ---------------------------------------------------------------------------
-    // OLD harnesses (generation 1) — keep during transition for performance
-    // comparison. Remove once the generation 2 harnesses below have been
-    // validated to provide equal or better coverage.
-    // TODO: remove zoqa-fuzz-ini   (superseded by zoqa-fuzz-config)
-    // TODO: remove zoqa-fuzz-cli   (superseded by zoqa-fuzz-request)
-    // TODO: remove zoqa-fuzz-http  (superseded by zoqa-fuzz-request)
-    // TODO: remove zoqa-fuzz-auth  (superseded by zoqa-fuzz-execute)
-    // TODO: remove zoqa-fuzz-gzip  (superseded by zoqa-fuzz-execute)
-    // ---------------------------------------------------------------------------
-
-    // zoqa-fuzz-ini: INI config file parser
-    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-ini", "tests/fuzz/fuzz_ini.zig", &.{
-        .{ .name = "zoqa", .module = lib_mod },
-    });
-
-    // zoqa-fuzz-cli: CLI argument parser + jsonToFormEncoded
-    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-cli", "tests/fuzz/fuzz_cli.zig", &.{
-        .{ .name = "main", .module = main_mod },
-    });
-
-    // zoqa-fuzz-http: parseLinkHeader + JSON pretty-print path
-    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-http", "tests/fuzz/fuzz_http.zig", &.{
-        .{ .name = "zoqa", .module = lib_mod },
-    });
-
-    // zoqa-fuzz-auth: HMAC-SHA1 signing + URL normalization
-    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-auth", "tests/fuzz/fuzz_auth.zig", &.{
-        .{ .name = "zoqa", .module = lib_mod },
-    });
-
-    // zoqa-fuzz-gzip: gzip decompression (Content-Encoding: gzip path)
-    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-gzip", "tests/fuzz/fuzz_gzip.zig", &.{});
-
-    // ---------------------------------------------------------------------------
-    // NEW harnesses (generation 2) — broader targets, better coverage per binary.
-    // ---------------------------------------------------------------------------
 
     // zoqa-fuzz-config: INI parser + resolveHost (all 7 branches)
     addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-config", "tests/fuzz/fuzz_config.zig", &.{
@@ -159,6 +125,12 @@ fn setupFuzzing(
 
     // zoqa-fuzz-execute: full execute pipeline — auth + retry + gzip + openQAReq
     addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-execute", "tests/fuzz/fuzz_execute.zig", &.{
+        .{ .name = "zoqa", .module = lib_mod },
+    });
+
+    // zoqa-fuzz-schedule: schedule subcommand — runSchedule + extractJobIds
+    // (stub: sync path only, see tests/fuzz/fuzz_schedule.zig STATUS section).
+    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-schedule", "tests/fuzz/fuzz_schedule.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },
     });
 }

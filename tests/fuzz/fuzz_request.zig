@@ -35,7 +35,7 @@
 // parameter to buildRequest, exercising the --data-file body path without
 // actual filesystem reads.
 //
-// Two additional optional content blocks extend the base fuzz_cli format:
+// Two additional optional content blocks exercise the response-side helpers:
 //
 //   ---LINKHEADER---
 //   </api/v1/jobs?page=2>; rel="next"

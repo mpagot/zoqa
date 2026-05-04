@@ -2394,7 +2394,16 @@ pub fn main() !void {
 
     // Resolve credentials
     // Extract hostname from the resolved host URL for config file lookup.
-    const host_for_uri = if (req_cfg) |cfg| cfg.host else if (archive_cfg) |cfg| cfg.host else if (monitor_cfg) |cfg| cfg.host else if (schedule_cfg) |cfg| cfg.host else args.host orelse "localhost";
+    // Note: a `switch (subcmd)` with `.?` unwraps would also work here since
+    // each config is guaranteed non-null by the dispatch above, but the orelse
+    // fallback below provides an extra safety net for future subcommands.
+    const host_for_uri = blk: {
+        if (req_cfg) |cfg| break :blk cfg.host;
+        if (archive_cfg) |cfg| break :blk cfg.host;
+        if (monitor_cfg) |cfg| break :blk cfg.host;
+        if (schedule_cfg) |cfg| break :blk cfg.host;
+        break :blk args.host orelse "localhost";
+    };
     const hostname = blk: {
         const uri = std.Uri.parse(host_for_uri) catch {
             break :blk host_for_uri;

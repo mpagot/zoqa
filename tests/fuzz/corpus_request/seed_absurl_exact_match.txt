@@ -1,0 +1,3 @@
+zoqa
+api
+https://openqa.opensuse.org/api/v1

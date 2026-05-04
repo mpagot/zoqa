@@ -32,25 +32,38 @@
 //                      before succeeding (0–3). Exercises the retry loop.
 //     bit 2 (0x04):    use_gzip — if set, mock returns Content-Encoding: gzip
 //                      header and the section 4 bytes as body.
+//     bit 3 (0x08):    emit_link_header — if set, mock emits a Link header
+//                      whose value is section 5 content (Gap 9).
+//     bit 4 (0x10):    use_structured_ct — if CLEAR, the mock's head.content_type
+//                      is set to null, exercising the structured-field fallback
+//                      path in http_client.zig (Gap 11).
+//     bit 5 (0x20):    inject_read_failed — if set, streamRemaining returns
+//                      error.ReadFailed on first call (Gap 10).
+//     bit 6 (0x40):    include_accept_header — if set, an Accept header is
+//                      added to extra_headers, exercising the "Accept already
+//                      present" check in buildHeaders (Gap 7).
 //
 //   status_hi, status_lo: u16 HTTP status code (big-endian). If both are 0,
 //   defaults to 200. Values outside 100–599 are clamped to 200.
 //
-// If fewer than 4 sections are present, missing sections use safe defaults
+//   Section 5 (optional): Link header value (only used when ctrl bit 3 is set).
+//
+// If fewer than 5 sections are present, missing sections use safe defaults
 // (empty strings, zero bytes).
 //
 // ---------------------------------------------------------------------------
 // zig_fuzz_init
 // ---------------------------------------------------------------------------
 //
-// Sets OPENQA_CLI_RETRY_SLEEP_TIME_S=0 so retry sleeps are instant during
-// fuzzing, preventing slowdowns from the exponential backoff in sleepForRetry.
+// No setup needed. The harness sets `retry_sleep_s = 0` directly on the
+// CallOptions passed to openQAReq below — env vars (OPENQA_CLI_RETRY_*) are
+// only read by main.zig's CLI parsing layer and never reach the library code.
 //
 // ---------------------------------------------------------------------------
 // ProgrammableMockClient
 // ---------------------------------------------------------------------------
 //
-// Follows the MockClient pattern from fuzz_auth.zig, extended with:
+// Drives openQAReq through a duck-typed MockClient with knobs for:
 //   - fail_attempts: returns error.ConnectionRefused N times before succeeding
 //   - response_status: configurable HTTP status code
 //   - response_gzip: when true, includes Content-Encoding: gzip header
@@ -65,108 +78,15 @@
 //
 const std = @import("std");
 const zoqa = @import("zoqa");
+const mock_client = @import("mock_client.zig");
 
-// std.posix.setenv does not exist in Zig 0.15.2; call libc directly.
-extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
-
-// ---------------------------------------------------------------------------
-// ProgrammableMockClient
-// ---------------------------------------------------------------------------
-
-const ProgrammableMockClient = struct {
-    const Self = @This();
-
-    const MockHead = struct {
-        status: std.http.Status,
-        use_gzip: bool,
-        // Fallback field checked by http_client.zig after iterateHeaders().
-        content_type: ?[]const u8 = "application/json",
-
-        const HeaderIterator = struct {
-            use_gzip: bool,
-            count: u8 = 0,
-
-            pub fn next(self: *HeaderIterator) ?std.http.Header {
-                if (self.count == 0) {
-                    self.count += 1;
-                    return .{ .name = "Content-Type", .value = "application/json" };
-                }
-                if (self.count == 1 and self.use_gzip) {
-                    self.count += 1;
-                    return .{ .name = "Content-Encoding", .value = "gzip" };
-                }
-                return null;
-            }
-        };
-
-        pub fn iterateHeaders(self: *const MockHead) HeaderIterator {
-            return .{ .use_gzip = self.use_gzip };
-        }
-    };
-
-    const MockReader = struct {
-        body: []const u8,
-        done: bool = false,
-
-        pub fn streamRemaining(self: *MockReader, w: anytype) anyerror!usize {
-            if (self.done) return 0;
-            self.done = true;
-            try w.writeAll(self.body);
-            return self.body.len;
-        }
-    };
-
-    const MockResponse = struct {
-        head: MockHead,
-        mock_reader: MockReader,
-
-        pub fn deinit(_: *MockResponse) void {}
-        pub fn sendBodiless(_: *MockResponse) !void {}
-        pub fn sendBodyComplete(_: *MockResponse, _: []u8) !void {}
-
-        pub fn reader(self: *MockResponse, _: []u8) *MockReader {
-            return &self.mock_reader;
-        }
-        pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
-            return self;
-        }
-    };
-
-    // Configuration — set before each call to openQAReq.
-    fail_attempts: u8 = 0,
-    response_status: std.http.Status = .ok,
-    response_gzip: bool = false,
-    response_body: []const u8 = "{}",
-
-    // Internal state — reset by each call to request().
-    attempt: u8 = 0,
-    response: MockResponse = undefined,
-
-    pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
-        if (self.attempt < self.fail_attempts) {
-            self.attempt += 1;
-            return error.ConnectionRefused;
-        }
-        self.attempt += 1;
-        self.response = .{
-            .head = .{
-                .status = self.response_status,
-                .use_gzip = self.response_gzip,
-            },
-            .mock_reader = .{ .body = self.response_body },
-        };
-        return &self.response;
-    }
-};
+const ProgrammableMockClient = mock_client.ProgrammableMockClient;
 
 // ---------------------------------------------------------------------------
 // zig_fuzz_init — called once per AFL++ worker process
 // ---------------------------------------------------------------------------
 
-pub export fn zig_fuzz_init() void {
-    // Make retry sleeps instant so AFL++ isn't slowed by backoff delays.
-    _ = setenv("OPENQA_CLI_RETRY_SLEEP_TIME_S", "0", 1);
-}
+pub export fn zig_fuzz_init() void {}
 
 // ---------------------------------------------------------------------------
 // zig_fuzz_test — called in a tight loop by AFL++ persistent mode
@@ -195,7 +115,14 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     // Section 3: response control
     const s3_end = std.mem.indexOf(u8, rest2, sep) orelse rest2.len;
     const section3 = rest2[0..s3_end];
-    const section4 = if (s3_end + sep.len <= rest2.len) rest2[s3_end + sep.len ..] else "";
+    const rest3 = if (s3_end + sep.len <= rest2.len) rest2[s3_end + sep.len ..] else "";
+
+    // Section 4: optional gzip bytes
+    const s4_end = std.mem.indexOf(u8, rest3, sep) orelse rest3.len;
+    const section4 = rest3[0..s4_end];
+
+    // Section 5: optional Link header value
+    const section5 = if (s4_end + sep.len <= rest3.len) rest3[s4_end + sep.len ..] else "";
 
     // ------------------------------------------------------------------
     // Decode section 1: api_key / api_secret / path_query
@@ -236,6 +163,10 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     const ctrl: u8 = if (section3.len > 0) section3[0] else 0;
     const fail_attempts: u8 = ctrl & 0x03;
     const use_gzip: bool = (ctrl & 0x04) != 0;
+    const emit_link: bool = (ctrl & 0x08) != 0;
+    const use_structured_ct: bool = (ctrl & 0x10) == 0; // bit CLEAR = use structured
+    const inject_read_failed: bool = (ctrl & 0x20) != 0;
+    const include_accept: bool = (ctrl & 0x40) != 0;
 
     var status_code: u16 = 200;
     if (section3.len >= 3) {
@@ -261,7 +192,14 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         .response_status = http_status,
         .response_gzip = use_gzip,
         .response_body = response_body,
+        .link_header = if (emit_link and section5.len > 0) section5 else null,
+        .use_structured_ct = use_structured_ct,
+        .inject_read_failed = inject_read_failed,
     };
+
+    // Build extra_headers: optionally include Accept to exercise Gap 7.
+    const accept_hdr: [1]std.http.Header = .{.{ .name = "Accept", .value = "text/plain" }};
+    const extra_headers: []const std.http.Header = if (include_accept) &accept_hdr else &.{};
 
     const resp = zoqa.openQAReq(
         "http://localhost",
@@ -271,9 +209,15 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
             .method = method,
             .params = params,
             .credentials = creds,
+            .headers = extra_headers,
             // Up to 3 retries — matches fail_attempts range (0–3).
             .retries = 3,
             .quiet = true,
+            // Skip the production 3-second backoff between retry attempts so
+            // AFL persistent-mode iterations stay in the microsecond range.
+            // Must be set on the struct directly: env vars are only read by
+            // main.zig's CLI parser, never by the library code.
+            .retry_sleep_s = 0,
         },
         &mock,
     ) catch return;

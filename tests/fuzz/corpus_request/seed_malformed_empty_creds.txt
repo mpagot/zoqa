@@ -1,0 +1,6 @@
+zoqa
+api
+--apikey=
+--apisecret=
+--host=openqa.opensuse.org
+jobs

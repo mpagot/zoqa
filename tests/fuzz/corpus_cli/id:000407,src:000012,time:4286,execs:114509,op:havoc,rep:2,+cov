@@ -1,9 +1,0 @@
-zoqa
---host
-http://localhost
---form
---data
-{
-machine":"64bit","flavor":"DVD","distri":"opensuse"}
-api
-job†
