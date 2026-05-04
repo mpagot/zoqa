@@ -21,6 +21,10 @@ pub const ScheduleOptions = struct {
     poll_interval: u64 = 1,
     /// User-Agent header value.
     name: []const u8 = "openQAclient",
+    /// Optional output writer. When null (default), runSchedule writes to
+    /// real stdout. Fuzz harnesses pass a no-op writer to eliminate I/O
+    /// non-determinism (AFL++ pipe buffer state varies between runs).
+    output_writer: ?*std.Io.Writer = null,
 };
 
 // runSchedule — library entry point for the schedule subcommand
@@ -59,7 +63,7 @@ pub fn runSchedule(
 ) !u8 {
     var stdout_buf: [4096]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-    const stdout = &stdout_writer.interface;
+    const stdout = options.output_writer orelse &stdout_writer.interface;
 
     // POST /api/v1/isos
     const resp = http_client.openQAReq(host, "isos", .{

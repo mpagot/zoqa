@@ -32,11 +32,23 @@
 //                      before succeeding (0–3). Exercises the retry loop.
 //     bit 2 (0x04):    use_gzip — if set, mock returns Content-Encoding: gzip
 //                      header and the section 4 bytes as body.
+//     bit 3 (0x08):    emit_link_header — if set, mock emits a Link header
+//                      whose value is section 5 content (Gap 9).
+//     bit 4 (0x10):    use_structured_ct — if CLEAR, the mock's head.content_type
+//                      is set to null, exercising the structured-field fallback
+//                      path in http_client.zig (Gap 11).
+//     bit 5 (0x20):    inject_read_failed — if set, streamRemaining returns
+//                      error.ReadFailed on first call (Gap 10).
+//     bit 6 (0x40):    include_accept_header — if set, an Accept header is
+//                      added to extra_headers, exercising the "Accept already
+//                      present" check in buildHeaders (Gap 7).
 //
 //   status_hi, status_lo: u16 HTTP status code (big-endian). If both are 0,
 //   defaults to 200. Values outside 100–599 are clamped to 200.
 //
-// If fewer than 4 sections are present, missing sections use safe defaults
+//   Section 5 (optional): Link header value (only used when ctrl bit 3 is set).
+//
+// If fewer than 5 sections are present, missing sections use safe defaults
 // (empty strings, zero bytes).
 //
 // ---------------------------------------------------------------------------
@@ -103,7 +115,14 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     // Section 3: response control
     const s3_end = std.mem.indexOf(u8, rest2, sep) orelse rest2.len;
     const section3 = rest2[0..s3_end];
-    const section4 = if (s3_end + sep.len <= rest2.len) rest2[s3_end + sep.len ..] else "";
+    const rest3 = if (s3_end + sep.len <= rest2.len) rest2[s3_end + sep.len ..] else "";
+
+    // Section 4: optional gzip bytes
+    const s4_end = std.mem.indexOf(u8, rest3, sep) orelse rest3.len;
+    const section4 = rest3[0..s4_end];
+
+    // Section 5: optional Link header value
+    const section5 = if (s4_end + sep.len <= rest3.len) rest3[s4_end + sep.len ..] else "";
 
     // ------------------------------------------------------------------
     // Decode section 1: api_key / api_secret / path_query
@@ -144,6 +163,10 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     const ctrl: u8 = if (section3.len > 0) section3[0] else 0;
     const fail_attempts: u8 = ctrl & 0x03;
     const use_gzip: bool = (ctrl & 0x04) != 0;
+    const emit_link: bool = (ctrl & 0x08) != 0;
+    const use_structured_ct: bool = (ctrl & 0x10) == 0; // bit CLEAR = use structured
+    const inject_read_failed: bool = (ctrl & 0x20) != 0;
+    const include_accept: bool = (ctrl & 0x40) != 0;
 
     var status_code: u16 = 200;
     if (section3.len >= 3) {
@@ -169,7 +192,14 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         .response_status = http_status,
         .response_gzip = use_gzip,
         .response_body = response_body,
+        .link_header = if (emit_link and section5.len > 0) section5 else null,
+        .use_structured_ct = use_structured_ct,
+        .inject_read_failed = inject_read_failed,
     };
+
+    // Build extra_headers: optionally include Accept to exercise Gap 7.
+    const accept_hdr: [1]std.http.Header = .{.{ .name = "Accept", .value = "text/plain" }};
+    const extra_headers: []const std.http.Header = if (include_accept) &accept_hdr else &.{};
 
     const resp = zoqa.openQAReq(
         "http://localhost",
@@ -179,6 +209,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
             .method = method,
             .params = params,
             .credentials = creds,
+            .headers = extra_headers,
             // Up to 3 retries — matches fail_attempts range (0–3).
             .retries = 3,
             .quiet = true,

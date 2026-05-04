@@ -1,0 +1,6 @@
+zoqa
+api
+--json
+--verbose
+--osd
+jobs/1

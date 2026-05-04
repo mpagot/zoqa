@@ -69,6 +69,12 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         .response_body = input,
     };
 
+    // Use a null writer to avoid non-deterministic I/O from real stdout.
+    // Writing to AFL++'s pipe causes variable edge coverage depending on
+    // kernel pipe buffer state — the root cause of the 83.91% stability.
+    var null_buf: [4096]u8 = undefined;
+    var null_writer: std.Io.Writer = .fixed(&null_buf);
+
     _ = zoqa.runSchedule(
         arena,
         &mock,
@@ -79,6 +85,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
             .retries = 0,
             .retry_sleep_s = 0,
             .monitor_jobs = false,
+            .output_writer = &null_writer,
         },
     ) catch return;
 }

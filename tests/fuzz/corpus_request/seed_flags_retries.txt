@@ -1,0 +1,7 @@
+zoqa
+api
+--host
+openqa.opensuse.org
+--retries
+5
+jobs

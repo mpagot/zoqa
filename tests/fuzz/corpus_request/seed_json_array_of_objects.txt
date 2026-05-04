@@ -1,0 +1,7 @@
+zoqa
+api
+--form
+---DATAFILECONTENT---
+{"items":[{"id":1,"name":"test"},{"id":2,"name":"other"}],"total":2}
+---DATAFILECONTENTEND---
+isos

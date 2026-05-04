@@ -1,0 +1,7 @@
+zoqa
+api
+--form
+---DATAFILECONTENT---
+{"nested":{"key":"val"},"arr":[1,true,null],"bool":false}
+---DATAFILECONTENTEND---
+isos

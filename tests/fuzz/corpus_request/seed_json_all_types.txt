@@ -1,0 +1,7 @@
+zoqa
+api
+--form
+---DATAFILECONTENT---
+{"a":null,"b":true,"c":false,"d":42,"e":"str","f":[1,2,3]}
+---DATAFILECONTENTEND---
+isos
