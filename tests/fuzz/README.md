@@ -9,8 +9,8 @@ in Persistent Mode with LLVM instrumentation.
 |---|---|---|---|---|
 | `zoqa-fuzz-config` | `fuzz_config.zig` | `corpus_config/` | `config.dict` | INI parser + `resolveHost` all 7 branches (`src/config.zig`) |
 | `zoqa-fuzz-request` | `fuzz_request.zig` | `corpus_request/` | `cli.dict` | CLI args + `buildRequest` + `parseLinkHeader` + JSON (`src/main.zig`, `src/http_client.zig`) |
-| `zoqa-fuzz-execute` | `fuzz_execute.zig` | `corpus_execute/` | — | Full pipeline: auth + retry + gzip + `openQAReq` (`src/http_client.zig`, `src/auth.zig`) |
-| `zoqa-fuzz-schedule` | `fuzz_schedule.zig` | `corpus_schedule/` *(TODO)* | — | **Stub** — sync path of `runSchedule` + `extractJobIds` + `checkFailedEntries` (`src/schedule.zig`). Corpus and async/monitor coverage land in a follow-up. |
+| `zoqa-fuzz-execute` | `fuzz_execute.zig` | `corpus_execute/` | — | Full pipeline: auth + retry + gzip + `openQAReq` (`src/http_client.zig`, `src/auth.zig`). Input uses 5 sections: credentials/path, method/params, ctrl-byte/status/body, optional gzip bytes, optional Link header value. ctrl-byte bits 0–6 control fail_attempts, gzip, Link header, structured content_type fallback, ReadFailed injection, and Accept-header pre-presence. |
+| `zoqa-fuzz-schedule` | `fuzz_schedule.zig` | `corpus_schedule/` | — | **Stub** — sync path of `runSchedule` + `extractJobIds` + `checkFailedEntries` (`src/schedule.zig`). Uses a null `output_writer` to eliminate I/O non-determinism (AFL++ pipe-buffer stability fix, commit `c7a6bc1`). Async path + `runMonitor` integration remain follow-up work. |
 
 ## Setup
 
