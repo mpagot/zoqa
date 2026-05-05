@@ -1,8 +1,0 @@
-ztp://openqa.example.com
---
-{"jobs":[{"id":e
-VERShttp://openqa.example com/api/v1/jobs?offset=10>; rel=#next"
----LINKHEADEREND---
----JSON---
-{"jobs":[{"id":1,"state":"ru-qnning"},{"id":2,"state":"done"}]}
----JSONEND---

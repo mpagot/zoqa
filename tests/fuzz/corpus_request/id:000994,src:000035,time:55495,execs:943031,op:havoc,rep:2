@@ -1,0 +1,7 @@
+zoqa
+api
+--help
+---JSON---
+{"id":1,"assets":{"iro":["SLE-15.iso"]},"settings":{"DISTRI":"sle","VERSION":"15"}}
+---JSONEND---
+--quiet

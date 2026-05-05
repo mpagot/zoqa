@@ -1,4 +1,0 @@
-zoqa
-api
-https://openqa.opensuse.org/api/v1/jobs
-state=running

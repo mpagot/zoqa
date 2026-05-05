@@ -1,9 +1,0 @@
-zoq
-jobs
-DIST­I=sle)VERSION=15
----LINKHEADER---
-</api/v1/jobs?offset=10>; rel="next"
--.-LINKHEADEREND---
----JSON---
-{"jobs":[{"id":1,"state":"\nning"},{"r\ffset=10r\ffset=10>; relstate":"\nning"},{"r\f>; relstate":"\nning"},{"r\fa-qte":"done"}]}
----JSONEND---

@@ -1,6 +1,0 @@
-zoqa
-api
-jobs
----JSON---
-{"id":1,"state":"running","name":"foo","resul\\\\\\t":"passed"}
----JSONEND---

@@ -1,4 +1,0 @@
-zoqa
-api
---host=
-jobs

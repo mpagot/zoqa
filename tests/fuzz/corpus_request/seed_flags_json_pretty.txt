@@ -1,5 +1,0 @@
-zoqa
-api
---json
---pretty
-jobs/1

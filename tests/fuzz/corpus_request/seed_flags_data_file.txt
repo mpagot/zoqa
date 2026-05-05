@@ -1,9 +1,0 @@
-zoqa
-api
---data-file
----DATAFILECONTENT---
-{"DISTRI":"opensuse","VERSION":"15.6","FLAVOR":"DVD","ARCH":"x86_64"}
----DATAFILECONTENTEND---
---host
-openqa.opensuse.org
-isos

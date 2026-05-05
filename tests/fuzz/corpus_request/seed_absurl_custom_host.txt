@@ -1,3 +1,0 @@
-zoqa
-api
-https://custom.host/custom/path
