@@ -1,6 +1,0 @@
-zoqa
-api
-isos
----JSON---
-{"jobs":[{"id":1,"state":"running","result":"none"},{"id":2,"state":"done","result":"passed"}],"meta":{"limit":50,"offset":0}}
----JSONEND---

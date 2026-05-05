@@ -1,3 +1,0 @@
-zoqa
-api
-https://openqa.opensuse.org/api/v1/jobs?limit=5
