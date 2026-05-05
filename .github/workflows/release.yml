@@ -20,14 +20,35 @@ env:
   PROJECT_NAME: zoqa
 
 jobs:
-  # ── Guard: skip tags that already have a GitHub Release ──────────────
+  # ── Pre-flight checks ────────────────────────────────────────────────
+  # Two gates before the build matrix runs:
+  #   1. The version declared in build.zig.zon must match the pushed tag.
+  #      Catches the v0.3.0-class mistake where the manifest is forgotten.
+  #   2. A GitHub Release must not already exist for this tag (idempotent
+  #      re-tag protection).
   check:
-    name: Check for existing release
+    name: Pre-flight checks
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify build.zig.zon version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          ZON_VERSION=$(grep -oP '^\s*\.version\s*=\s*"\K[^"]+' build.zig.zon | head -1)
+          if [[ -z "$ZON_VERSION" ]]; then
+            echo "::error::Could not extract .version from build.zig.zon"
+            exit 1
+          fi
+          if [[ "$TAG_VERSION" != "$ZON_VERSION" ]]; then
+            echo "::error::Tag is $GITHUB_REF_NAME but build.zig.zon declares version \"$ZON_VERSION\". Bump build.zig.zon to \"$TAG_VERSION\" before tagging."
+            exit 1
+          fi
+          echo "OK: build.zig.zon version $ZON_VERSION matches tag $GITHUB_REF_NAME"
+
       - name: Check if release already exists
         id: check
         env:

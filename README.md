@@ -4,6 +4,8 @@
 
 <h1 align="center">zoqa</h1>
 
+<p align="center"><code>alias openqa-cli=zoqa</code></p>
+
 <p align="center">
   A fast, statically linked reimplementation of
   <a href="https://github.com/os-autoinst/openQA"><code>openqa-cli</code></a>
@@ -13,8 +15,11 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--2.0-blue.svg" alt="License: GPL-2.0" /></a>
   <a href="https://ziglang.org/"><img src="https://img.shields.io/badge/zig-0.15.2-F7A41D.svg?logo=zig&logoColor=white" alt="Zig 0.15.2" /></a>
+  <a href="https://github.com/mpagot/zoqa/actions/workflows/ci.yml"><img src="https://github.com/mpagot/zoqa/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/mpagot/zoqa/actions/workflows/release.yml"><img src="https://github.com/mpagot/zoqa/actions/workflows/release.yml/badge.svg" alt="Release workflow" /></a>
   <a href="https://github.com/mpagot/zoqa/releases"><img src="https://img.shields.io/github/v/release/mpagot/zoqa?include_prereleases&label=latest" alt="Latest release" /></a>
+  <img src="https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-lightgrey.svg" alt="Platforms: Linux, macOS, Windows" />
+  <img src="https://img.shields.io/badge/runtime%20deps-none-success.svg" alt="No runtime dependencies" />
 </p>
 
 ---
@@ -87,57 +92,16 @@ No runtime dependencies. One binary, copy it anywhere.
 
 ## Usage
 
-zoqa mirrors the `openqa-cli api` interface:
+Run `openqa-cli --help` — sorry, force of habit, I meant `zoqa --help`. They're
+the same. I keep telling you.
+
+The full guide — every subcommand, every flag, the auth file format, host
+aliases — lives in **[docs/Usage.md](docs/Usage.md)**. Or just:
 
 ```sh
-# List recent jobs
-zoqa api --host openqa.opensuse.org /api/v1/jobs
-
-# GET with query parameters
-zoqa api --o3 /api/v1/jobs groupid=1 limit=5
-
-# POST with form data
-zoqa api --host localhost -X POST /api/v1/jobs DISTRI=opensuse VERSION=Tumbleweed
-
-# PUT with JSON body
-zoqa api --host localhost -X PUT -j -d '{"priority":50}' /api/v1/jobs/12345
-
-# Pretty-print the JSON response
-zoqa api --o3 -p /api/v1/jobs/1
-
-# Verbose output (shows status line and response headers)
-zoqa api --o3 -v /api/v1/jobs/1
-
-# Retry on transient errors (502/503)
-zoqa api --osd -r 3 /api/v1/jobs
+zoqa --help
+zoqa <subcommand> --help   # api | archive | monitor | schedule
 ```
-
-### Authentication
-
-zoqa reads API credentials from `~/.config/openqa/client.conf` — the same INI file
-used by `openqa-cli`:
-
-```ini
-[openqa.opensuse.org]
-key = YOUR_API_KEY
-secret = YOUR_API_SECRET
-```
-
-You can also pass credentials directly:
-
-```sh
-zoqa api --host openqa.opensuse.org --apikey KEY --apisecret SECRET /api/v1/jobs
-```
-
-Priority order: CLI flags > environment variables > config file.
-
-### Host aliases
-
-| Flag | Resolves to |
-|---|---|
-| `--o3` | `https://openqa.opensuse.org` |
-| `--osd` | `http://openqa.suse.de` |
-| `--odn` | `https://openqa.debian.net` |
 
 
 ## Building from source
@@ -155,12 +119,13 @@ The binary is at `zig-out/bin/zoqa`.
 
 ## Project status
 
-zoqa is in active development. The `api` and `archive` subcommands are fully implemented,
-with a comprehensive suite of end-to-end tests passing against a containerized openQA instance.
+zoqa is in active development. All four `openqa-cli` subcommands — `api`,
+`archive`, `monitor`, and `schedule` — are fully implemented, with a
+comprehensive suite of end-to-end tests passing against a containerized openQA
+instance.
 
-The remaining `openqa-cli` subcommands (`monitor`, `schedule`) and the
-companion scripts (`openqa-clone-job`, `openqa-clone-custom-git-refspec`) are
-planned.
+The standalone companion scripts (`openqa-clone-job`,
+`openqa-clone-custom-git-refspec`) are still planned.
 
 
 ## Contributing
@@ -180,14 +145,18 @@ make e2e-lint                  # lint the E2E test scripts
 
 ## Architecture
 
-zoqa is structured as five focused modules:
+zoqa is structured as a set of focused modules, one per subcommand plus
+shared infrastructure:
 
 | Module | Purpose |
 |---|---|
-| `src/main.zig` | CLI entry point, argument parsing, request dispatching |
+| `src/main.zig` | CLI entry point, argument parsing, subcommand dispatching |
 | `src/config.zig` | INI config parser, credential and host resolution |
 | `src/auth.zig` | HMAC-SHA1 authentication header generation |
 | `src/http_client.zig` | HTTP client wrapper with retry logic |
+| `src/archive.zig` | `archive` subcommand: stream a job's assets and test results to disk |
+| `src/monitor.zig` | `monitor` subcommand: poll until specified jobs reach a final state |
+| `src/schedule.zig` | `schedule` subcommand: POST `/api/v1/isos` to start jobs |
 | `src/root.zig` | Library root, re-exports core modules and C-ABI functions |
 
 The project also ships as a static library (`libzoqa.a`) for embedding in other
