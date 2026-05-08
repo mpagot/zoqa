@@ -1,5 +1,6 @@
 const std = @import("std");
 const zoqa = @import("zoqa");
+const arg_match = @import("arg_match");
 const config = zoqa.config;
 
 // ---------------------------------------------------------------------------
@@ -114,122 +115,54 @@ pub const Args = struct {
 /// Returns true when `token` — a single item from the command line —
 /// matches either `long` (e.g. `"--verbose"`) or, if provided, `short`
 /// (e.g. `"-v"`).  Pass `null` for `short` when no alias exists.
-fn matchBool(token: []const u8, long: []const u8, short: ?[]const u8) bool {
-    if (std.mem.eql(u8, token, long)) return true;
-    if (short) |s| return std.mem.eql(u8, token, s);
-    return false;
-}
-
-/// Returns the value for a flag that takes an argument, handling both the space
-/// form (`--flag VALUE`) and the equals form (`--flag=VALUE`).
-/// Returns `null` when `token` does not match either form.
-///
-/// `token`  — the current argv token being tested.
-/// `i`      — current argv index (advanced by 1 when the space form matches).
-/// `argv`   — the full argv slice (used to fetch the next token for space form).
-/// `long`   — long-form flag name, e.g. `"--method"`.
-/// `short`  — short-form alias, e.g. `"-X"`, or `null` when none exists.
-///
-/// Errors:
-///   - `error.MissingValue` — space form was matched but no next token exists.
-fn matchValue(
-    token: []const u8,
-    i: *usize,
-    argv: []const []const u8,
-    long: []const u8,
-    short: ?[]const u8,
-) !?[]const u8 {
-    if (short) |s| {
-        if (std.mem.eql(u8, token, s)) {
-            i.* += 1;
-            if (i.* >= argv.len) return error.MissingValue;
-            return argv[i.*];
-        }
-    }
-    if (std.mem.eql(u8, token, long)) {
-        i.* += 1;
-        if (i.* >= argv.len) return error.MissingValue;
-        return argv[i.*];
-    }
-    // Equals form: token must start with "long=" and have at least one more byte.
-    if (token.len > long.len + 1 and
-        std.mem.startsWith(u8, token, long) and
-        token[long.len] == '=')
-    {
-        return token[long.len + 1 ..];
-    }
-    return null;
-}
-
 // ---------------------------------------------------------------------------
 // Scoped flag dispatchers — one function per scope
 // ---------------------------------------------------------------------------
 
-/// Try to match `token` against a global flag (accepted by all subcommands).
-/// Returns `true` when the flag was consumed, `false` if unmatched.
+/// Try to match `token` against a zoqa-only global flag (accepted by all
+/// subcommands but not shared with other executables like zoqa-clone-job).
+/// The five common flags (--host, --apikey, --apisecret, --verbose, --help)
+/// are handled by `arg_match.tryCommonFlag` in the parse loop.
 ///
-/// `args`  — mutable Args struct being populated.
-/// `token` — the current argv token being tested.
-/// `i`     — current argv index cursor (passed through to matchValue).
-/// `argv`  — full argv slice (passed through to matchValue).
-fn tryGlobalFlag(
+/// Returns `true` when the flag was consumed, `false` if unmatched.
+fn tryZoqaGlobalFlag(
     args: *Args,
     token: []const u8,
     i: *usize,
     argv: []const []const u8,
 ) !bool {
-    // Boolean global flags
-    if (matchBool(token, "--help", "-h")) {
-        args.help = true;
-        return true;
-    }
-    if (matchBool(token, "--osd", null)) {
+    // Boolean zoqa-only globals
+    if (arg_match.matchBool(token, "--osd", null)) {
         args.osd = true;
         return true;
     }
-    if (matchBool(token, "--o3", null)) {
+    if (arg_match.matchBool(token, "--o3", null)) {
         args.o3 = true;
         return true;
     }
-    if (matchBool(token, "--odn", null)) {
+    if (arg_match.matchBool(token, "--odn", null)) {
         args.odn = true;
         return true;
     }
-    if (matchBool(token, "--verbose", "-v")) {
-        args.verbose = true;
-        return true;
-    }
-    if (matchBool(token, "--quiet", "-q")) {
+    if (arg_match.matchBool(token, "--quiet", "-q")) {
         args.quiet = true;
         return true;
     }
-    if (matchBool(token, "--links", "-L")) {
+    if (arg_match.matchBool(token, "--links", "-L")) {
         args.links = true;
         return true;
     }
-    if (matchBool(token, "--pretty", "-p")) {
+    if (arg_match.matchBool(token, "--pretty", "-p")) {
         args.pretty = true;
         return true;
     }
 
-    // Value global flags
-    if (try matchValue(token, i, argv, "--host", null)) |v| {
-        args.host = v;
-        return true;
-    }
-    if (try matchValue(token, i, argv, "--apikey", null)) |v| {
-        args.apikey = v;
-        return true;
-    }
-    if (try matchValue(token, i, argv, "--apisecret", null)) |v| {
-        args.apisecret = v;
-        return true;
-    }
-    if (try matchValue(token, i, argv, "--name", null)) |v| {
+    // Value zoqa-only globals
+    if (try arg_match.matchValue(token, i, argv, "--name", null)) |v| {
         args.name = v;
         return true;
     }
-    if (try matchValue(token, i, argv, "--retries", "-r")) |v| {
+    if (try arg_match.matchValue(token, i, argv, "--retries", "-r")) |v| {
         args.retries = std.fmt.parseInt(u32, v, 10) catch return error.InvalidRetries;
         return true;
     }
@@ -254,33 +187,33 @@ fn tryApiFlag(
     argv: []const []const u8,
 ) !bool {
     // Boolean api flags
-    if (matchBool(token, "--form", "-f")) {
+    if (arg_match.matchBool(token, "--form", "-f")) {
         args.form = true;
         return true;
     }
-    if (matchBool(token, "--json", "-j")) {
+    if (arg_match.matchBool(token, "--json", "-j")) {
         args.json = true;
         return true;
     }
 
     // Value api flags
-    if (try matchValue(token, i, argv, "--method", "-X")) |v| {
+    if (try arg_match.matchValue(token, i, argv, "--method", "-X")) |v| {
         args.method = v;
         return true;
     }
-    if (try matchValue(token, i, argv, "--data", "-d")) |v| {
+    if (try arg_match.matchValue(token, i, argv, "--data", "-d")) |v| {
         args.data = v;
         return true;
     }
-    if (try matchValue(token, i, argv, "--data-file", "-D")) |v| {
+    if (try arg_match.matchValue(token, i, argv, "--data-file", "-D")) |v| {
         args.data_file = v;
         return true;
     }
-    if (try matchValue(token, i, argv, "--header", "-a")) |v| {
+    if (try arg_match.matchValue(token, i, argv, "--header", "-a")) |v| {
         try args.headers.append(allocator, v);
         return true;
     }
-    if (try matchValue(token, i, argv, "--param-file", null)) |v| {
+    if (try arg_match.matchValue(token, i, argv, "--param-file", null)) |v| {
         try args.param_files.append(allocator, v);
         return true;
     }
@@ -302,11 +235,11 @@ fn tryArchiveFlag(
     i: *usize,
     argv: []const []const u8,
 ) !bool {
-    if (matchBool(token, "--with-thumbnails", "-t")) {
+    if (arg_match.matchBool(token, "--with-thumbnails", "-t")) {
         args.with_thumbnails = true;
         return true;
     }
-    if (try matchValue(token, i, argv, "--asset-size-limit", "-l")) |v| {
+    if (try arg_match.matchValue(token, i, argv, "--asset-size-limit", "-l")) |v| {
         args.asset_size_limit = std.fmt.parseInt(u64, v, 10) catch
             return error.InvalidAssetSizeLimit;
         return true;
@@ -335,11 +268,11 @@ fn tryMonitorFlag(
     i: *usize,
     argv: []const []const u8,
 ) !bool {
-    if (matchBool(token, "--follow", "-f")) {
+    if (arg_match.matchBool(token, "--follow", "-f")) {
         args.follow = true;
         return true;
     }
-    if (try matchValue(token, i, argv, "--poll-interval", "-i")) |v| {
+    if (try arg_match.matchValue(token, i, argv, "--poll-interval", "-i")) |v| {
         args.poll_interval = std.fmt.parseInt(u64, v, 10) catch
             return error.InvalidPollInterval;
         return true;
@@ -376,20 +309,20 @@ fn tryScheduleFlag(
     i: *usize,
     argv: []const []const u8,
 ) !bool {
-    if (matchBool(token, "--monitor", "-m")) {
+    if (arg_match.matchBool(token, "--monitor", "-m")) {
         args.schedule_monitor = true;
         return true;
     }
-    if (matchBool(token, "--follow", "-f")) {
+    if (arg_match.matchBool(token, "--follow", "-f")) {
         args.follow = true;
         return true;
     }
-    if (try matchValue(token, i, argv, "--poll-interval", "-i")) |v| {
+    if (try arg_match.matchValue(token, i, argv, "--poll-interval", "-i")) |v| {
         args.poll_interval = std.fmt.parseInt(u64, v, 10) catch
             return error.InvalidPollInterval;
         return true;
     }
-    if (try matchValue(token, i, argv, "--param-file", null)) |v| {
+    if (try arg_match.matchValue(token, i, argv, "--param-file", null)) |v| {
         try args.param_files.append(allocator, v);
         return true;
     }
@@ -467,8 +400,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
             continue;
         }
 
-        // Global flags (accepted by all subcommands)
-        if (try tryGlobalFlag(&args, token, &i, argv)) continue;
+        // Global flags: common flags shared with all executables, then
+        // zoqa-only globals.
+        if (try arg_match.tryCommonFlag(Args, &args, token, &i, argv)) continue;
+        if (try tryZoqaGlobalFlag(&args, token, &i, argv)) continue;
 
         // Subcommand-specific flags
         // Safe: phase 1 ensures args.subcmd is non-null before parsing flags
@@ -754,7 +689,7 @@ test "parseArgs: api-specific flags rejected for archive" {
 
 // ---------------------------------------------------------------------------
 // Missing -L alias: upstream openqa-cli.yaml defines "links|L".  The
-// subcommand-dispatched parser includes -L in tryGlobalFlag via matchBool.
+// subcommand-dispatched parser includes -L in tryZoqaGlobalFlag via arg_match.matchBool.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: -L alias for --links" {
