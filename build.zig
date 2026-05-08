@@ -31,6 +31,21 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // Second executable: zoqa-clone-job (stub — see ROADMAP §5.1)
+    const clone_exe = b.addExecutable(.{
+        .name = "zoqa-clone-job",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/clone_job_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .imports = &.{
+                .{ .name = "zoqa", .module = lib_mod },
+            },
+        }),
+    });
+    b.installArtifact(clone_exe);
+
     // Run step
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
