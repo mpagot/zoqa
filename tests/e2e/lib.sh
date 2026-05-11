@@ -35,7 +35,15 @@
 # Test-side capture helpers:
 #   run_capture()        — run one command, capture stdout/stderr/exit
 #   run_perl_and_zig()   — run the same args against PERL_EXE and ZIG_EXE
+#   run_capture_both()   — like run_perl_and_zig but with explicit full commands
 #   run_sigpipe_test()   — run CMD | head -c 1, capture CMD's exit via PIPESTATUS
+#   assert_capture_exits() — check _PERL_EXIT/_ZIG_EXIT, PASS/FAIL
+#   assert_stdout_pattern() — check both impl stdout logs for a pattern, PASS/FAIL
+#
+# Test runner functions (the canonical home of these; tests.sh sources lib.sh):
+#   run_test()           — run one command, check exit + optional grep, PASS/FAIL
+#   run_comparison()     — run the same api args against PERL_EXE and ZIG_EXE
+#   run_diff_test()      — diff stdout of both impls, PASS/FAIL
 
 # Guard against double-sourcing
 [[ -n "${_OPENQA_E2E_LIB_LOADED:-}" ]] && return 0
@@ -604,4 +612,240 @@ run_sigpipe_test() {
 		2>"$LOG_DIR/${tag}_${impl}_stderr.log"
 	_LAST_EXIT=$?
 	set -e
+}
+
+# ---------------------------------------------------------------------------
+# run_capture_both TAG PERL_CMD ZIG_CMD
+#
+# Runs PERL_CMD and ZIG_CMD via run_capture (IMPL=perl, then IMPL=zig).
+# Stores exit codes in _PERL_EXIT and _ZIG_EXIT respectively.
+#
+# Analogous to run_perl_and_zig but accepts explicit full command strings
+# instead of building them from the global PERL_EXE/ZIG_EXE with shared args.
+# Use this when the two implementations differ in binary path or flag spelling.
+#
+# Usage:
+#   run_capture_both "clone12" \
+#       "$PERL_CLONE_EXE --within-instance http://localhost $JOB_ID" \
+#       "$ZIG_CLONE_EXE --within-instance http://localhost $JOB_ID"
+#   # exits now in _PERL_EXIT and _ZIG_EXIT
+# ---------------------------------------------------------------------------
+run_capture_both() {
+	local tag=$1
+	local perl_cmd=$2
+	local zig_cmd=$3
+	run_capture "$tag" perl "$perl_cmd"
+	_PERL_EXIT=$_LAST_EXIT
+	run_capture "$tag" zig "$zig_cmd"
+	_ZIG_EXIT=$_LAST_EXIT
+}
+
+# ---------------------------------------------------------------------------
+# assert_capture_exits TAG [EXPECTED_EXIT]
+#
+# Asserts that _PERL_EXIT and _ZIG_EXIT (set by run_capture_both, or set
+# manually after individual run_capture calls) both equal EXPECTED_EXIT
+# (default: 0).
+#
+# On failure: prints the failing impl's stderr log and increments failed_tests.
+# On success: prints "PASS".
+#
+# When the two captures are interleaved with waits (e.g. single-worker jobs),
+# set _PERL_EXIT and _ZIG_EXIT directly after each run_capture call and then
+# call this function once at the end.
+#
+# Usage:
+#   run_capture_both "clone12" "$PERL_CMD" "$ZIG_CMD"
+#   assert_capture_exits "clone12" 0
+# ---------------------------------------------------------------------------
+assert_capture_exits() {
+	local tag=$1
+	local expected_exit=${2:-0}
+	local pass=true
+	if [[ "$_PERL_EXIT" -ne "$expected_exit" ]]; then
+		echo "  FAIL: Perl exited $_PERL_EXIT (expected $expected_exit)"
+		cat "$LOG_DIR/${tag}_perl_stderr.log"
+		pass=false
+	fi
+	if [[ "$_ZIG_EXIT" -ne "$expected_exit" ]]; then
+		echo "  FAIL: Zig exited $_ZIG_EXIT (expected $expected_exit)"
+		cat "$LOG_DIR/${tag}_zig_stderr.log"
+		pass=false
+	fi
+	if [[ "$pass" == "true" ]]; then
+		echo "PASS"
+	else
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# assert_stdout_pattern TAG PATTERN
+#
+# Checks that the stdout log for both perl and zig (written by a prior
+# run_capture or run_capture_both call with the same TAG) match PATTERN via
+# grep -qE.  Prints "PASS" if both match; on failure, prints the failing
+# impl's stdout log and increments failed_tests.
+#
+# Usage:
+#   assert_stdout_pattern "clone12" "has been created"
+#   assert_stdout_pattern "clone12" 'http://localhost/tests/[0-9]+'
+# ---------------------------------------------------------------------------
+assert_stdout_pattern() {
+	local tag=$1
+	local pattern=$2
+	local pass=true
+	local _impl
+	for _impl in perl zig; do
+		if ! grep -qE "$pattern" "$LOG_DIR/${tag}_${_impl}_stdout.log" 2>/dev/null; then
+			echo "  FAIL: $_impl stdout missing pattern '$pattern'"
+			cat "$LOG_DIR/${tag}_${_impl}_stdout.log"
+			pass=false
+		fi
+	done
+	if [[ "$pass" == "true" ]]; then
+		echo "PASS"
+	else
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ===========================================================================
+# Test Runner Functions
+#
+# These were previously defined inline in tests.sh.  They live here so that
+# lib.sh is the single, authoritative home for all shared test helpers.
+# tests.sh sources lib.sh and then sources the per-domain suite files.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# run_test LABEL CMD [EXPECTED_EXIT [GREP_PATTERN]]
+#
+# Runs CMD inside the container, checks the exit code, and optionally greps
+# the combined stdout+stderr output for GREP_PATTERN.
+#
+# Parameters:
+#   LABEL         — human-readable test name printed in the --- Test: --- line
+#   CMD           — command string passed to container_exec (eval'd)
+#   EXPECTED_EXIT — expected exit code (default: 0)
+#   GREP_PATTERN  — optional grep pattern; FAIL if not found in output
+#
+# Side effects: increments failed_tests on failure.
+# ---------------------------------------------------------------------------
+run_test() {
+	local label=$1
+	local cmd=$2
+	local expected_exit=${3:-0}
+	local grep_pattern=$4
+
+	echo "--- Test: $label ---"
+	echo "Command: $cmd"
+
+	set +e
+	eval "container_exec $cmd" >"$LOG_DIR/test_output.log" 2>&1
+	local exit_code=$?
+	set -e
+
+	echo "Exit code: $exit_code"
+
+	if [[ "$exit_code" -ne "$expected_exit" ]]; then
+		echo "FAIL: Expected exit code $expected_exit, got $exit_code"
+		cat "$LOG_DIR/test_output.log"
+		failed_tests=$((failed_tests + 1))
+		return
+	fi
+
+	if [[ -n "$grep_pattern" ]]; then
+		if ! grep -q "$grep_pattern" "$LOG_DIR/test_output.log"; then
+			echo "FAIL: Output did not match pattern '$grep_pattern'"
+			cat "$LOG_DIR/test_output.log"
+			failed_tests=$((failed_tests + 1))
+			return
+		fi
+	fi
+
+	echo "PASS"
+}
+
+# ---------------------------------------------------------------------------
+# run_comparison LABEL ENV_VARS API_ARGS [EXPECTED_EXIT [GREP_PATTERN]]
+#
+# Runs the same API call against both the Perl reference implementation and
+# the Zig implementation, checking each one independently.  A test PASSES
+# when both implementations satisfy the exit-code and grep-pattern criteria;
+# each can fail independently, producing a separate FAIL line.
+#
+# This is the right helper when you care about whether each implementation
+# behaves correctly in isolation (correct exit code, correct output pattern),
+# but do NOT require the two outputs to be identical.  Use run_diff_test when
+# you want to assert byte-for-byte output parity (modulo trailing newlines).
+#
+# Parameters:
+#   LABEL         — human-readable test name (prefixed with PERL:/ZIG: automatically)
+#   ENV_VARS      — space-separated env-var assignments prepended to the command
+#                   (e.g. "OPENQA_CONFIG=/tmp"); pass "" for none
+#   API_ARGS      — arguments passed after `api --host http://localhost`
+#   EXPECTED_EXIT — expected exit code for both impls (default: 0)
+#   GREP_PATTERN  — optional grep pattern checked against combined stdout+stderr
+#
+# Side effects: increments failed_tests once per implementation that fails.
+# ---------------------------------------------------------------------------
+run_comparison() {
+	local label=$1
+	local env_vars=$2
+	local api_args=$3
+	local expected_exit=${4:-0}
+	local grep_pattern=$5
+
+	run_test "PERL: $label" \
+		"bash -c \"$env_vars $PERL_EXE api --host http://localhost $api_args\"" \
+		"$expected_exit" "$grep_pattern"
+	run_test "ZIG : $label" \
+		"bash -c \"$env_vars $ZIG_EXE api --host http://localhost $api_args\"" \
+		"$expected_exit" "$grep_pattern"
+}
+
+# ---------------------------------------------------------------------------
+# run_diff_test LABEL API_ARGS
+#
+# Runs the same API call against both implementations and asserts that their
+# stdout output is identical (after trailing-newline normalisation).  stderr is
+# discarded from both sides to avoid noise from ANSI colour codes, Mojo
+# warnings, and the BoltDB deprecation warning emitted by podman on some hosts.
+#
+# Use this helper when you want to detect regressions in the Zig output format
+# relative to the Perl reference — i.e., "both must produce the same body".
+# For exit-code or pattern checks use run_comparison instead.
+#
+# Parameters:
+#   LABEL    — human-readable test name printed in the --- Test: DIFF --- line
+#   API_ARGS — arguments passed after `api --host http://localhost`
+#
+# Side effects: increments failed_tests on mismatch.
+# ---------------------------------------------------------------------------
+run_diff_test() {
+	local label=$1
+	local api_args=$2
+
+	echo "--- Test: DIFF $label ---"
+
+	set +e
+	container_exec bash -c "$PERL_EXE api --host http://localhost $api_args" \
+		>"$LOG_DIR/test_output_perl.log" 2>/dev/null
+	container_exec bash -c "$ZIG_EXE api --host http://localhost $api_args" \
+		>"$LOG_DIR/test_output_zig.log" 2>/dev/null
+	set -e
+
+	# Normalise: strip all trailing newlines then add exactly one.
+	{ printf '%s\n' "$(cat "$LOG_DIR/test_output_perl.log")"; } >"$LOG_DIR/test_output_perl_norm.log"
+	{ printf '%s\n' "$(cat "$LOG_DIR/test_output_zig.log")"; } >"$LOG_DIR/test_output_zig_norm.log"
+
+	if diff -u "$LOG_DIR/test_output_perl_norm.log" "$LOG_DIR/test_output_zig_norm.log" \
+		>"$LOG_DIR/test_output_diff.log" 2>&1; then
+		echo "PASS (outputs identical)"
+	else
+		echo "FAIL: Perl and Zig outputs differ:"
+		cat "$LOG_DIR/test_output_diff.log"
+		failed_tests=$((failed_tests + 1))
+	fi
 }
