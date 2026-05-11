@@ -110,14 +110,15 @@ TEARDOWN_ARGS=()
 # -----------------------------------------------------------------------------
 # Preflight Check
 # -----------------------------------------------------------------------------
-# shellcheck disable=SC2043
-for _bin in "zig-out/bin/zoqa" ; do
-	if [[ ! -f "$_bin" ]]; then
-		echo "Error: $_bin not found. Please run 'zig build' first." >&2
-		exit 1
-	fi
-done
-unset _bin
+if [[ "$DRY_RUN" == "false" ]]; then
+	for _bin in "zig-out/bin/zoqa" "zig-out/bin/zoqa-clone-job"; do
+		if [[ ! -f "$_bin" ]]; then
+			echo "Error: $_bin not found. Please run 'zig build' first." >&2
+			exit 1
+		fi
+	done
+	unset _bin
+fi
 
 # _print_bin_info LABEL PATH
 #
@@ -158,6 +159,7 @@ _print_bin_info() {
 }
 
 _print_bin_info "zoqa          " "zig-out/bin/zoqa"
+_print_bin_info "zoqa-clone-job" "zig-out/bin/zoqa-clone-job"
 unset -f _print_bin_info
 
 # Podman sanity check — verify podman is usable before spending time on the
