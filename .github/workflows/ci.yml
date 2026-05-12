@@ -60,8 +60,18 @@ jobs:
         with:
           # Reads minimum_zig_version from build.zig.zon automatically.
           cache-size-limit: 2048
+      # `zig build` is called directly instead of `make zig-build-debug` for
+      # two reasons:
+      #   1. `make` is not pre-installed on the windows-latest runner, and
+      #      installing it (e.g. via Chocolatey) would add overhead and a
+      #      dependency for a single-command wrapper.
+      #   2. `--summary all` is intentionally absent from the Makefile target
+      #      to keep incremental local rebuilds quiet (the flag prints every
+      #      step even on cache hits). In CI the cache is always cold, so the
+      #      flag is added here where it matters.
       - name: Build
         run: zig build --summary all
+      # Same rationale as above applies to `zig build test` vs `make zig-test`.
       - name: Test
         run: zig build test --summary all
 

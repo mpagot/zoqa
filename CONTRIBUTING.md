@@ -39,12 +39,13 @@ make help  # print this table
 
 | Target | Description |
 |---|---|
-| `build` | Build the zoqa executable and static library. |
-| `release` | Build with release optimizations (`ReleaseFast`). |
+| `zig-build-debug` | Build the zoqa executable and static library (debug). |
+| `zig-release` | Build with release optimizations and strip symbols. |
 | `test` | Run all Zig unit tests. |
 | `e2e` | Run the full E2E suite (starts + tears down container). |
 | `e2e-keep` | Run E2E keeping the container alive (`--keep-container`). |
 | `e2e-lint` | Bash `-n` syntax check and shellcheck on all E2E scripts. |
+| `docstring-lint` | Check `///` docstring completeness for fn declarations in src/. |
 | `fuzz-build` | Build the instrumented AFL++ fuzz binaries. |
 
 ### Testing

@@ -6,15 +6,15 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help build release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint fuzz-lint lint fuzz-build
+.PHONY: help zig-build-debug zig-release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint fuzz-lint docstring-lint lint fuzz-build
 
 # Default target
 help:
 	@echo "Usage: make <target>"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build       Build the zoqa executable and static library."
-	@echo "  release     Build with release optimizations."
+	@echo "  zig-build-debug  Build the zoqa executable and static library (debug)."
+	@echo "  zig-release      Build with release optimizations and strip symbols."
 	@echo "  zig-test    Run all Zig unit tests."
 	@echo "  zig-test-discovery  Verify every \`test\` block in src/ is actually run."
 	@echo "                      Catches Zig issue #10018 (lazy-analysis silently"
@@ -31,16 +31,18 @@ help:
 	@echo "  manual-lint     Run bash -n and shellcheck on manual test scripts."
 	@echo "  fuzz-lint       Run bash -n and shellcheck on tests/fuzz/ scripts."
 	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint, fuzz-lint)."
+	@echo "  docstring-lint  Check /// docstring completeness for fn declarations in src/."
+	@echo "                  Optional: PUB_ONLY=1  — only check pub fn and export fn."
 	@echo "  fuzz-build  Build the fuzzy app."
 
 # -----------------------------------------------------------------------------
 # Build
 # -----------------------------------------------------------------------------
-build:
+zig-build-debug:
 	zig build
 
-release:
-	zig build -Doptimize=ReleaseFast
+zig-release:
+	zig build -Doptimize=ReleaseFast -Dstrip=true
 
 # -----------------------------------------------------------------------------
 # Fuzz
@@ -166,6 +168,21 @@ zig-lint:
 	@echo "==> zig fmt --check src/"
 	@zig fmt --check src/
 	@echo "==> zig-lint passed"
+
+# -----------------------------------------------------------------------------
+# Docstring completeness check
+# -----------------------------------------------------------------------------
+# Check that every fn declaration in src/*.zig has a complete /// doc comment
+# (summary, Arguments:, Returns:, Errors: as appropriate).
+# Optional: pass PUB_ONLY=1 to restrict the check to pub fn / export fn only.
+#   make docstring-lint
+#   make docstring-lint PUB_ONLY=1
+DOCSTRING_FLAGS := $(if $(PUB_ONLY),--pub-only,)
+
+docstring-lint:
+	@echo "==> docstring completeness check"
+	@python3 tools/check_docstrings.py $(DOCSTRING_FLAGS) .
+	@echo "==> docstring-lint passed"
 
 # -----------------------------------------------------------------------------
 # Aggregate lint target
