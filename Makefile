@@ -218,6 +218,29 @@ fuzz-lint:
 	@echo "==> fuzz-lint passed"
 
 # -----------------------------------------------------------------------------
+# Linting — Zig source formatting check
+# -----------------------------------------------------------------------------
+zig-lint:
+	@echo "==> zig fmt --check src/"
+	@zig fmt --check src/
+	@echo "==> zig-lint passed"
+
+# -----------------------------------------------------------------------------
+# Docstring completeness check
+# -----------------------------------------------------------------------------
+# Check that every fn declaration in src/*.zig has a complete /// doc comment
+# (summary, Arguments:, Returns:, Errors: as appropriate).
+# Optional: pass PUB_ONLY=1 to restrict the check to pub fn / export fn only.
+#   make docstring-lint
+#   make docstring-lint PUB_ONLY=1
+DOCSTRING_FLAGS := $(if $(PUB_ONLY),--pub-only,)
+
+docstring-lint:
+	@echo "==> docstring completeness check"
+	@python3 tools/check_docstrings.py $(DOCSTRING_FLAGS) .
+	@echo "==> docstring-lint passed"
+
+# -----------------------------------------------------------------------------
 # Aggregate lint target
 # -----------------------------------------------------------------------------
 lint: zig-lint manual-lint fuzz-lint

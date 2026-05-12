@@ -191,7 +191,7 @@ git push origin v1.2.3-rc1
 > **Important:** use `git push origin <tag>` rather than `git push --tags`.
 > Pushing `--tags` sends *all* local tags that the remote doesn't have yet.
 > If you have older un-pushed tags, that would trigger a separate release
-> workflow run for each one.  The workflow has a guard that skips tags whose
+> workflow run for each one. The workflow has a guard that skips tags whose
 > releases already exist, but it still wastes runner time.
 
 **3. Monitor the workflow**
