@@ -433,47 +433,47 @@ pub fn parseCloneArgs(allocator: std.mem.Allocator, argv: []const []const u8) !C
         }
 
         // Clone-job-specific boolean flags
-        if (arg_match.matchBool(token, "--skip-deps", null)) {
+        if (try arg_match.matchBool(token, "--skip-deps", null)) {
             args.skip_deps = true;
             continue;
         }
-        if (arg_match.matchBool(token, "--skip-chained-deps", null)) {
+        if (try arg_match.matchBool(token, "--skip-chained-deps", null)) {
             args.skip_chained_deps = true;
             continue;
         }
-        if (arg_match.matchBool(token, "--skip-download", null)) {
+        if (try arg_match.matchBool(token, "--skip-download", null)) {
             args.skip_download = true;
             continue;
         }
-        if (arg_match.matchBool(token, "--ignore-missing-assets", null)) {
+        if (try arg_match.matchBool(token, "--ignore-missing-assets", null)) {
             args.ignore_missing_assets = true;
             continue;
         }
-        if (arg_match.matchBool(token, "--clone-children", null)) {
+        if (try arg_match.matchBool(token, "--clone-children", null)) {
             args.clone_children = true;
             continue;
         }
-        if (arg_match.matchBool(token, "--parental-inheritance", null)) {
+        if (try arg_match.matchBool(token, "--parental-inheritance", null)) {
             args.parental_inheritance = true;
             continue;
         }
-        if (arg_match.matchBool(token, "--export-command", null)) {
+        if (try arg_match.matchBool(token, "--export-command", null)) {
             args.export_command = true;
             continue;
         }
-        if (arg_match.matchBool(token, "--badge", null)) {
+        if (try arg_match.matchBool(token, "--badge", null)) {
             args.badge = true;
             continue;
         }
-        if (arg_match.matchBool(token, "--reproduce", null)) {
+        if (try arg_match.matchBool(token, "--reproduce", null)) {
             args.reproduce = true;
             continue;
         }
-        if (arg_match.matchBool(token, "--check-repos", null)) {
+        if (try arg_match.matchBool(token, "--check-repos", null)) {
             args.check_repos = true;
             continue;
         }
-        if (arg_match.matchBool(token, "--show-progress", null)) {
+        if (try arg_match.matchBool(token, "--show-progress", null)) {
             args.show_progress = true;
             continue;
         }

@@ -1,26 +1,95 @@
 const std = @import("std");
 
-// ---------------------------------------------------------------------------
-// Low-level matching primitives
-// ---------------------------------------------------------------------------
-
-/// Returns `true` when `token` matches either `long` (e.g. `"--verbose"`) or,
-/// if provided, `short` (e.g. `"-v"`). Pass `null` for `short` when no alias exists.
-pub fn matchBool(token: []const u8, long: []const u8, short: ?[]const u8) bool {
-    if (std.mem.eql(u8, token, long)) return true;
-    if (short) |s| return std.mem.eql(u8, token, s);
+/// Returns `true` when `token` matches `long` or `short`.
+///
+/// Both `long` and `short` are comptime-known and optional; use `null` to
+/// indicate absence.  At least one must be non-null and non-empty — violations
+/// are caught at compile time via `@compileError`.
+///
+/// `long` and `short` are intentionally `comptime`: this function is designed
+/// exclusively for fixed CLI flag matching.  Dynamically-constructed flag names
+/// are not supported and never will be.
+///
+/// Arguments:
+///   - `token`: The argv token to test (runtime).
+///   - `long`: Long-form flag name, e.g. `"--verbose"`, or `null` (comptime).
+///   - `short`: Short-form alias, e.g. `"-v"`, or `null` (comptime).
+///
+/// Returns: `true` when `token` equals `long` or `short`, `false` otherwise.
+///
+/// Errors:
+///   - `error.EmptyToken` — `token` is an empty slice.
+pub fn matchBool(
+    token: []const u8,
+    comptime long: ?[]const u8,
+    comptime short: ?[]const u8,
+) error{EmptyToken}!bool {
+    comptime {
+        if (long == null and short == null)
+            @compileError("matchBool: at least one of `long` or `short` must be non-null");
+        if (long) |l| if (l.len == 0)
+            @compileError("matchBool: `long` must not be an empty string");
+        if (short) |s| if (s.len == 0)
+            @compileError("matchBool: `short` must not be an empty string");
+    }
+    if (token.len == 0) return error.EmptyToken;
+    if (long) |l| if (std.mem.eql(u8, token, l)) return true;
+    if (short) |s| if (std.mem.eql(u8, token, s)) return true;
     return false;
 }
 
+test "matchBool: long form" {
+    try std.testing.expect(try matchBool("--verbose", "--verbose", "-v"));
+}
+
+test "matchBool: short form" {
+    try std.testing.expect(try matchBool("-v", "--verbose", "-v"));
+}
+
+test "matchBool: no match" {
+    try std.testing.expect(!try matchBool("--quiet", "--verbose", "-v"));
+}
+
+test "matchBool: null short — long matches" {
+    try std.testing.expect(try matchBool("--osd", "--osd", null));
+}
+
+test "matchBool: null short — no match" {
+    try std.testing.expect(!try matchBool("-o", "--osd", null));
+}
+
+test "matchBool: null long — short matches" {
+    try std.testing.expect(try matchBool("-v", null, "-v"));
+}
+
+test "matchBool: null long — no match" {
+    try std.testing.expect(!try matchBool("--verbose", null, "-v"));
+}
+
+test "matchBool: null short — empty token returns EmptyToken" {
+    try std.testing.expectError(error.EmptyToken, matchBool("", "--osd", null));
+}
+
+
 /// Returns the value for a flag that takes an argument, handling both the space
 /// form (`--flag VALUE`) and the equals form (`--flag=VALUE`).
-/// Returns `null` when `token` does not match either form.
 ///
-/// `token`  — the current argv token being tested.
-/// `i`      — current argv index (advanced by 1 when the space form matches).
-/// `argv`   — the full argv slice (used to fetch the next token for space form).
-/// `long`   — long-form flag name, e.g. `"--method"`.
-/// `short`  — short-form alias, e.g. `"-X"`, or `null` when none exists.
+/// `long` and `short` are comptime-known; `long` must be non-empty, `short`
+/// (when non-null) must be non-empty — violations produce a compile error.
+///
+/// These parameters are intentionally `comptime`: this function is designed
+/// exclusively for fixed CLI flag matching.  Dynamically-constructed flag names
+/// are not supported and never will be.
+///
+/// Arguments:
+///   - `token`: The current argv token being tested (runtime).
+///   - `i`: Current argv index cursor; advanced by 1 when the space form matches.
+///   - `argv`: The full argv slice, used to fetch the next token for the space form.
+///   - `long`: Long-form flag name, e.g. `"--method"` (comptime).
+///   - `short`: Short-form alias, e.g. `"-X"`, or `null` (comptime).
+///
+/// Returns: The flag's value string on a match, or `null` when `token` does not
+/// match the long form, short form, or equals form (`--flag=VALUE`).
 ///
 /// Errors:
 ///   - `error.MissingValue` — space form was matched but no next token exists.
@@ -28,9 +97,15 @@ pub fn matchValue(
     token: []const u8,
     i: *usize,
     argv: []const []const u8,
-    long: []const u8,
-    short: ?[]const u8,
-) !?[]const u8 {
+    comptime long: []const u8,
+    comptime short: ?[]const u8,
+) error{MissingValue}!?[]const u8 {
+    comptime {
+        if (long.len == 0)
+            @compileError("matchValue: `long` must not be an empty string");
+        if (short) |s| if (s.len == 0)
+            @compileError("matchValue: `short` must not be an empty string");
+    }
     if (short) |s| {
         if (std.mem.eql(u8, token, s)) {
             i.* += 1;
@@ -53,10 +128,6 @@ pub fn matchValue(
     return null;
 }
 
-// ---------------------------------------------------------------------------
-// Common flag dispatch (comptime duck-typed)
-// ---------------------------------------------------------------------------
-
 /// Try to match `token` against the five common flags shared by all openQA CLI
 /// tools: `--host`, `--apikey`, `--apisecret`, `--verbose/-v`, `--help/-h`.
 ///
@@ -64,9 +135,20 @@ pub fn matchValue(
 /// (all `?[]const u8`), and `verbose`, `help` (both `bool`). A missing or
 /// mistyped field produces a compile error.
 ///
-/// Returns `true` when a common flag was consumed, `false` if unmatched.
+/// Arguments:
+///   - `T`: The args struct type; required fields are verified at compile time.
+///   - `args`: Pointer to the args struct being populated.
+///   - `token`: The current argv token being tested.
+///   - `i`: Current argv index cursor; forwarded to `matchValue` for value flags.
+///   - `argv`: The full argv slice; forwarded to `matchValue` for value flags.
+///
+/// Returns: `true` when a common flag was consumed, `false` if unmatched.
 /// The caller is responsible for any post-parse semantics (e.g. early return
 /// on `--help`).
+///
+/// Errors:
+///   - `error.MissingValue` — a value-taking flag (`--host`, `--apikey`,
+///     `--apisecret`) was matched but no following token exists.
 pub fn tryCommonFlag(
     comptime T: type,
     args: *T,
@@ -74,11 +156,11 @@ pub fn tryCommonFlag(
     i: *usize,
     argv: []const []const u8,
 ) !bool {
-    if (matchBool(token, "--help", "-h")) {
+    if (try matchBool(token, "--help", "-h")) {
         args.help = true;
         return true;
     }
-    if (matchBool(token, "--verbose", "-v")) {
+    if (try matchBool(token, "--verbose", "-v")) {
         args.verbose = true;
         return true;
     }
@@ -100,26 +182,6 @@ pub fn tryCommonFlag(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-test "matchBool: long form" {
-    try std.testing.expect(matchBool("--verbose", "--verbose", "-v"));
-}
-
-test "matchBool: short form" {
-    try std.testing.expect(matchBool("-v", "--verbose", "-v"));
-}
-
-test "matchBool: no match" {
-    try std.testing.expect(!matchBool("--quiet", "--verbose", "-v"));
-}
-
-test "matchBool: null short — long matches" {
-    try std.testing.expect(matchBool("--osd", "--osd", null));
-}
-
-test "matchBool: null short — no match" {
-    try std.testing.expect(!matchBool("-o", "--osd", null));
-}
 
 test "matchValue: space form (long)" {
     const argv: []const []const u8 = &.{ "--host", "example.com", "--other" };
