@@ -228,17 +228,17 @@ zig-lint:
 # -----------------------------------------------------------------------------
 # Docstring completeness check
 # -----------------------------------------------------------------------------
-# Check that every fn declaration in src/*.zig has a complete /// doc comment
-# (summary, Arguments:, Returns:, Errors: as appropriate).
-# Optional: pass PUB_ONLY=1 to restrict the check to pub fn / export fn only.
-#   make docstring-lint
-#   make docstring-lint PUB_ONLY=1
-DOCSTRING_FLAGS := $(if $(PUB_ONLY),--pub-only,)
+# Check that every pub/export fn declaration in src/*.zig has a complete /// doc
+# comment (summary, Arguments:, Returns:, Errors: as appropriate).
+# Optional: pass WITH_PRIVATE=1 to also check private functions.
+#   make zig-docstring
+#   make zig-docstring WITH_PRIVATE=1
+DOCSTRING_FLAGS := $(if $(WITH_PRIVATE),--with-private,)
 
-docstring-lint:
+zig-docstring:
 	@echo "==> docstring completeness check"
 	@python3 tools/check_docstrings.py $(DOCSTRING_FLAGS) .
-	@echo "==> docstring-lint passed"
+	@echo "==> zig-docstring passed"
 
 # -----------------------------------------------------------------------------
 # Aggregate lint target
