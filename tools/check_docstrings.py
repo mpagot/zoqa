@@ -14,10 +14,11 @@ Doc comments must be a *contiguous* block of `///` lines immediately above the
 block and the `fn` keyword.
 
 Usage:
-  ./tools/check_docstrings.py [--pub-only] [REPO_ROOT]
+  ./tools/check_docstrings.py [--with-private] [--with-deinit] [REPO_ROOT]
 
-  --pub-only   Only check pub fn and export fn (skip private functions).
-  REPO_ROOT    Repository root (default: parent of the tools/ directory).
+  --with-private  Also check private (non-pub, non-export) functions.
+  --with-deinit   Also check deinit functions (skipped by default).
+  REPO_ROOT       Repository root (default: parent of the tools/ directory).
 
 Exit codes:
   0  all checked functions have complete docstrings
@@ -322,7 +323,7 @@ def check_docstring(
 
 
 def check_file(
-    path: Path, pub_only: bool
+    path: Path, with_private: bool = False, with_deinit: bool = False
 ) -> list[tuple[int, str, list[str]]]:
     """Check one Zig source file.
 
@@ -334,7 +335,7 @@ def check_file(
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
 
     test_zones = find_test_zones(lines)
-    fn_re = _PUB_FN_RE if pub_only else _FN_RE
+    fn_re = _FN_RE if with_private else _PUB_FN_RE
 
     for i, line in enumerate(lines):
         if i in test_zones:
@@ -346,6 +347,10 @@ def check_file(
 
         fn_name = m.group(1)
         fn_line_num = i + 1  # convert to 1-indexed
+
+        # Skip deinit functions unless explicitly requested.
+        if fn_name == "deinit" and not with_deinit:
+            continue
 
         signature = collect_signature(lines, i)
         param_names = extract_params(signature)
@@ -375,9 +380,14 @@ Exit codes:
   2  usage error""",
     )
     parser.add_argument(
-        "--pub-only",
+        "--with-private",
         action="store_true",
-        help="Only check pub fn and export fn (skip private functions)",
+        help="Also check private (non-pub, non-export) functions",
+    )
+    parser.add_argument(
+        "--with-deinit",
+        action="store_true",
+        help="Also check deinit functions (skipped by default)",
     )
     parser.add_argument(
         "repo_root",
@@ -406,7 +416,11 @@ Exit codes:
 
     for zig_file in zig_files:
         rel = zig_file.relative_to(repo_root)
-        for line_num, fn_name, issues in check_file(zig_file, pub_only=args.pub_only):
+        for line_num, fn_name, issues in check_file(
+            zig_file,
+            with_private=args.with_private,
+            with_deinit=args.with_deinit,
+        ):
             for issue in issues:
                 print(f"{rel}:{line_num}: {fn_name}: {issue}")
             total_violations += len(issues)

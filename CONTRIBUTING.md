@@ -45,7 +45,7 @@ make help  # print this table
 | `e2e` | Run the full E2E suite (starts + tears down container). |
 | `e2e-keep` | Run E2E keeping the container alive (`--keep-container`). |
 | `e2e-lint` | Bash `-n` syntax check and shellcheck on all E2E scripts. |
-| `docstring-lint` | Check `///` docstring completeness for fn declarations in src/. |
+| `zig-docstring` | Check `///` docstring completeness for fn declarations in src/. |
 | `fuzz-build` | Build the instrumented AFL++ fuzz binaries. |
 
 ### Testing

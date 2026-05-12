@@ -6,7 +6,7 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help zig-build-debug zig-release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint fuzz-lint docstring-lint lint fuzz-build
+.PHONY: help zig-build-debug zig-release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint fuzz-lint zig-docstring lint fuzz-build
 
 # Default target
 help:
@@ -31,8 +31,8 @@ help:
 	@echo "  manual-lint     Run bash -n and shellcheck on manual test scripts."
 	@echo "  fuzz-lint       Run bash -n and shellcheck on tests/fuzz/ scripts."
 	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint, fuzz-lint)."
-	@echo "  docstring-lint  Check /// docstring completeness for fn declarations in src/."
-	@echo "                  Optional: PUB_ONLY=1  — only check pub fn and export fn."
+	@echo "  zig-docstring  Check /// docstring completeness for fn declarations in src/."
+	@echo "                  Optional: WITH_PRIVATE=1  — also check private functions."
 	@echo "  fuzz-build  Build the fuzzy app."
 
 # -----------------------------------------------------------------------------
@@ -172,17 +172,17 @@ zig-lint:
 # -----------------------------------------------------------------------------
 # Docstring completeness check
 # -----------------------------------------------------------------------------
-# Check that every fn declaration in src/*.zig has a complete /// doc comment
-# (summary, Arguments:, Returns:, Errors: as appropriate).
-# Optional: pass PUB_ONLY=1 to restrict the check to pub fn / export fn only.
-#   make docstring-lint
-#   make docstring-lint PUB_ONLY=1
-DOCSTRING_FLAGS := $(if $(PUB_ONLY),--pub-only,)
+# Check that every pub/export fn declaration in src/*.zig has a complete /// doc
+# comment (summary, Arguments:, Returns:, Errors: as appropriate).
+# Optional: pass WITH_PRIVATE=1 to also check private functions.
+#   make zig-docstring
+#   make zig-docstring WITH_PRIVATE=1
+DOCSTRING_FLAGS := $(if $(WITH_PRIVATE),--with-private,)
 
-docstring-lint:
+zig-docstring:
 	@echo "==> docstring completeness check"
 	@python3 tools/check_docstrings.py $(DOCSTRING_FLAGS) .
-	@echo "==> docstring-lint passed"
+	@echo "==> zig-docstring passed"
 
 # -----------------------------------------------------------------------------
 # Aggregate lint target

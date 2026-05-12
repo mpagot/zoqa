@@ -77,15 +77,15 @@ pub const Args = struct {
     subcmd: ?Subcommand = null,
     // Positional arguments collected after the subcommand token, stored in order
     // of appearance on the command line. The layout is fixed by convention:
-    //   [0]   — the API path (relative, e.g. "jobs/1234", or an absolute URL).
+    //   [0]   : the API path (relative, e.g. "jobs/1234", or an absolute URL).
     //           Mandatory; buildRequest returns error.MissingPath when absent.
-    //   [1..] — zero or more KEY=VALUE request-parameter strings
+    //   [1..] : zero or more KEY=VALUE request-parameter strings
     //           (e.g. "DISTRI=sle", "state=running"). buildRequest
     //           percent-encodes these and places the result in
     //           RequestConfig.params_encoded, which openQAReq then routes
     //           as a URL query string (GET/DELETE) or request body
     //           (POST/PUT/PATCH) depending on the HTTP method.
-    // All slices borrow directly from argv — no copies are made during parsing.
+    // All slices borrow directly from argv, no copies are made during parsing.
     kv_params: std.ArrayList([]const u8),
     // help requested
     help: bool = false,
@@ -105,6 +105,10 @@ pub const Args = struct {
 
     /// Release the three owned ArrayLists.  Call this (via `defer`) immediately
     /// after a successful `parseArgs` return.
+    ///
+    /// Arguments:
+    /// - `allocator`: The same allocator that was passed to `parseArgs`; used to
+    ///   release the backing storage of `headers`, `param_files`, and `kv_params`.
     pub fn deinit(self: *Args, allocator: std.mem.Allocator) void {
         self.headers.deinit(allocator);
         self.param_files.deinit(allocator);
@@ -112,11 +116,8 @@ pub const Args = struct {
     }
 };
 
-/// Returns true when `token` — a single item from the command line —
-/// matches either `long` (e.g. `"--verbose"`) or, if provided, `short`
-/// (e.g. `"-v"`).  Pass `null` for `short` when no alias exists.
 // ---------------------------------------------------------------------------
-// Scoped flag dispatchers — one function per scope
+// Scoped flag dispatchers: one function per scope
 // ---------------------------------------------------------------------------
 
 /// Try to match `token` against a zoqa-only global flag (accepted by all
@@ -124,7 +125,16 @@ pub const Args = struct {
 /// The five common flags (--host, --apikey, --apisecret, --verbose, --help)
 /// are handled by `arg_match.tryCommonFlag` in the parse loop.
 ///
-/// Returns `true` when the flag was consumed, `false` if unmatched.
+/// Arguments:
+///   - `args`: Mutable Args struct being populated.
+///   - `token`: The current argv token being tested.
+///   - `i`: Current argv index cursor (advanced when a value is consumed).
+///   - `argv`: Full argv slice (passed through to matchValue).
+///
+/// Returns: `true` when the flag was consumed, `false` if unmatched.
+///
+/// Errors: `error.InvalidRetries` when `--retries` has a non-numeric value,
+/// or `error.MissingValue` when a value-taking flag has no following token.
 fn tryZoqaGlobalFlag(
     args: *Args,
     token: []const u8,
@@ -132,27 +142,27 @@ fn tryZoqaGlobalFlag(
     argv: []const []const u8,
 ) !bool {
     // Boolean zoqa-only globals
-    if (arg_match.matchBool(token, "--osd", null)) {
+    if (try arg_match.matchBool(token, "--osd", null)) {
         args.osd = true;
         return true;
     }
-    if (arg_match.matchBool(token, "--o3", null)) {
+    if (try arg_match.matchBool(token, "--o3", null)) {
         args.o3 = true;
         return true;
     }
-    if (arg_match.matchBool(token, "--odn", null)) {
+    if (try arg_match.matchBool(token, "--odn", null)) {
         args.odn = true;
         return true;
     }
-    if (arg_match.matchBool(token, "--quiet", "-q")) {
+    if (try arg_match.matchBool(token, "--quiet", "-q")) {
         args.quiet = true;
         return true;
     }
-    if (arg_match.matchBool(token, "--links", "-L")) {
+    if (try arg_match.matchBool(token, "--links", "-L")) {
         args.links = true;
         return true;
     }
-    if (arg_match.matchBool(token, "--pretty", "-p")) {
+    if (try arg_match.matchBool(token, "--pretty", "-p")) {
         args.pretty = true;
         return true;
     }
@@ -170,15 +180,149 @@ fn tryZoqaGlobalFlag(
     return false;
 }
 
+test "tryZoqaGlobalFlag: --osd sets flag" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--osd"};
+    var i: usize = 0;
+    try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+    try std.testing.expect(args.osd);
+}
+
+test "tryZoqaGlobalFlag: --o3 sets flag" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--o3"};
+    var i: usize = 0;
+    try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+    try std.testing.expect(args.o3);
+}
+
+test "tryZoqaGlobalFlag: --odn sets flag" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--odn"};
+    var i: usize = 0;
+    try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+    try std.testing.expect(args.odn);
+}
+
+test "tryZoqaGlobalFlag: --quiet and -q set flag" {
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{"--quiet"};
+        var i: usize = 0;
+        try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+        try std.testing.expect(args.quiet);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{"-q"};
+        var i: usize = 0;
+        try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+        try std.testing.expect(args.quiet);
+    }
+}
+
+test "tryZoqaGlobalFlag: --links and -L set flag" {
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{"--links"};
+        var i: usize = 0;
+        try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+        try std.testing.expect(args.links);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{"-L"};
+        var i: usize = 0;
+        try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+        try std.testing.expect(args.links);
+    }
+}
+
+test "tryZoqaGlobalFlag: --pretty and -p set flag" {
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{"--pretty"};
+        var i: usize = 0;
+        try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+        try std.testing.expect(args.pretty);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{"-p"};
+        var i: usize = 0;
+        try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+        try std.testing.expect(args.pretty);
+    }
+}
+
+test "tryZoqaGlobalFlag: --name sets name" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{ "--name", "myclient" };
+    var i: usize = 0;
+    try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+    try std.testing.expectEqualStrings("myclient", args.name);
+    try std.testing.expectEqual(@as(usize, 1), i);
+}
+
+test "tryZoqaGlobalFlag: --name=VALUE equals form" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--name=myclient"};
+    var i: usize = 0;
+    try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+    try std.testing.expectEqualStrings("myclient", args.name);
+}
+
+test "tryZoqaGlobalFlag: --retries and -r set retries" {
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{ "--retries", "5" };
+        var i: usize = 0;
+        try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+        try std.testing.expectEqual(@as(u32, 5), args.retries.?);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{ "-r", "3" };
+        var i: usize = 0;
+        try std.testing.expect(try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+        try std.testing.expectEqual(@as(u32, 3), args.retries.?);
+    }
+}
+
+test "tryZoqaGlobalFlag: invalid --retries returns InvalidRetries" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{ "--retries", "abc" };
+    var i: usize = 0;
+    try std.testing.expectError(error.InvalidRetries, tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+}
+
+test "tryZoqaGlobalFlag: missing --retries value returns MissingValue" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--retries"};
+    var i: usize = 0;
+    try std.testing.expectError(error.MissingValue, tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+}
+
+test "tryZoqaGlobalFlag: unrecognized token returns false" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--unknown"};
+    var i: usize = 0;
+    try std.testing.expect(!try tryZoqaGlobalFlag(&args, argv[0], &i, argv));
+}
+
 /// Try to match `token` against a flag specific to the `api` subcommand
 /// (`zoqa api ...`).
-/// Returns `true` when the flag was consumed, `false` if unmatched.
 ///
-/// `args`      — mutable Args struct being populated.
-/// `allocator` — used to allocate space in `args.headers` and `args.param_files`.
-/// `token`     — the current argv token being tested.
-/// `i`         — current argv index cursor (passed through to matchValue).
-/// `argv`      — full argv slice (passed through to matchValue).
+/// Arguments:
+///   - `args`: Mutable Args struct being populated.
+///   - `allocator`: Used to grow `args.headers` and `args.param_files`.
+///   - `token`: The current argv token being tested.
+///   - `i`: Current argv index cursor (advanced when a value is consumed).
+///   - `argv`: Full argv slice (passed through to matchValue).
+///
+/// Returns: `true` when the flag was consumed, `false` if unmatched.
+///
+/// Errors: `error.MissingValue` when a value-taking flag has no following token.
 fn tryApiFlag(
     args: *Args,
     allocator: std.mem.Allocator,
@@ -187,11 +331,11 @@ fn tryApiFlag(
     argv: []const []const u8,
 ) !bool {
     // Boolean api flags
-    if (arg_match.matchBool(token, "--form", "-f")) {
+    if (try arg_match.matchBool(token, "--form", "-f")) {
         args.form = true;
         return true;
     }
-    if (arg_match.matchBool(token, "--json", "-j")) {
+    if (try arg_match.matchBool(token, "--json", "-j")) {
         args.json = true;
         return true;
     }
@@ -221,21 +365,176 @@ fn tryApiFlag(
     return false;
 }
 
+test "tryApiFlag: --form and -f set flag" {
+    const allocator = std.testing.allocator;
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{"--form"};
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expect(args.form);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{"-f"};
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expect(args.form);
+    }
+}
+
+test "tryApiFlag: --json and -j set flag" {
+    const allocator = std.testing.allocator;
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{"--json"};
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expect(args.json);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{"-j"};
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expect(args.json);
+    }
+}
+
+test "tryApiFlag: --method and -X set method" {
+    const allocator = std.testing.allocator;
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{ "--method", "POST" };
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expectEqualStrings("POST", args.method);
+        try std.testing.expectEqual(@as(usize, 1), i);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{ "-X", "DELETE" };
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expectEqualStrings("DELETE", args.method);
+    }
+}
+
+test "tryApiFlag: --data and -d set data" {
+    const allocator = std.testing.allocator;
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{ "--data", "payload" };
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expectEqualStrings("payload", args.data.?);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{ "-d", "payload" };
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expectEqualStrings("payload", args.data.?);
+    }
+}
+
+test "tryApiFlag: --data-file and -D set data_file" {
+    const allocator = std.testing.allocator;
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{ "--data-file", "body.json" };
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expectEqualStrings("body.json", args.data_file.?);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{ "-D", "body.json" };
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expectEqualStrings("body.json", args.data_file.?);
+    }
+}
+
+test "tryApiFlag: --header and -a append to headers" {
+    const allocator = std.testing.allocator;
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    defer args.deinit(allocator);
+    {
+        const argv: []const []const u8 = &.{ "--header", "X-Foo: bar" };
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+    }
+    {
+        const argv: []const []const u8 = &.{ "-a", "X-Baz: qux" };
+        var i: usize = 0;
+        try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+    }
+    try std.testing.expectEqual(@as(usize, 2), args.headers.items.len);
+    try std.testing.expectEqualStrings("X-Foo: bar", args.headers.items[0]);
+    try std.testing.expectEqualStrings("X-Baz: qux", args.headers.items[1]);
+}
+
+test "tryApiFlag: --param-file appends to param_files" {
+    const allocator = std.testing.allocator;
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    defer args.deinit(allocator);
+    const argv: []const []const u8 = &.{ "--param-file", "KEY=file.txt" };
+    var i: usize = 0;
+    try std.testing.expect(try tryApiFlag(&args, allocator, argv[0], &i, argv));
+    try std.testing.expectEqual(@as(usize, 1), args.param_files.items.len);
+    try std.testing.expectEqualStrings("KEY=file.txt", args.param_files.items[0]);
+}
+
+test "tryApiFlag: missing --method value returns MissingValue" {
+    const allocator = std.testing.allocator;
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    defer args.deinit(allocator);
+    const argv: []const []const u8 = &.{"--method"};
+    var i: usize = 0;
+    try std.testing.expectError(error.MissingValue, tryApiFlag(&args, allocator, argv[0], &i, argv));
+}
+
+test "tryApiFlag: unrecognized token returns false" {
+    const allocator = std.testing.allocator;
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    defer args.deinit(allocator);
+    const argv: []const []const u8 = &.{"--unknown"};
+    var i: usize = 0;
+    try std.testing.expect(!try tryApiFlag(&args, allocator, argv[0], &i, argv));
+}
+
 /// Try to match `token` against a flag specific to the `archive` subcommand
 /// (`zoqa archive ...`).
-/// Returns `true` when the flag was consumed, `false` if unmatched.
 ///
-/// `args`  — mutable Args struct being populated.
-/// `token` — the current argv token being tested.
-/// `i`     — current argv index cursor (passed through to matchValue).
-/// `argv`  — full argv slice (passed through to matchValue).
+/// Arguments:
+///   - `args`: Mutable Args struct being populated.
+///   - `token`: The current argv token being tested.
+///   - `i`: Current argv index cursor (advanced when a value is consumed).
+///   - `argv`: Full argv slice (passed through to matchValue).
+///
+/// Returns: `true` when the flag was consumed, `false` if unmatched.
+///
+/// Errors: `error.InvalidAssetSizeLimit` when `--asset-size-limit` has a
+/// non-numeric value, or `error.MissingValue` when a value-taking flag has
+/// no following token.
 fn tryArchiveFlag(
     args: *Args,
     token: []const u8,
     i: *usize,
     argv: []const []const u8,
 ) !bool {
-    if (arg_match.matchBool(token, "--with-thumbnails", "-t")) {
+    if (try arg_match.matchBool(token, "--with-thumbnails", "-t")) {
         args.with_thumbnails = true;
         return true;
     }
@@ -247,28 +546,97 @@ fn tryArchiveFlag(
     return false;
 }
 
+test "tryArchiveFlag: --with-thumbnails and -t set flag" {
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{"--with-thumbnails"};
+        var i: usize = 0;
+        try std.testing.expect(try tryArchiveFlag(&args, argv[0], &i, argv));
+        try std.testing.expect(args.with_thumbnails);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{"-t"};
+        var i: usize = 0;
+        try std.testing.expect(try tryArchiveFlag(&args, argv[0], &i, argv));
+        try std.testing.expect(args.with_thumbnails);
+    }
+}
+
+test "tryArchiveFlag: --asset-size-limit and -l set value" {
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{ "--asset-size-limit", "1048576" };
+        var i: usize = 0;
+        try std.testing.expect(try tryArchiveFlag(&args, argv[0], &i, argv));
+        try std.testing.expectEqual(@as(u64, 1048576), args.asset_size_limit.?);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{ "-l", "512" };
+        var i: usize = 0;
+        try std.testing.expect(try tryArchiveFlag(&args, argv[0], &i, argv));
+        try std.testing.expectEqual(@as(u64, 512), args.asset_size_limit.?);
+    }
+}
+
+test "tryArchiveFlag: --asset-size-limit equals form" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--asset-size-limit=2048"};
+    var i: usize = 0;
+    try std.testing.expect(try tryArchiveFlag(&args, argv[0], &i, argv));
+    try std.testing.expectEqual(@as(u64, 2048), args.asset_size_limit.?);
+}
+
+test "tryArchiveFlag: invalid --asset-size-limit returns InvalidAssetSizeLimit" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{ "--asset-size-limit", "big" };
+    var i: usize = 0;
+    try std.testing.expectError(error.InvalidAssetSizeLimit, tryArchiveFlag(&args, argv[0], &i, argv));
+}
+
+test "tryArchiveFlag: missing --asset-size-limit value returns MissingValue" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--asset-size-limit"};
+    var i: usize = 0;
+    try std.testing.expectError(error.MissingValue, tryArchiveFlag(&args, argv[0], &i, argv));
+}
+
+test "tryArchiveFlag: unrecognized token returns false" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--unknown"};
+    var i: usize = 0;
+    try std.testing.expect(!try tryArchiveFlag(&args, argv[0], &i, argv));
+}
+
 /// Try to match `token` against a flag specific to the `monitor` subcommand
 /// (`zoqa monitor ...`).
-/// Returns `true` when the flag was consumed, `false` if unmatched.
 ///
 /// Recognised flags:
-///   - `--follow` / `-f` — track the newest clone of each job during
+///   - `--follow` / `-f` : track the newest clone of each job during
 ///     polling; sets `args.follow`.
-///   - `--poll-interval` / `-i` — polling interval in seconds;
+///   - `--poll-interval` / `-i` : polling interval in seconds;
 ///     sets `args.poll_interval`. Defaults to `10` in `buildMonitorRequest`
 ///     when absent.
 ///
-/// `args`  — mutable Args struct being populated.
-/// `token` — the current argv token being tested.
-/// `i`     — current argv index cursor (passed through to matchValue).
-/// `argv`  — full argv slice (passed through to matchValue).
+/// Arguments:
+///   - `args`: Mutable Args struct being populated.
+///   - `token`: The current argv token being tested.
+///   - `i`: Current argv index cursor (advanced when a value is consumed).
+///   - `argv`: Full argv slice (passed through to matchValue).
+///
+/// Returns: `true` when the flag was consumed, `false` if unmatched.
+///
+/// Errors: `error.InvalidPollInterval` when `--poll-interval` has a
+/// non-numeric value, or `error.MissingValue` when a value-taking flag has
+/// no following token.
 fn tryMonitorFlag(
     args: *Args,
     token: []const u8,
     i: *usize,
     argv: []const []const u8,
 ) !bool {
-    if (arg_match.matchBool(token, "--follow", "-f")) {
+    if (try arg_match.matchBool(token, "--follow", "-f")) {
         args.follow = true;
         return true;
     }
@@ -280,28 +648,97 @@ fn tryMonitorFlag(
     return false;
 }
 
+test "tryMonitorFlag: --follow and -f set flag" {
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{"--follow"};
+        var i: usize = 0;
+        try std.testing.expect(try tryMonitorFlag(&args, argv[0], &i, argv));
+        try std.testing.expect(args.follow);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{"-f"};
+        var i: usize = 0;
+        try std.testing.expect(try tryMonitorFlag(&args, argv[0], &i, argv));
+        try std.testing.expect(args.follow);
+    }
+}
+
+test "tryMonitorFlag: --poll-interval and -i set poll_interval" {
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{ "--poll-interval", "30" };
+        var i: usize = 0;
+        try std.testing.expect(try tryMonitorFlag(&args, argv[0], &i, argv));
+        try std.testing.expectEqual(@as(u64, 30), args.poll_interval.?);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        const argv: []const []const u8 = &.{ "-i", "10" };
+        var i: usize = 0;
+        try std.testing.expect(try tryMonitorFlag(&args, argv[0], &i, argv));
+        try std.testing.expectEqual(@as(u64, 10), args.poll_interval.?);
+    }
+}
+
+test "tryMonitorFlag: --poll-interval equals form" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--poll-interval=60"};
+    var i: usize = 0;
+    try std.testing.expect(try tryMonitorFlag(&args, argv[0], &i, argv));
+    try std.testing.expectEqual(@as(u64, 60), args.poll_interval.?);
+}
+
+test "tryMonitorFlag: invalid --poll-interval returns InvalidPollInterval" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{ "--poll-interval", "fast" };
+    var i: usize = 0;
+    try std.testing.expectError(error.InvalidPollInterval, tryMonitorFlag(&args, argv[0], &i, argv));
+}
+
+test "tryMonitorFlag: missing --poll-interval value returns MissingValue" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--poll-interval"};
+    var i: usize = 0;
+    try std.testing.expectError(error.MissingValue, tryMonitorFlag(&args, argv[0], &i, argv));
+}
+
+test "tryMonitorFlag: unrecognized token returns false" {
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    const argv: []const []const u8 = &.{"--unknown"};
+    var i: usize = 0;
+    try std.testing.expect(!try tryMonitorFlag(&args, argv[0], &i, argv));
+}
+
 /// Try to match `token` against a flag specific to the `schedule` subcommand
 /// (`zoqa schedule ...`).
-/// Returns `true` when the flag was consumed, `false` if unmatched.
 ///
 /// Recognised flags:
-///   - `--monitor` / `-m` — after scheduling, enter the blocking job monitor
+///   - `--monitor` / `-m` : after scheduling, enter the blocking job monitor
 ///     loop; sets `args.schedule_monitor`.
-///   - `--follow` / `-f` — track the newest clone of each job during
+///   - `--follow` / `-f` : track the newest clone of each job during
 ///     monitoring; sets `args.follow`. Meaningful only with `--monitor`.
-///   - `--poll-interval` / `-i` — monitoring poll interval in seconds;
+///   - `--poll-interval` / `-i` : monitoring poll interval in seconds;
 ///     sets `args.poll_interval`. Defaults to `1` in `buildScheduleRequest`
 ///     when absent (shorter than the monitor subcommand's default of `10`).
-///   - `--param-file KEY=FILE` — read KEY's value from a file and append it
+///   - `--param-file KEY=FILE` : read KEY's value from a file and append it
 ///     to the POST body; appends to `args.param_files` (repeatable, no short
-///     form). Unlike the `api` subcommand, `schedule` has no PATH positional
-///     — every positional is a KEY=VALUE POST parameter for `/api/v1/isos`.
+///     form). Unlike the `api` subcommand, `schedule` has no PATH positional;
+///     every positional is a KEY=VALUE POST parameter for `/api/v1/isos`.
 ///
-/// `args`      — mutable Args struct being populated.
-/// `allocator` — used to grow `args.param_files` for `--param-file` entries.
-/// `token`     — the current argv token being tested.
-/// `i`         — current argv index cursor (passed through to matchValue).
-/// `argv`      — full argv slice (passed through to matchValue).
+/// Arguments:
+///   - `args`: Mutable Args struct being populated.
+///   - `allocator`: Used to grow `args.param_files` for `--param-file` entries.
+///   - `token`: The current argv token being tested.
+///   - `i`: Current argv index cursor (advanced when a value is consumed).
+///   - `argv`: Full argv slice (passed through to matchValue).
+///
+/// Returns: `true` when the flag was consumed, `false` if unmatched.
+///
+/// Errors: `error.InvalidPollInterval` when `--poll-interval` has a
+/// non-numeric value, or `error.MissingValue` when a value-taking flag has
+/// no following token.
 fn tryScheduleFlag(
     args: *Args,
     allocator: std.mem.Allocator,
@@ -309,11 +746,11 @@ fn tryScheduleFlag(
     i: *usize,
     argv: []const []const u8,
 ) !bool {
-    if (arg_match.matchBool(token, "--monitor", "-m")) {
+    if (try arg_match.matchBool(token, "--monitor", "-m")) {
         args.schedule_monitor = true;
         return true;
     }
-    if (arg_match.matchBool(token, "--follow", "-f")) {
+    if (try arg_match.matchBool(token, "--follow", "-f")) {
         args.follow = true;
         return true;
     }
@@ -329,8 +766,116 @@ fn tryScheduleFlag(
     return false;
 }
 
+test "tryScheduleFlag: --monitor and -m set schedule_monitor" {
+    const allocator = std.testing.allocator;
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{"--monitor"};
+        var i: usize = 0;
+        try std.testing.expect(try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expect(args.schedule_monitor);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{"-m"};
+        var i: usize = 0;
+        try std.testing.expect(try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expect(args.schedule_monitor);
+    }
+}
+
+test "tryScheduleFlag: --follow and -f set follow" {
+    const allocator = std.testing.allocator;
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{"--follow"};
+        var i: usize = 0;
+        try std.testing.expect(try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expect(args.follow);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{"-f"};
+        var i: usize = 0;
+        try std.testing.expect(try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expect(args.follow);
+    }
+}
+
+test "tryScheduleFlag: --poll-interval and -i set poll_interval" {
+    const allocator = std.testing.allocator;
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{ "--poll-interval", "1" };
+        var i: usize = 0;
+        try std.testing.expect(try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expectEqual(@as(u64, 1), args.poll_interval.?);
+    }
+    {
+        var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+        defer args.deinit(allocator);
+        const argv: []const []const u8 = &.{ "-i", "5" };
+        var i: usize = 0;
+        try std.testing.expect(try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+        try std.testing.expectEqual(@as(u64, 5), args.poll_interval.?);
+    }
+}
+
+test "tryScheduleFlag: invalid --poll-interval returns InvalidPollInterval" {
+    const allocator = std.testing.allocator;
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    defer args.deinit(allocator);
+    const argv: []const []const u8 = &.{ "--poll-interval", "nope" };
+    var i: usize = 0;
+    try std.testing.expectError(error.InvalidPollInterval, tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+}
+
+test "tryScheduleFlag: --param-file appends to param_files" {
+    const allocator = std.testing.allocator;
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    defer args.deinit(allocator);
+    const argv: []const []const u8 = &.{ "--param-file", "DISTRI=file.txt" };
+    var i: usize = 0;
+    try std.testing.expect(try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+    try std.testing.expectEqual(@as(usize, 1), args.param_files.items.len);
+    try std.testing.expectEqualStrings("DISTRI=file.txt", args.param_files.items[0]);
+}
+
+test "tryScheduleFlag: --param-file repeatable appends multiple entries" {
+    const allocator = std.testing.allocator;
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    defer args.deinit(allocator);
+    {
+        const argv: []const []const u8 = &.{ "--param-file", "DISTRI=distri.txt" };
+        var i: usize = 0;
+        try std.testing.expect(try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+    }
+    {
+        const argv: []const []const u8 = &.{ "--param-file", "VERSION=ver.txt" };
+        var i: usize = 0;
+        try std.testing.expect(try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+    }
+    try std.testing.expectEqual(@as(usize, 2), args.param_files.items.len);
+    try std.testing.expectEqualStrings("DISTRI=distri.txt", args.param_files.items[0]);
+    try std.testing.expectEqualStrings("VERSION=ver.txt", args.param_files.items[1]);
+}
+
+test "tryScheduleFlag: unrecognized token returns false" {
+    const allocator = std.testing.allocator;
+    var args = Args{ .headers = .empty, .param_files = .empty, .kv_params = .empty };
+    defer args.deinit(allocator);
+    const argv: []const []const u8 = &.{"--unknown"};
+    var i: usize = 0;
+    try std.testing.expect(!try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
+}
+
 // ---------------------------------------------------------------------------
-// parseArgs — subcommand-dispatched CLI parser
+// parseArgs : subcommand-dispatched CLI parser
 // ---------------------------------------------------------------------------
 
 /// Parse command-line arguments into an `Args` struct.
@@ -343,12 +888,24 @@ fn tryScheduleFlag(
 /// A successful return guarantees `args.subcmd` is non-null unless
 /// `args.help` is true (the bare `zoqa -h` case).
 ///
+/// Arguments:
+///   - `allocator`: Used to allocate the backing storage for the three ArrayList
+///     fields (`headers`, `param_files`, `kv_params`). The same allocator must be
+///     passed to `Args.deinit` to free those allocations.
+///   - `argv`: The full process argument vector. `argv[0]` is the program name;
+///     `argv[1]` (if present) must be the subcommand or `-h`/`--help`. All string
+///     slices stored in the returned `Args` borrow directly from this slice — no
+///     copies are made, so `argv` must outlive the returned `Args`.
+///
+/// Returns: A fully populated `Args` struct. The caller owns the ArrayList
+/// allocations inside it and must call `deinit(allocator)` when done.
+///
 /// Errors:
-///   - `error.MissingSubcommand` — no arguments after the program name.
-///   - `error.InvalidCommand` — a flag (starting with `-`) at position 1.
-///   - `error.UnknownSubcommand` — argv[1] is not a known subcommand.
-///   - `error.UnknownFlag` — unrecognised flag after the subcommand.
-///   - `error.MissingValue` — a value-taking flag has no following token.
+///   - `error.MissingSubcommand` : no arguments after the program name.
+///   - `error.InvalidCommand` : a flag (starting with `-`) at position 1.
+///   - `error.UnknownSubcommand` : argv[1] is not a known subcommand.
+///   - `error.UnknownFlag` : unrecognised flag after the subcommand.
+///   - `error.MissingValue` : a value-taking flag has no following token.
 pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
     var args = Args{
         .headers = .empty,
@@ -614,7 +1171,7 @@ test "parseArgs: short flags and aliases" {
 // ---------------------------------------------------------------------------
 // Cross-subcommand flag rejection: api-specific flags must be rejected
 // when used with the archive subcommand.  The subcommand-dispatched parser
-// handles this structurally — tryApiFlag is only called for .api.
+// handles this structurally : tryApiFlag is only called for .api.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: api-specific flags rejected for archive" {
@@ -704,7 +1261,7 @@ test "parseArgs: -L alias for --links" {
 // ---------------------------------------------------------------------------
 // Regression guards: confirm that combined short flags and archive-specific
 // flags used with the api subcommand are correctly rejected.  These tests
-// should PASS with the current code — they lock in existing correct behaviour.
+// should PASS with the current code : they lock in existing correct behaviour.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: combined short flags -vp rejected" {
@@ -746,7 +1303,7 @@ test "parseArgs: archive flag --asset-size-limit rejected for api" {
 // ---------------------------------------------------------------------------
 // --pretty and --links are "accepted but have no
 // observable effect" for the archive subcommand.  These tests should PASS
-// with the current code — they confirm the spec-mandated behaviour.
+// with the current code : they confirm the spec-mandated behaviour.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: --pretty accepted for archive no effects" {
@@ -789,6 +1346,11 @@ test "parseArgs: --links accepted for archive no effects" {
 ///
 /// Returns: A newly-allocated, form-encoded string (e.g., "foo=bar&baz=123").
 /// The caller owns the returned slice and must free it.
+///
+/// Errors:
+///   - `error.FormRequiresJsonObject` : input is not a JSON object.
+///   - `error.FormUnsupportedValueType` : a value is an array or nested object.
+///   - JSON parse errors or `OutOfMemory` from the allocator.
 fn jsonToFormEncoded(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
     defer parsed.deinit();
@@ -884,7 +1446,22 @@ test "jsonToFormEncoded: empty object" {
     try std.testing.expectEqualStrings("", result);
 }
 
-/// Helper to check if a character is "unreserved" per RFC 3986.
+/// Test whether a byte can pass through literally when percent-encoding
+/// KEY=VALUE parameters for the openQA API request body or query string.
+///
+/// RFC 3986 (the URI standard) defines a set of "unreserved" characters that
+/// never need encoding because they carry no structural meaning in a URI.
+/// Everything else (spaces, punctuation like `&` and `=`, non-ASCII bytes)
+/// must be replaced with `%XX` hex escapes so the server can distinguish
+/// parameter delimiters from literal data.
+///
+/// This predicate is called per-byte by `formEncodeAppend`, which builds the
+/// encoded form body used by `zoqa api --form` and `zoqa schedule`.
+///
+/// Arguments:
+///   - `c`: The byte to test.
+///
+/// Returns: `true` when `c` is unreserved (A-Z, a-z, 0-9, '-', '_', '.', '~').
 fn isUnreserved(c: u8) bool {
     return (c >= 'A' and c <= 'Z') or
         (c >= 'a' and c <= 'z') or
@@ -903,6 +1480,8 @@ fn isUnreserved(c: u8) bool {
 /// - `allocator`: Used to grow the `buf` ArrayList if needed.
 /// - `buf`: The destination buffer to append the encoded string to.
 /// - `input`: The raw string to be encoded.
+///
+/// Errors: `OutOfMemory` if the buffer cannot grow.
 fn formEncodeAppend(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), input: []const u8) !void {
     for (input) |c| {
         if (isUnreserved(c)) {
@@ -955,7 +1534,7 @@ test "formEncodeAppend: all special bytes percent-encoded" {
 /// the library's public API (openQAReq / CallOptions).
 ///
 /// `buildRequest` extracts and validates CLI arguments into the fields needed
-/// by the library's public API. URL construction is **not** performed here —
+/// by the library's public API. URL construction is **not** performed here:
 /// that responsibility belongs to `openQAReq`.
 ///
 /// All slices are either borrowed from `Args` / `data_file_content` or owned
@@ -985,6 +1564,8 @@ const RequestConfig = struct {
 
     arena: std.heap.ArenaAllocator,
 
+    /// Release all memory owned by this configuration via the internal arena allocator.
+    /// After this call, all string slices inside the struct become invalid.
     pub fn deinit(self: *RequestConfig) void {
         self.arena.deinit();
     }
@@ -1031,7 +1612,7 @@ const ArchiveConfig = struct {
 /// there are no parameters.
 ///
 /// Errors:
-///   - `error.PathContainsNullByte` — a file path contains `\x00`.
+///   - `error.PathContainsNullByte` : a file path contains `\x00`.
 ///   - Any error from `std.fs.cwd().readFileAlloc` or allocator OOM.
 fn buildFormParams(
     allocator: std.mem.Allocator,
@@ -1110,13 +1691,13 @@ fn buildFormParams(
 /// `deinit(allocator)` to release internally-allocated buffers.
 ///
 /// Errors:
-///   - `error.MissingPath` — `args.kv_params` is empty (no API path provided).
-///   - `error.FormRequiresData` — `--form` was set but no body source
+///   - `error.MissingPath` : `args.kv_params` is empty (no API path provided).
+///   - `error.FormRequiresData` : `--form` was set but no body source
 ///     (`--data` or `--data-file`) was provided.
-///   - `error.FormRequiresJsonObject` — `--form` body is not a JSON object.
-///   - `error.FormUnsupportedValueType` — `--form` JSON contains nested
+///   - `error.FormRequiresJsonObject` : `--form` body is not a JSON object.
+///   - `error.FormUnsupportedValueType` : `--form` JSON contains nested
 ///     arrays or objects.
-///   - `error.PathContainsNullByte` — a `--param-file` path contains `\x00`.
+///   - `error.PathContainsNullByte` : a `--param-file` path contains `\x00`.
 ///   - Any error from `std.fs.cwd().readFileAlloc` (param-file I/O),
 ///     `std.Uri.parse` (absolute URL), `config.resolveHost`, or allocator OOM.
 pub fn buildRequest(
@@ -1152,12 +1733,28 @@ pub fn buildRequest(
     //   1. Relative path (e.g. "jobs") → resolve host from flags, path = api_path.
     //   2. Absolute URL (e.g. "https://host/api/v1/jobs") → split into host + path.
 
-    // SAFETY: both variables are unconditionally assigned in every branch of the
-    // if/else below before any subsequent read. The `if (isAbsoluteUrl(...))` /
-    // `else` pair is exhaustive, so no branch can reach the code after the block
-    // without having written a valid slice into each variable.
+    // These two variables use `= undefined` (uninitialized memory) intentionally.
+    //
+    // WHY NOT a safe default like `= ""`?
+    //   Using `undefined` makes any missed-assignment bug crash immediately in
+    //   Debug builds (Zig fills undefined memory with 0xAA, so dereferencing it
+    //   segfaults).  A dummy default like "" would silently produce wrong URLs.
+    //
+    // WHY NOT `?[]const u8 = null` (optional)?
+    //   Both values are unconditionally needed after this block.  Wrapping them
+    //   in optionals would force pointless `.?` unwraps at every use site for a
+    //   null state that can never actually occur.
+    //
+    // PROOF OF SOUNDNESS:
+    //   Assigned in the `if (isAbsoluteUrl(api_path)) { ... } else { ... }` block
+    //   immediately below (~50 lines).  That if/else is exhaustive: exactly one
+    //   branch always executes.  Within each branch, every path that doesn't
+    //   propagate an error assigns BOTH variables before the branch ends.
+    //
+    // MAINTAINER NOTE: if you add an early `return` or new branch inside the
+    // if/else below, you MUST assign both variables on that path, or convert
+    // them to optionals.
     var resolved_host: []const u8 = undefined;
-    // SAFETY: Unconditionally assigned alongside resolved_host in all branches.
     var relative_path: []const u8 = undefined;
 
     if (isAbsoluteUrl(api_path)) {
@@ -1189,7 +1786,7 @@ pub fn buildRequest(
             // Exact "/api/v1" without trailing slash
             relative_path = "";
         } else {
-            // No /api/v1/ prefix — pass entire path (strip leading slash).
+            // No /api/v1/ prefix : pass entire path (strip leading slash).
             // openQAReq will still prepend /api/v1/, so this means the
             // absolute URL didn't follow the openQA convention. We
             // preserve the path as-is for maximum flexibility.
@@ -1213,10 +1810,11 @@ pub fn buildRequest(
 
         // Strip leading slash from relative path to avoid double-slash in URL.
         relative_path = if (std.mem.startsWith(u8, api_path, "/")) api_path[1..] else api_path;
-    }
+    } // ← end of exhaustive if/else: resolved_host and relative_path are
+    //   now both guaranteed to hold valid slices.
 
     // Build request body
-    // Note: KV params are NOT placed in the body here — that routing is
+    // Note: KV params are NOT placed in the body here : that routing is
     // done by openQAReq based on the HTTP method. Only explicit --data,
     // --data-file, and --form bodies are set here.
     var req_body: ?[]const u8 = null;
@@ -1270,175 +1868,6 @@ pub fn buildRequest(
         .params_encoded = params_encoded,
         .body = req_body,
         .headers = try custom_headers.toOwnedSlice(arena_alloc),
-        .arena = arena,
-    };
-}
-
-/// Transform parsed CLI arguments into an `ArchiveConfig` ready for `zoqa.runArchive()`.
-///
-/// Validates the presence of required positional arguments (`JOB_ID` and `OUTPUT_PATH`),
-/// parses the `JOB_ID` as a base-10 integer, and resolves the target host/alias.
-///
-/// It intentionally does NOT populate connection-related options like `.credentials`,
-/// `.retries`, or `.quiet`—these are supplied by the caller in `main()` from shared
-/// environment and configuration file resolution.
-///
-/// Arguments:
-///   - `allocator`: Used for internal allocations (like host resolution buffers).
-///     Owned buffers are tracked inside the returned `ArchiveConfig` and freed by its `deinit`.
-///   - `args`: Parsed CLI arguments from `parseArgs`. Borrowed — the caller must keep
-///     it alive for the lifetime of the returned `ArchiveConfig`.
-///
-/// Returns:
-///   - `ArchiveConfig` containing the resolved arguments.
-///
-/// Errors:
-///   - `error.MissingArchiveArgs`: If fewer than 2 positional arguments were provided.
-///   - `error.InvalidJobId`: If the `JOB_ID` positional argument is not a valid integer.
-fn buildArchiveRequest(
-    allocator: std.mem.Allocator,
-    args: *const Args,
-) !ArchiveConfig {
-    if (args.kv_params.items.len < 2) return error.MissingArchiveArgs;
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-    const arena_alloc = arena.allocator();
-
-    const job_id = std.fmt.parseInt(u64, args.kv_params.items[0], 10) catch
-        return error.InvalidJobId;
-    const output_path = args.kv_params.items[1];
-
-    const host_res = try config.resolveHost(
-        arena_alloc,
-        args.osd,
-        args.o3,
-        args.odn,
-        args.host,
-    );
-
-    return .{
-        .host = host_res.url,
-        .job_id = job_id,
-        .output_path = output_path,
-        .options = .{
-            .with_thumbnails = args.with_thumbnails,
-            .asset_size_limit = args.asset_size_limit orelse 209_715_200,
-        },
-        .arena = arena,
-    };
-}
-
-const MonitorConfig = struct {
-    host: []const u8,
-    job_ids: []const u64,
-    follow: bool,
-    poll_interval: u64,
-    arena: std.heap.ArenaAllocator,
-
-    fn deinit(self: *MonitorConfig) void {
-        self.arena.deinit();
-    }
-};
-
-fn buildMonitorRequest(
-    allocator: std.mem.Allocator,
-    args: *const Args,
-) !MonitorConfig {
-    if (args.kv_params.items.len < 1) return error.MissingMonitorArgs;
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-    const arena_alloc = arena.allocator();
-
-    var job_ids = try arena_alloc.alloc(u64, args.kv_params.items.len);
-    for (args.kv_params.items, 0..) |param, i| {
-        job_ids[i] = std.fmt.parseInt(u64, param, 10) catch
-            return error.InvalidJobId;
-    }
-
-    const host_res = try config.resolveHost(
-        arena_alloc,
-        args.osd,
-        args.o3,
-        args.odn,
-        args.host,
-    );
-
-    return .{
-        .host = host_res.url,
-        .job_ids = job_ids,
-        .follow = args.follow,
-        .poll_interval = args.poll_interval orelse 10,
-        .arena = arena,
-    };
-}
-
-/// ScheduleConfig is a transitional container: it bridges the gap between
-/// raw CLI argument parsing (parseArgs → Args) and the library's public API
-/// (runSchedule / ScheduleOptions).
-const ScheduleConfig = struct {
-    /// Resolved base URL of the target openQA instance.
-    host: []const u8,
-    /// Pre-encoded form body string for POST /api/v1/isos.
-    params_encoded: []const u8,
-    /// Whether --monitor was specified.
-    monitor_jobs: bool,
-    /// Whether --follow was specified.
-    follow: bool,
-    /// Polling interval in seconds (default 1 for schedule).
-    poll_interval: u64,
-    /// User-Agent header value.
-    name: []const u8,
-    arena: std.heap.ArenaAllocator,
-
-    fn deinit(self: *ScheduleConfig) void {
-        self.arena.deinit();
-    }
-};
-
-/// Transform parsed CLI arguments into a `ScheduleConfig` ready for `zoqa.runSchedule()`.
-///
-/// Validates that at least one KEY=VALUE positional argument is present,
-/// form-encodes all parameters (positional + `--param-file`), and resolves
-/// the target host.
-///
-/// Arguments:
-///   - `allocator`: Used for internal allocations.
-///   - `args`: Parsed CLI arguments from `parseArgs`.
-///
-/// Errors:
-///   - `error.MissingScheduleArgs` — no KEY=VALUE positional arguments.
-///   - `error.PathContainsNullByte` — a `--param-file` path contains `\x00`.
-///   - Any error from file I/O, host resolution, or allocator OOM.
-fn buildScheduleRequest(
-    allocator: std.mem.Allocator,
-    args: *const Args,
-) !ScheduleConfig {
-    if (args.kv_params.items.len < 1) return error.MissingScheduleArgs;
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-    const arena_alloc = arena.allocator();
-
-    // All kv_params are KEY=VALUE pairs (no PATH for schedule).
-    const params_encoded = try buildFormParams(allocator, arena_alloc, args.kv_params.items, args.param_files.items);
-
-    const host_res = try config.resolveHost(
-        arena_alloc,
-        args.osd,
-        args.o3,
-        args.odn,
-        args.host,
-    );
-
-    return .{
-        .host = host_res.url,
-        .params_encoded = params_encoded,
-        .monitor_jobs = args.schedule_monitor,
-        .follow = args.follow,
-        .poll_interval = args.poll_interval orelse 1,
-        .name = args.name,
         .arena = arena,
     };
 }
@@ -1530,7 +1959,7 @@ test "buildRequest: absolute URL with port preserves port in host" {
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit();
 
-    // Port must be preserved — without the fix this returns "http://172.19.203.185"
+    // Port must be preserved. Without the fix this returns "http://172.19.203.185"
     try std.testing.expectEqualStrings("http://172.19.203.185:8080", req_cfg.host);
     try std.testing.expectEqualStrings("jobs/1", req_cfg.path);
 }
@@ -1800,6 +2229,191 @@ test "buildRequest: default User-Agent is openQAclient" {
         }
     }
     try std.testing.expect(found);
+}
+
+/// Transform parsed CLI arguments into an `ArchiveConfig` ready for `zoqa.runArchive()`.
+///
+/// Validates the presence of required positional arguments (`JOB_ID` and `OUTPUT_PATH`),
+/// parses the `JOB_ID` as a base-10 integer, and resolves the target host/alias.
+///
+/// It intentionally does NOT populate connection-related options like `.credentials`,
+/// `.retries`, or `.quiet`: these are supplied by the caller in `main()` from shared
+/// environment and configuration file resolution.
+///
+/// Arguments:
+///   - `allocator`: Used for internal allocations (like host resolution buffers).
+///     Owned buffers are tracked inside the returned `ArchiveConfig` and freed by its `deinit`.
+///   - `args`: Parsed CLI arguments from `parseArgs`. Borrowed — the caller must keep
+///     it alive for the lifetime of the returned `ArchiveConfig`.
+///
+/// Returns:
+///   - `ArchiveConfig` containing the resolved arguments.
+///
+/// Errors:
+///   - `error.MissingArchiveArgs`: If fewer than 2 positional arguments were provided.
+///   - `error.InvalidJobId`: If the `JOB_ID` positional argument is not a valid integer.
+fn buildArchiveRequest(
+    allocator: std.mem.Allocator,
+    args: *const Args,
+) !ArchiveConfig {
+    if (args.kv_params.items.len < 2) return error.MissingArchiveArgs;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const job_id = std.fmt.parseInt(u64, args.kv_params.items[0], 10) catch
+        return error.InvalidJobId;
+    const output_path = args.kv_params.items[1];
+
+    const host_res = try config.resolveHost(
+        arena_alloc,
+        args.osd,
+        args.o3,
+        args.odn,
+        args.host,
+    );
+
+    return .{
+        .host = host_res.url,
+        .job_id = job_id,
+        .output_path = output_path,
+        .options = .{
+            .with_thumbnails = args.with_thumbnails,
+            .asset_size_limit = args.asset_size_limit orelse 209_715_200,
+        },
+        .arena = arena,
+    };
+}
+
+const MonitorConfig = struct {
+    host: []const u8,
+    job_ids: []const u64,
+    follow: bool,
+    poll_interval: u64,
+    arena: std.heap.ArenaAllocator,
+
+    fn deinit(self: *MonitorConfig) void {
+        self.arena.deinit();
+    }
+};
+
+/// Transform parsed CLI arguments into a `MonitorConfig` ready for the monitor loop.
+///
+/// Arguments:
+///   - `allocator`: Backing allocator for the internal arena.
+///   - `args`: Parsed CLI arguments from `parseArgs`.
+///
+/// Returns: A populated `MonitorConfig`. The caller owns the arena and must
+/// call `deinit()` when done.
+///
+/// Errors:
+///   - `error.MissingMonitorArgs` : no job ID positional arguments.
+///   - `error.InvalidJobId` : a positional is not a valid u64.
+///   - Host resolution or allocator errors.
+fn buildMonitorRequest(
+    allocator: std.mem.Allocator,
+    args: *const Args,
+) !MonitorConfig {
+    if (args.kv_params.items.len < 1) return error.MissingMonitorArgs;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var job_ids = try arena_alloc.alloc(u64, args.kv_params.items.len);
+    for (args.kv_params.items, 0..) |param, i| {
+        job_ids[i] = std.fmt.parseInt(u64, param, 10) catch
+            return error.InvalidJobId;
+    }
+
+    const host_res = try config.resolveHost(
+        arena_alloc,
+        args.osd,
+        args.o3,
+        args.odn,
+        args.host,
+    );
+
+    return .{
+        .host = host_res.url,
+        .job_ids = job_ids,
+        .follow = args.follow,
+        .poll_interval = args.poll_interval orelse 10,
+        .arena = arena,
+    };
+}
+
+/// ScheduleConfig is a transitional container: it bridges the gap between
+/// raw CLI argument parsing (parseArgs → Args) and the library's public API
+/// (runSchedule / ScheduleOptions).
+const ScheduleConfig = struct {
+    /// Resolved base URL of the target openQA instance.
+    host: []const u8,
+    /// Pre-encoded form body string for POST /api/v1/isos.
+    params_encoded: []const u8,
+    /// Whether --monitor was specified.
+    monitor_jobs: bool,
+    /// Whether --follow was specified.
+    follow: bool,
+    /// Polling interval in seconds (default 1 for schedule).
+    poll_interval: u64,
+    /// User-Agent header value.
+    name: []const u8,
+    arena: std.heap.ArenaAllocator,
+
+    fn deinit(self: *ScheduleConfig) void {
+        self.arena.deinit();
+    }
+};
+
+/// Transform parsed CLI arguments into a `ScheduleConfig` ready for `zoqa.runSchedule()`.
+///
+/// Validates that at least one KEY=VALUE positional argument is present,
+/// form-encodes all parameters (positional + `--param-file`), and resolves
+/// the target host.
+///
+/// Arguments:
+///   - `allocator`: Used for internal allocations.
+///   - `args`: Parsed CLI arguments from `parseArgs`.
+///
+/// Returns: A populated `ScheduleConfig`. The caller owns the arena and must
+/// call `deinit()` when done.
+///
+/// Errors:
+///   - `error.MissingScheduleArgs` : no KEY=VALUE positional arguments.
+///   - `error.PathContainsNullByte` : a `--param-file` path contains `\x00`.
+///   - Any error from file I/O, host resolution, or allocator OOM.
+fn buildScheduleRequest(
+    allocator: std.mem.Allocator,
+    args: *const Args,
+) !ScheduleConfig {
+    if (args.kv_params.items.len < 1) return error.MissingScheduleArgs;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    // All kv_params are KEY=VALUE pairs (no PATH for schedule).
+    const params_encoded = try buildFormParams(allocator, arena_alloc, args.kv_params.items, args.param_files.items);
+
+    const host_res = try config.resolveHost(
+        arena_alloc,
+        args.osd,
+        args.o3,
+        args.odn,
+        args.host,
+    );
+
+    return .{
+        .host = host_res.url,
+        .params_encoded = params_encoded,
+        .monitor_jobs = args.schedule_monitor,
+        .follow = args.follow,
+        .poll_interval = args.poll_interval orelse 1,
+        .name = args.name,
+        .arena = arena,
+    };
 }
 
 test "buildArchiveRequest: valid positional arguments" {
@@ -2111,14 +2725,14 @@ test "mergeCredentials: partial secret only returns null (no key anywhere)" {
 }
 
 // ---------------------------------------------------------------------------
-// printResponse — format and write HTTP response to stdout/stderr
+// printResponse : format and write HTTP response to stdout/stderr
 // ---------------------------------------------------------------------------
 
 /// Write the HTTP response to stdout (and optionally stderr), implementing
 /// verbose headers, link header parsing and body
 /// output with optional JSON pretty-printing.
 ///
-/// This is a pure output helper with no control-flow side effects — it never
+/// This is a pure output helper with no control-flow side effects: it never
 /// calls `std.process.exit`. The caller (`main()`) is responsible for the exit
 /// code.
 ///
@@ -2217,6 +2831,23 @@ fn printResponse(
 // main
 // ---------------------------------------------------------------------------
 
+/// Entry point for the `zoqa` CLI: parse arguments, resolve credentials, and
+/// dispatch to the appropriate subcommand handler (`api`, `archive`, `monitor`,
+/// or `schedule`).
+///
+/// Most argument and runtime errors are handled internally: invalid subcommands
+/// and missing required positionals print help to stderr and call
+/// `std.process.exit(255)`; request/network failures call `std.process.exit(1)`.
+/// Only a small set of errors propagate to the OS as a non-zero exit from the
+/// error-union return:
+///
+/// Errors:
+///   - `error.PathContainsNullByte` : `--data-file` path contains `\x00`.
+///   - `error.InvalidConnectTimeout` : `OPENQA_CLI_CONNECT_TIMEOUT` env var
+///     is present but cannot be parsed as a floating-point number.
+///   - Any I/O error from reading `--data-file` / stdin or from loading
+///     `~/.config/openqa/client.conf` via `config.findCredentials`.
+///   - `error.OutOfMemory` from any internal allocation.
 pub fn main() !void {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();
@@ -2560,6 +3191,10 @@ const help_schedule_options =
     \\
 ;
 
+/// Print the top-level zoqa usage block.
+///
+/// Arguments:
+///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
@@ -2578,6 +3213,9 @@ fn printHelp(is_error: bool) void {
 
 /// Print the `api` subcommand usage block.
 /// Called when PATH is missing (exit 255, per Perl reference behavior).
+///
+/// Arguments:
+///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printApiHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
@@ -2592,6 +3230,9 @@ fn printApiHelp(is_error: bool) void {
 }
 
 /// Print the `archive` subcommand usage block.
+///
+/// Arguments:
+///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printArchiveHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
@@ -2606,6 +3247,9 @@ fn printArchiveHelp(is_error: bool) void {
 }
 
 /// Print the `monitor` subcommand usage block.
+///
+/// Arguments:
+///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printMonitorHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
@@ -2620,6 +3264,9 @@ fn printMonitorHelp(is_error: bool) void {
 }
 
 /// Print the `schedule` subcommand usage block.
+///
+/// Arguments:
+///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printScheduleHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
