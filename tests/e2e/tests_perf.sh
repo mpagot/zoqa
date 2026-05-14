@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2153
 # tests_perf.sh — Section G: Performance comparison tests.
 #
 # Compares wall-clock execution time and peak RSS (resident set size) between

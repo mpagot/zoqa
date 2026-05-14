@@ -124,7 +124,7 @@ MONITOR_JOB_ID=$(schedule_job \
 echo "  MONITOR_JOB_ID=$MONITOR_JOB_ID"
 
 # Give the worker a moment to pick up the job before cancelling.
-sleep 5
+e2e_sleep 5
 
 # MON-8: Cancel the sleep job
 echo "--- Setup: Cancel MONITOR_JOB_ID ($MONITOR_JOB_ID) ---"

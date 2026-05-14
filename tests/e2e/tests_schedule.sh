@@ -207,7 +207,7 @@ else
 fi
 
 # Give the async job time to be created by the server before next test.
-sleep 5
+e2e_sleep 5
 
 # Wait for any async-created jobs to finish (free the worker).
 # Query the scheduled product to find the job IDs.

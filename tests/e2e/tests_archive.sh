@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2153
 # tests_archive.sh — Section H: Archive subcommand tests.
 #
 # Tests for the `archive` subcommand which downloads assets and test results

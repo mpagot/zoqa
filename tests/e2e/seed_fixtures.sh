@@ -175,8 +175,14 @@ if [[ "$DRY_RUN" == "false" ]]; then
 	[[ -f "$FIXTURE_DIR/scenario-definitions.yaml" ]] ||
 		die "scenario-definitions.yaml not found at $FIXTURE_DIR"
 	cp "$FIXTURE_DIR/scenario-definitions.yaml" "$_SCENARIO_YAML_PATH"
+	cp "$FIXTURE_DIR/chained-scenario-definitions.yaml" "/tmp/chained-scenario.yaml"
+	cp "$FIXTURE_DIR/fanout-scenario-definitions.yaml" "/tmp/fanout-scenario.yaml"
+	cp "$FIXTURE_DIR/multilayer-scenario-definitions.yaml" "/tmp/multilayer-scenario.yaml"
+	cp "$FIXTURE_DIR/diamond-scenario-definitions.yaml" "/tmp/diamond-scenario.yaml"
+	cp "$FIXTURE_DIR/parallel-scenario-definitions.yaml" "/tmp/parallel-scenario.yaml"
 else
 	echo "[DRY-RUN] cp $FIXTURE_DIR/scenario-definitions.yaml $_SCENARIO_YAML_PATH"
+	echo "[DRY-RUN] cp $FIXTURE_DIR/chained-scenario-definitions.yaml /tmp/chained-scenario.yaml"
 fi
 
 # ---------------------------------------------------------------------------
@@ -189,6 +195,25 @@ else
 	cat >"$IDS_FILE" <<EOF
 GROUP_ID=$GROUP_ID
 EOF
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Setup Additional Workers
+# ---------------------------------------------------------------------------
+log "Setting up additional openQA worker (instance 2)..."
+if [[ "$DRY_RUN" == "false" ]]; then
+	cat <<EOF >> /etc/openqa/workers.ini
+
+[2]
+WORKER_CLASS = qemu_x86_64,qemu_i686,qemu_i586
+EOF
+	install -d -m 0755 -o _openqa-worker /var/lib/openqa/pool/2
+	su _openqa-worker -c "/usr/share/openqa/script/worker --instance 2 &"
+else
+	echo "[DRY-RUN] Setting up worker instance 2..."
+fi
+
+if [[ "$DRY_RUN" == "false" ]]; then
 	log "Seeding complete."
 	cat "$IDS_FILE"
 fi
