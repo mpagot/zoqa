@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2153
 # tests_data.sh — Section C: Seeded data tests.
 #
 # Tests against real objects created by ensure_basic_job(): jobs, assets,

@@ -1,0 +1,23 @@
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  layer_grandparent:
+    product: "example"
+    machine: "64bit"
+  layer_parent:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_grandparent"
+  layer_child:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_parent"

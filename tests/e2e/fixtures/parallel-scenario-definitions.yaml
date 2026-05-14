@@ -1,0 +1,18 @@
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  parallel_parent:
+    product: "example"
+    machine: "64bit"
+  parallel_child:
+    product: "example"
+    machine: "64bit"
+    settings:
+      PARALLEL_WITH: "parallel_parent"
