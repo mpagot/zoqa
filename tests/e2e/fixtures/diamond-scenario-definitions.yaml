@@ -1,0 +1,28 @@
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  diamond_root:
+    product: "example"
+    machine: "64bit"
+  diamond_left:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "diamond_root"
+  diamond_right:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "diamond_root"
+  diamond_merge:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "diamond_left,diamond_right"

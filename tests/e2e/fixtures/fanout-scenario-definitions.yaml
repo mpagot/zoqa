@@ -1,0 +1,28 @@
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  fanout_parent:
+    product: "example"
+    machine: "64bit"
+  fanout_child_a:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "fanout_parent"
+  fanout_child_b:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "fanout_parent"
+  fanout_child_c:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "fanout_parent"
