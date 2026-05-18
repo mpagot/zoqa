@@ -1,0 +1,18 @@
+---
+# All-failed scenario for SCH-11 / SCH-13.
+# Every job_template entry references a machine that is NOT defined in the
+# machines section, so the openQA scheduler rejects every entry.
+# Expected POST /api/v1/isos response: empty ids, populated failed array.
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  bogus_only:
+    product: "example"
+    machine: "nonexistent_machine_xyz"

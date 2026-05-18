@@ -579,3 +579,82 @@ run_diff_test() {
 		failed_tests=$((failed_tests + 1))
 	fi
 }
+
+# ===========================================================================
+# Audit Log Helpers
+#
+# Query the openQA admin audit log from the host side.  All helpers require
+# an active session cookie inside the container; call audit_login once at
+# the start of the test suite.
+# ===========================================================================
+
+# Container-side cookie jar used by audit helpers.
+_AUDIT_COOKIE_JAR="/tmp/e2e_audit_cookies.txt"
+
+# ---------------------------------------------------------------------------
+# audit_login — Authenticate as the Demo user inside the container.
+#
+# Creates a session cookie at $_AUDIT_COOKIE_JAR that subsequent audit_*
+# helpers reuse.  Safe to call multiple times (overwrites the cookie).
+# ---------------------------------------------------------------------------
+audit_login() {
+	container_exec bash -c \
+		"curl -s -c $_AUDIT_COOKIE_JAR -b $_AUDIT_COOKIE_JAR 'http://localhost/login?user=Demo' >/dev/null"
+}
+
+# ---------------------------------------------------------------------------
+# audit_max_id — Print the highest audit event ID currently in the log.
+#
+# Returns "0" if the log is empty.
+# ---------------------------------------------------------------------------
+audit_max_id() {
+	container_exec bash -c \
+		"curl -s -g -b $_AUDIT_COOKIE_JAR 'http://localhost/admin/auditlog/ajax?order%5B0%5D%5Bcolumn%5D=0&order%5B0%5D%5Bdir%5D=desc&length=1' | jq -r '.data[0].id // 0'"
+}
+
+# ---------------------------------------------------------------------------
+# audit_events_since SINCE_ID [EVENT_FILTER]
+#
+# Print audit events with id > SINCE_ID.  Each line is JSON with keys:
+# id, event, event_data, event_time, user.
+#
+# EVENT_FILTER (optional): when provided, only events whose .event field
+# equals this string are returned (e.g. "iso_create").
+#
+# Output: one JSON object per line, or empty if no matching events.
+# ---------------------------------------------------------------------------
+audit_events_since() {
+	local since_id="$1"
+	local event_filter="${2:-}"
+	local jq_filter
+
+	if [[ -n "$event_filter" ]]; then
+		jq_filter=".data[] | select(.id > $since_id and .event == \"$event_filter\")"
+	else
+		jq_filter=".data[] | select(.id > $since_id)"
+	fi
+
+	container_exec bash -c \
+		"curl -s -g -b $_AUDIT_COOKIE_JAR 'http://localhost/admin/auditlog/ajax?order%5B0%5D%5Bcolumn%5D=0&order%5B0%5D%5Bdir%5D=asc&length=100' | jq -c '$jq_filter'"
+}
+
+# ---------------------------------------------------------------------------
+# audit_count_since SINCE_ID [EVENT_FILTER]
+#
+# Print the count of audit events with id > SINCE_ID.  Accepts the same
+# optional EVENT_FILTER as audit_events_since.
+# ---------------------------------------------------------------------------
+audit_count_since() {
+	local since_id="$1"
+	local event_filter="${2:-}"
+	local jq_filter
+
+	if [[ -n "$event_filter" ]]; then
+		jq_filter="[.data[] | select(.id > $since_id and .event == \"$event_filter\")] | length"
+	else
+		jq_filter="[.data[] | select(.id > $since_id)] | length"
+	fi
+
+	container_exec bash -c \
+		"curl -s -g -b $_AUDIT_COOKIE_JAR 'http://localhost/admin/auditlog/ajax?order%5B0%5D%5Bcolumn%5D=0&order%5B0%5D%5Bdir%5D=asc&length=100' | jq -r '$jq_filter'"
+}
