@@ -180,9 +180,17 @@ if [[ "$DRY_RUN" == "false" ]]; then
 	cp "$FIXTURE_DIR/multilayer-scenario-definitions.yaml" "/tmp/multilayer-scenario.yaml"
 	cp "$FIXTURE_DIR/diamond-scenario-definitions.yaml" "/tmp/diamond-scenario.yaml"
 	cp "$FIXTURE_DIR/parallel-scenario-definitions.yaml" "/tmp/parallel-scenario.yaml"
+	cp "$FIXTURE_DIR/all-failed-scenario-definitions.yaml" "/tmp/all-failed-scenario.yaml"
+	cp "$FIXTURE_DIR/partial-scenario-definitions.yaml" "/tmp/partial-scenario.yaml"
+	cp "$FIXTURE_DIR/exp-bogus-product-ref-scenario-definitions.yaml" "/tmp/exp-bogus-product-ref-scenario.yaml"
+	cp "$FIXTURE_DIR/exp-partial-bogus-product-scenario-definitions.yaml" "/tmp/exp-partial-bogus-product-scenario.yaml"
+	cp "$FIXTURE_DIR/exp-empty-job-templates-scenario-definitions.yaml" "/tmp/exp-empty-job-templates-scenario.yaml"
 else
 	echo "[DRY-RUN] cp $FIXTURE_DIR/scenario-definitions.yaml $_SCENARIO_YAML_PATH"
 	echo "[DRY-RUN] cp $FIXTURE_DIR/chained-scenario-definitions.yaml /tmp/chained-scenario.yaml"
+	echo "[DRY-RUN] cp $FIXTURE_DIR/all-failed-scenario-definitions.yaml /tmp/all-failed-scenario.yaml"
+	echo "[DRY-RUN] cp $FIXTURE_DIR/partial-scenario-definitions.yaml /tmp/partial-scenario.yaml"
+	echo "[DRY-RUN] cp exp-* fixtures to /tmp/"
 fi
 
 # ---------------------------------------------------------------------------

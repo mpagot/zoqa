@@ -1,0 +1,17 @@
+---
+# Experiment fixture: single job_template references a product key that is
+# NOT defined in the products section. Hypothesis: openQA's scheduler
+# rejects this entry, populating failed/failed_job_info.
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  bogus_only:
+    product: "undefined_product_key_xyz"
+    machine: "64bit"
