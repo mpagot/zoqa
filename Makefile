@@ -49,6 +49,9 @@ zig-build-debug:
 zig-build-release:
 	zig build -Doptimize=ReleaseFast -Dstrip=true
 
+# -----------------------------------------------------------------------------
+# Unit Tests
+# -----------------------------------------------------------------------------
 zig-test: zig-test-discovery
 	zig build test --summary all
 
