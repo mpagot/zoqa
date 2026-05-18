@@ -60,6 +60,10 @@ if [[ "$perl_stdout_headers" -gt 0 || "$perl_stderr_headers" -gt 0 ]]; then
 		echo "PASS (Zig matches Perl header output)"
 	else
 		echo "FAIL: Zig header output ($zig_stdout_headers stdout / $zig_stderr_headers stderr) does not match Perl ($perl_stdout_headers stdout / $perl_stderr_headers stderr)"
+		echo "  PERL stdout headers:"
+		grep -E '^[A-Za-z_-]+: ' "$LOG_DIR/verbose_perl_stdout.log" | sed 's/^/    /'
+		echo "  ZIG  stdout headers:"
+		grep -E '^[A-Za-z_-]+: ' "$LOG_DIR/verbose_zig_stdout.log" | sed 's/^/    /'
 		failed_tests=$((failed_tests + 1))
 	fi
 else

@@ -741,3 +741,31 @@ for id in $_m42_perl_ids $_m42_zig_ids; do
 	if [[ -n "$id" ]]; then wait_for_job "$id" 300 >/dev/null || true; fi
 done
 
+# =============================================================================
+# Section M-Host: Host Resolution Tests (M43–M44)
+#
+# Validates that zoqa-clone-job uses different host resolution rules from zoqa api:
+#   - Bare "localhost" → http:// (not https://).  Matches Perl Client.pm:url_from_host.
+#   - Bare non-localhost → https://.
+# Contrast with test 41a in tests_core.sh where zoqa api bare "localhost" → https://.
+# =============================================================================
+
+echo "--- Test M43: bare --host localhost → http:// (clone succeeds) ---"
+# Clone-job special-cases bare 'localhost' → http:// (not https://).
+# The container serves openQA on http://localhost, so the clone should succeed.
+# If normalizeHostUrl wrongly used https://, this would fail with a TLS error.
+run_capture_both "clone43" \
+	"$PERL_CLONE_EXE --from http://localhost --host localhost --skip-download $JOB_ID" \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost --skip-download $JOB_ID"
+assert_capture_exits "clone43" 0
+assert_stdout_pattern "clone43" "http://localhost/tests/"
+
+echo "--- Test M44: bare --host 127.0.0.1 → https:// → TLS error ---"
+# 127.0.0.1 doesn't match the 'localhost' substring check, so gets https://.
+# Container's HTTPS uses a self-signed cert → TLS handshake failure → exit non-zero.
+# This mirrors test 41a in tests_core.sh but for the clone-job binary.
+run_test "PERL: bare --host 127.0.0.1 → https:// → TLS error (exit non-zero)" \
+	"bash -c \"$PERL_CLONE_EXE --from http://localhost --host 127.0.0.1 --skip-download $JOB_ID; test \\\$? -ne 0\"" 0
+run_test "ZIG : bare --host 127.0.0.1 → https:// → TLS error (exit non-zero)" \
+	"bash -c \"$ZIG_CLONE_EXE --from http://localhost --host 127.0.0.1 --skip-download $JOB_ID; test \\\$? -ne 0\"" 0
+
