@@ -53,7 +53,7 @@ fuzz-build:
 # -----------------------------------------------------------------------------
 # Unit Tests
 # -----------------------------------------------------------------------------
-zig-test:
+zig-test: zig-test-discovery
 	zig build test --summary all
 
 # Verify every `test` block declared in src/*.zig is actually executed by the

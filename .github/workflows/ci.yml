@@ -25,7 +25,7 @@ jobs:
       # It will continue to work via the runner compatibility shim until Sep 2026.
       - uses: mlugg/setup-zig@v2
       - name: Check formatting
-        run: zig fmt --check src/
+        run: make zig-lint
 
   build-and-test:
     name: Build & Test (${{ matrix.os }})
@@ -72,6 +72,7 @@ jobs:
       - name: Build
         run: zig build --summary all
       # Same rationale as above applies to `zig build test` vs `make zig-test`.
+      # zig-test-discovery is executed on linux only (and it is enough)
       - name: Test
         run: zig build test --summary all
 
