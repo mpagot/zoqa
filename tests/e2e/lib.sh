@@ -59,6 +59,17 @@ _OPENQA_E2E_LIB_LOADED=1
 : "${LOG_PREFIX:=e2e}"
 
 # ---------------------------------------------------------------------------
+# CirrOS test image settings (single source of truth)
+# ---------------------------------------------------------------------------
+CIRROS_VERSION="0.6.3"
+CIRROS_ARCH="x86_64"
+CIRROS_ORIG="cirros-${CIRROS_VERSION}-${CIRROS_ARCH}-disk.img"
+CIRROS_IMG="cirros-${CIRROS_VERSION}-${CIRROS_ARCH}-disk.qcow2"
+CIRROS_URL="https://download.cirros-cloud.net/${CIRROS_VERSION}/${CIRROS_ORIG}"
+CIRROS_TESTDIR="/var/lib/openqa/share/tests/cirros"
+export CIRROS_VERSION CIRROS_ARCH CIRROS_ORIG CIRROS_IMG CIRROS_URL CIRROS_TESTDIR
+
+# ---------------------------------------------------------------------------
 # log() — print a prefixed informational message to stdout
 #
 # Uses $LOG_PREFIX (default: "e2e").
@@ -337,9 +348,9 @@ _E2E_JOB_COMMON_ARGS=(
 	VERSION=0
 	FLAVOR=DVD
 	ARCH=x86_64
-	HDD_1="cirros-0.6.3-x86_64-disk.qcow2"
+	HDD_1="$CIRROS_IMG"
 	ISO_1="seed-nocloud.iso"
-	CASEDIR="/var/lib/openqa/share/tests/cirros"
+	CASEDIR="$CIRROS_TESTDIR"
 	NEEDLES_DIR="%CASEDIR%/needles"
 )
 
@@ -433,7 +444,7 @@ ensure_stress_job() {
 		ARCH=x86_64 \
 		BUILD=e2e-stress \
 		BACKEND=null \
-		CASEDIR="/var/lib/openqa/share/tests/cirros" \
+		CASEDIR="$CIRROS_TESTDIR" \
 		NEEDLES_DIR="%CASEDIR%/needles" \
 		STRESSTEST=1 \
 		STRESS_STEPS="$stress_steps" \

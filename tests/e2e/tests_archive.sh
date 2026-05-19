@@ -647,7 +647,7 @@ echo "--- Test: ZIG : CirrOS image size is non-zero ---"
 if [[ "$DRY_RUN" == "true" ]]; then
 	echo "PASS (DRY-RUN)"
 else
-	IMG_SIZE=$(container_exec stat -c%s "/tmp/arc_zig_rich/hdd/cirros-0.6.3-x86_64-disk.qcow2")
+	IMG_SIZE=$(container_exec stat -c%s "/tmp/arc_zig_rich/hdd/$CIRROS_IMG")
 	if [[ "$IMG_SIZE" -gt 20000000 ]]; then
 		echo "PASS ($IMG_SIZE bytes)"
 	else
@@ -661,7 +661,7 @@ echo "--- Test: DIFF asset file size parity ---"
 if [[ "$DRY_RUN" == "true" ]]; then
 	echo "PASS (DRY-RUN)"
 else
-	P_IMG_SIZE=$(container_exec stat -c%s "/tmp/arc_perl_rich/hdd/cirros-0.6.3-x86_64-disk.qcow2")
+	P_IMG_SIZE=$(container_exec stat -c%s "/tmp/arc_perl_rich/hdd/$CIRROS_IMG")
 	if [[ "$P_IMG_SIZE" -eq "$IMG_SIZE" ]]; then
 		echo "PASS"
 	else

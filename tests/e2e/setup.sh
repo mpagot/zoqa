@@ -211,6 +211,34 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Pre-download CirrOS image on the host and inject into the container
+#
+# Downloading inside the container often fails (DNS, proxy, or network
+# namespace issues).  By fetching on the host — where connectivity is proven
+# — and copying into the container, seed_fixtures.sh will find the file
+# already in place and skip its own download.
+# -----------------------------------------------------------------------------
+HDD_DIR="/var/lib/openqa/share/factory/hdd"
+_CIRROS_CACHE="/tmp/$CIRROS_IMG"
+
+if [[ "$DRY_RUN" == "true" ]]; then
+	echo "[DRY-RUN] curl -sSf -L -o $_CIRROS_CACHE $CIRROS_URL"
+	echo "[DRY-RUN] podman cp $_CIRROS_CACHE $CONTAINER_NAME:$HDD_DIR/$CIRROS_IMG"
+else
+	if [[ ! -f "$_CIRROS_CACHE" ]]; then
+		log "Downloading CirrOS image on host..."
+		if ! curl -sSf -L -o "$_CIRROS_CACHE" "$CIRROS_URL"; then
+			die "curl failed on host: curl -sSf -L -o $_CIRROS_CACHE $CIRROS_URL"
+		fi
+	else
+		log "CirrOS image cached at $_CIRROS_CACHE, reusing."
+	fi
+	container_exec mkdir -p "$HDD_DIR"
+	podman cp "$_CIRROS_CACHE" "$CONTAINER_NAME:$HDD_DIR/$CIRROS_IMG"
+	log "CirrOS image injected into container at $HDD_DIR/$CIRROS_IMG"
+fi
+
+# -----------------------------------------------------------------------------
 # Fixture Seeding
 # -----------------------------------------------------------------------------
 if [[ "$DRY_RUN" == "true" ]]; then
