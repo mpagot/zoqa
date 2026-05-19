@@ -1,0 +1,82 @@
+@startuml zoqa_runschedule_sequence
+title runSchedule — three response paths (sync / async / async + monitor)
+
+' Handwritten/xkcd render: use the modern !option directive (skinparam handwritten
+' is deprecated and embeds a watermark warning in the SVG).
+!option handwritten true
+skinparam defaultFontName "xkcd Script"
+skinparam backgroundColor #fffff8
+skinparam sequenceMessageAlign center
+skinparam shadowing false
+skinparam ParticipantBackgroundColor #FFE082
+skinparam ParticipantBorderColor #555555
+skinparam SequenceLifeLineBackgroundColor #FFF8E1
+skinparam SequenceGroupBackgroundColor #F5F5F5
+
+actor "User /\nmain.zig" as User
+participant "schedule.zig\nrunSchedule" as RS
+participant "http_client.zig\nopenQAReq" as HTTP
+participant "openQA REST API\n/api/v1/isos" as API
+participant "monitor.zig\nrunMonitor" as MON
+
+User -> RS : runSchedule(alloc, client, host,\nparams_encoded, options)
+activate RS
+
+RS -> HTTP : POST /api/v1/isos (form-encoded params)
+activate HTTP
+HTTP -> API : HTTPS POST + HMAC auth headers
+API --> HTTP : HTTP response (status, body)
+HTTP --> RS : APIResponse { status, body }
+deactivate HTTP
+
+RS -> RS : parse JSON\n(checkFailedEntries,\nroot.get("error"))
+
+alt root.failed not empty OR root.error set
+    RS --> User : return 1
+else status 2xx + has "ids" array (sync path)
+    RS -> RS : extractJobIds → print job URLs
+    alt --monitor flag
+        RS -> MON : runMonitor(alloc, client, host, job_ids, opts)
+        MON --> RS : 0 (pass), 2 (fail), 1 (error)
+        RS --> User : exit code from runMonitor
+    else no --monitor
+        RS --> User : return 0
+    end
+else status 2xx + empty "ids" (sync, no products matched)
+    RS --> User : return 0 (Perl parity)
+else status 2xx + only "scheduled_product_id" (async path)
+    alt --monitor flag
+        RS -> RS : asyncPollAndMonitor()
+        loop until status leaves "added"/"scheduling"
+            RS -> HTTP : GET /api/v1/isos/{spid}
+            HTTP -> API : HTTPS GET
+            API --> HTTP : status: added | scheduling | scheduled | cancelled | ...
+            HTTP --> RS : APIResponse
+            opt status in {added, scheduling}
+                RS -> RS : sleep(poll_interval)
+            end
+        end
+        alt status == "cancelled" or unknown
+            RS --> User : return 1
+        else status == "scheduled"
+            RS -> RS : extractJobIds from results.successful_job_ids
+            RS -> MON : runMonitor(...)
+            MON --> RS : exit code
+            RS --> User : exit code
+        end
+    else no --monitor
+        RS --> User : return 0 (async, no output per Perl)
+    end
+end
+
+deactivate RS
+
+note over RS
+  Source: src/schedule.zig
+  Sync: id list present.
+  Async: scheduled_product_id only.
+  Polling loops indefinitely
+  (no timeout, Perl parity).
+end note
+
+@enduml
