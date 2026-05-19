@@ -1,0 +1,67 @@
+# D5 — Allocator lifetime: where the GeneralPurposeAllocator is created,
+# how it propagates explicitly through every function that allocates,
+# and where heap-owned data is freed.
+
+direction: down
+
+main: "main() in *_main.zig" {
+  shape: rectangle
+  style.fill: "#ce93d8"
+
+  gpa: "var gpa = GeneralPurposeAllocator{}\nconst allocator = gpa.allocator()"
+  defer_gpa: "defer _ = gpa.deinit()" {
+    style.stroke: "#c62828"
+  }
+}
+
+parse: "parseArgs(allocator, argv)\n→ Args { ArrayLists owned by allocator }" {
+  shape: rectangle
+  style.fill: "#ede7f6"
+  defer_args: "defer args.deinit(allocator)"
+}
+
+workflow: "runSchedule / runArchive / runMonitor\n(allocator, client, host, ..., opts)" {
+  shape: rectangle
+  style.fill: "#ffcdd2"
+
+  inner: "Each call site allocates explicitly\n(allocPrint, dupe, ArrayList.append, etc.)"
+  arena: "JSON parsing: parseFromSlice(value, allocator, body, .{})\n→ Parsed.deinit() frees the whole parse tree" {
+    style.fill: "#fff3cd"
+  }
+}
+
+http: "openQAReq / execute / openQARawGet\n(every entry takes `allocator`)" {
+  shape: rectangle
+  style.fill: "#e3f2fd"
+
+  body: "body_aw: ArrayList(u8) appended chunk-by-chunk"
+  decomp: "gzip: decompressed into a second ArrayList"
+  resp: "→ APIResponse { body, headers owned by allocator }"
+  defer_resp: "caller: defer resp.deinit()" {
+    style.stroke: "#c62828"
+  }
+}
+
+walker: "DependencyWalker (clone_job.zig)\nworklist + collected: ArrayList(WorkItem / CollectedEntry)" {
+  shape: rectangle
+  style.fill: "#e0f2f1"
+
+  hint: "init(allocator, ...) / next() / feed(allocator, ...)\nallocator is passed on every grow"
+}
+
+rules: "Rules" {
+  shape: callout
+  style.fill: "#f5f5f5"
+  r1: "1. No global allocators."
+  r2: "2. Every fn that allocates takes std.mem.Allocator."
+  r3: "3. defer pairs with every allocation that owns memory."
+  r4: "4. Tests pass std.testing.allocator → use-after-free / leak detection."
+}
+
+main.gpa -> parse: "allocator"
+parse -> workflow: "allocator"
+workflow -> http: "allocator"
+workflow.inner -> walker: "allocator (clone-job only)"
+walker -> http: "allocator"
+http.body -> http.decomp: "ownership transfers"
+http.decomp -> http.resp: "wrapped"

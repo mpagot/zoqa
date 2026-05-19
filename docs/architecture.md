@@ -135,3 +135,91 @@ clone_job_main.zig -> zoqa (root.zig)
 
 The library (`root.zig`) has no knowledge of `arg_match` or `cli_credentials`.
 Those modules depend downward on `zoqa` — never the reverse.
+
+---
+
+## Architecture Diagrams
+
+The diagrams below are authored as text (diagram-as-code) under
+`docs/diagrams/` and rendered with the
+[`mpagot/swgraph`](https://github.com/mpagot/swgraph) container. Source
+files are committed alongside their rendered PNGs; SVGs are regenerated on
+demand (gitignored). The committed PNGs are the hand-drawn / xkcd-style
+variants — they were produced with `--sketch`.
+
+To re-render everything after edits, run the helper script:
+
+```bash
+./docs/diagrams/render.sh --sketch     # canonical: hand-drawn style
+./docs/diagrams/render.sh              # plain (clean-line) variant
+```
+
+The script auto-discovers source files, picks `podman` or `docker`, and pulls
+the `mpagot/swgraph` image (override with `SWGRAPH_IMAGE=...`).
+
+### 1. Layered modules
+
+Tiered structure: executables and CLI-shared modules sit above the library
+facade; the library itself is acyclic, leaves at the bottom.
+
+![Tiered module map](diagrams/zoqa_tiered_modules.png)
+
+Source: [`zoqa_tiered_modules.d2`](diagrams/zoqa_tiered_modules.d2) · d2
+
+### 2. Data flow (CLI → server → stdout)
+
+The request path (solid) and the response path (dotted) — argv/env/config in
+on the left, `stdout` / filesystem out on the right.
+
+![Data flow](diagrams/zoqa_data_flow.png)
+
+Source: [`zoqa_data_flow.d2`](diagrams/zoqa_data_flow.d2) · d2
+
+### 3. User interaction with the CLI
+
+What the operator sees: two executables, four subcommands on `zoqa`, plus
+`zoqa-clone-job`. Environment and config files feed in at startup.
+
+![User interaction](diagrams/zoqa_user_interaction.png)
+
+Source: [`zoqa_user_interaction.d2`](diagrams/zoqa_user_interaction.d2) · d2
+
+### 4. Dependency injection seam (`client: anytype`)
+
+The same workflow function body is driven by three distinct concrete clients
+— the real `std.http.Client`, a sequenced `MockClient` in tests, and an AFL
+fuzz client. This is the cornerstone of the project's testability.
+
+![DI seam](diagrams/zoqa_di_seam.png)
+
+Source: [`zoqa_di_seam.d2`](diagrams/zoqa_di_seam.d2) · d2
+
+### 5. Allocator lifetime
+
+Allocator ownership flows top-down from `main()` through every function that
+allocates. No globals, no hidden arenas; tests use `std.testing.allocator`
+for leak detection.
+
+![Allocator lifetime](diagrams/zoqa_allocator_lifetime.png)
+
+Source: [`zoqa_allocator_lifetime.d2`](diagrams/zoqa_allocator_lifetime.d2) · d2
+
+### 6. `runSchedule` sequence
+
+The three response paths of `runSchedule`: synchronous (`ids` returned),
+synchronous-but-empty, and asynchronous (`scheduled_product_id` only, with
+optional polling and monitor loop).
+
+![runSchedule sequence](diagrams/zoqa_runschedule_sequence.png)
+
+Source: [`zoqa_runschedule_sequence.puml`](diagrams/zoqa_runschedule_sequence.puml) · PlantUML
+
+### 7. `DependencyWalker` BFS loop
+
+The pull-based BFS iterator in `src/clone_job.zig`. The walker is I/O-free;
+the caller fetches each job between `next()` and `feed()`, so the same
+walker is used in production, tests, and fuzz harnesses.
+
+![DependencyWalker](diagrams/zoqa_dependency_walker.png)
+
+Source: [`zoqa_dependency_walker.d2`](diagrams/zoqa_dependency_walker.d2) · d2

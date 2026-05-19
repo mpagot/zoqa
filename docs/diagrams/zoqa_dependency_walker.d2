@@ -1,0 +1,128 @@
+# D7 — DependencyWalker (src/clone_job.zig:696)
+# Pull-based BFS iterator: traversal logic is I/O-free; the caller (CLI / GUI /
+# test harness) does the HTTP fetch between next() and feed().
+
+direction: down
+
+start: "clone_job_main.zig\nwalkDependencyGraph" {
+  shape: oval
+  style.fill: "#ede7f6"
+}
+
+init: "DependencyWalker.init(allocator, origin_job_id, opts)\nworklist = [{origin, depth=1, .origin}]\ncollected = []" {
+  style.fill: "#e0f2f1"
+}
+
+nextcall: "walker.next() -> ?WorkItem" {
+  style.fill: "#e0f2f1"
+}
+
+done: "work_idx == worklist.len?" {
+  shape: diamond
+  style.fill: "#fff3cd"
+}
+
+dup: "item.job_id\nalready in collected?" {
+  shape: diamond
+  style.fill: "#fff3cd"
+}
+
+ret_null: "return null\nwalk complete" {
+  shape: oval
+  style.fill: "#ede7f6"
+}
+
+skip: "work_idx += 1\ncontinue loop" {
+  style.fill: "#e0f2f1"
+}
+
+fetch: "HTTP GET /api/v1/jobs/<id>\nvia openQAReq + client: anytype" {
+  style.fill: "#bbdefb"
+}
+
+parse: "std.json.parseFromSlice\n.object.get('job') -> std.json.ObjectMap" {
+  style.fill: "#bbdefb"
+}
+
+feedcall: "walker.feed(allocator, item, job_obj)" {
+  style.fill: "#e0f2f1"
+}
+
+extract: "extractJobSettings + extractDeps\n(parents/children: chained, directly_chained, parallel)" {
+  style.fill: "#e0f2f1"
+}
+
+skip_deps_q: "skip_deps?" {
+  shape: diamond
+  style.fill: "#fff3cd"
+}
+
+skip_chained_q: "skip_chained_deps?" {
+  shape: diamond
+  style.fill: "#fff3cd"
+}
+
+pchain: "enqueue parents.chained +\nparents.directly_chained\n(depth+1, .parents)" {
+  style.fill: "#e0f2f1"
+}
+
+pparallel: "enqueue parents.parallel\n(always, depth+1, .parents)" {
+  style.fill: "#e0f2f1"
+}
+
+depth_q: "depth > max_depth?" {
+  shape: diamond
+  style.fill: "#fff3cd"
+}
+
+cparallel: "enqueue children.parallel\n(always, depth+1, .children)" {
+  style.fill: "#e0f2f1"
+}
+
+clone_children_q: "clone_children?" {
+  shape: diamond
+  style.fill: "#fff3cd"
+}
+
+cchain: "enqueue children.chained +\nchildren.directly_chained\n(depth+1, .children)" {
+  style.fill: "#e0f2f1"
+}
+
+record: "append to collected:\n{ job_id, settings, name, parent_*_ids, depth, relation }" {
+  style.fill: "#e0f2f1"
+}
+
+drive: "caller: encodeDepsAndApplyOverrides ->\npostAndFormatOutput -> POST cloned jobs" {
+  shape: oval
+  style.fill: "#ede7f6"
+}
+
+start -> init
+init  -> nextcall
+nextcall -> done
+done -> ret_null: "yes"
+done -> dup:      "no"
+dup  -> skip:     "yes (cycle)"
+skip -> nextcall
+dup  -> fetch:    "no"
+fetch -> parse
+parse -> feedcall
+feedcall -> extract
+
+extract -> skip_deps_q
+skip_deps_q -> depth_q:        "yes (skip parents)"
+skip_deps_q -> skip_chained_q: "no"
+skip_chained_q -> pparallel:   "yes"
+skip_chained_q -> pchain:      "no"
+pchain -> pparallel
+pparallel -> depth_q
+
+depth_q -> record:     "yes (no children)"
+depth_q -> cparallel:  "no"
+cparallel -> clone_children_q
+clone_children_q -> cchain: "yes"
+clone_children_q -> record: "no"
+cchain -> record
+
+record -> nextcall: "loop"
+ret_null -> drive

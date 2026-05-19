@@ -1,0 +1,57 @@
+# D2 — Data flow: CLI inputs -> executable -> HTTP -> openQA server -> response -> stdout.
+# Left-to-right pipeline. Solid edges = request path, dashed = response path.
+
+direction: right
+
+inputs: "Inputs (user + environment)" {
+  style.fill: "#f3e5f5"
+  argv: "argv\nflags, host, subcommand"                      { style.fill: "#ede7f6" ; shape: page }
+  env:  "env\nOPENQA_HOST / KEY / SECRET"                    { style.fill: "#ede7f6" ; shape: page }
+  conf: "~/.config/openqa/client.conf\nhost sections"        { style.fill: "#ede7f6" ; shape: document }
+}
+
+exe: "Executable (CLI layer)" {
+  style.fill: "#ede7f6"
+  parse:    "parseArgs\narg_match + cli_credentials"         { style.fill: "#d1c4e9" }
+  build:    "buildRequest / buildScheduleRequest /\nbuildArchiveRequest" { style.fill: "#d1c4e9" }
+  dispatch: "dispatch:\nrunSchedule / runArchive /\nrunMonitor / openQAReq" { style.fill: "#d1c4e9" }
+}
+
+lib: "Library (zoqa)" {
+  style.fill: "#ffebee"
+  workflow: "workflow function\nrunSchedule / runArchive / runMonitor / ..." { style.fill: "#ffcdd2" }
+  http:     "http_client.openQAReq\nHMAC-SHA1 sign,\nretry, decompress"      { style.fill: "#bbdefb" }
+}
+
+net: "HTTPS openQA REST API\n/api/v1/..." {
+  shape: cylinder
+  style.fill: "#ffe082"
+}
+
+outputs: "Outputs" {
+  style.fill: "#e8f5e9"
+  apiresp: "APIResponse\n{ status, body, headers, link }"    { style.fill: "#c8e6c9" }
+  format:  "formatOutput / printJobUrls /\nProgressWriter"   { style.fill: "#c8e6c9" }
+  stdout:  "stdout\n(buffered 4 KiB)"                        { style.fill: "#c8e6c9" ; shape: page }
+  stderr:  "stderr\ndiagnostics, suppressed by --quiet"      { style.fill: "#c8e6c9" ; shape: page }
+  fsout:   "filesystem\n(archive: per-asset files)"          { style.fill: "#c8e6c9" ; shape: document }
+}
+
+# Request path (solid)
+inputs.argv -> exe.parse
+inputs.env  -> exe.parse
+inputs.conf -> exe.parse
+exe.parse    -> exe.build
+exe.build    -> exe.dispatch
+exe.dispatch -> lib.workflow
+lib.workflow -> lib.http: "path, method,\nparams, headers"
+lib.http     -> net:      "GET / POST + auth headers"
+
+# Response path (dashed)
+net          -> lib.http:    "HTTP status,\nbody (gzip)"     { style.stroke: "#1976d2" ; style.stroke-dash: 5 }
+lib.http     -> outputs.apiresp: "decompress, parse"         { style.stroke: "#1976d2" ; style.stroke-dash: 5 }
+outputs.apiresp -> lib.workflow                              { style.stroke: "#1976d2" ; style.stroke-dash: 5 }
+lib.workflow -> outputs.format                               { style.stroke: "#1976d2" ; style.stroke-dash: 5 }
+outputs.format -> outputs.stdout: "job urls,\nJSON, status"  { style.stroke: "#1976d2" ; style.stroke-dash: 5 }
+lib.workflow -> outputs.fsout: "archive only:\ndownloadFile" { style.stroke: "#1976d2" ; style.stroke-dash: 5 }
+lib.workflow -> outputs.stderr: "quiet ? skip : print"       { style.stroke: "#888888" ; style.stroke-dash: 5 }

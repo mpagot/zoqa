@@ -1,0 +1,76 @@
+# D1 — Layered structure: executables, CLI-shared, library facade, tiered workflows.
+# Source of truth: src/root.zig (tier ordering) + build.zig (module wiring).
+
+direction: down
+
+exes: "Executables (process lifecycle, std.process.exit)" {
+  style.fill: "#f3e5f5"
+  main:       "main.zig\nzoqa: api / archive / monitor / schedule"        { style.fill: "#ce93d8" }
+  clone_main: "clone_job_main.zig\nzoqa-clone-job"                         { style.fill: "#ce93d8" }
+}
+
+cli_shared: "Shared CLI modules (NOT part of library)" {
+  style.fill: "#ede7f6"
+  arg_match:       "arg_match.zig\nmatchBool / matchValue / tryCommonFlag"   { style.fill: "#d1c4e9" }
+  cli_credentials: "cli_credentials.zig\nresolveCredentials / resolveRetryConfig\nuses std.process" { style.fill: "#d1c4e9" }
+}
+
+facade: "Library facade — public API re-export shim" {
+  style.fill: "#fff3cd"
+  root: "root.zig (zoqa.*)\nThin re-exports only"                            { style.fill: "#ffe082" }
+}
+
+tier3: "Tier 3 — High-level workflows" {
+  style.fill: "#ffebee"
+  archive:  "archive.zig\nrunArchive"                                        { style.fill: "#ffcdd2" }
+  monitor:  "monitor.zig\nrunMonitor / checkJobStatus"                       { style.fill: "#ffcdd2" }
+  schedule: "schedule.zig\nrunSchedule / asyncPollAndMonitor"                { style.fill: "#ffcdd2" }
+}
+
+tier2: "Tier 2 — HTTP request layer" {
+  style.fill: "#e3f2fd"
+  http_client: "http_client.zig\nopenQAReq / openQARawGet\nexecute / executeStream / CallOptions" { style.fill: "#bbdefb" }
+}
+
+tier1: "Tier 1 — Config & Auth (stdlib only)" {
+  style.fill: "#e8f5e9"
+  config: "config.zig\nfindCredentials / resolveHost / parseIni" { style.fill: "#c8e6c9" }
+  auth:   "auth.zig\nbuildAuthHeaders / hmacSha1Hex"             { style.fill: "#c8e6c9" }
+}
+
+tier0: "Tier 0 — Pure utilities (no I/O, stdlib only)" {
+  style.fill: "#e0f2f1"
+  url:       "url.zig\nformEncodeAppend / hostnameFromUrl"       { style.fill: "#b2dfdb" }
+  clone_job: "clone_job.zig\nI/O-free transforms + DependencyWalker" { style.fill: "#b2dfdb" }
+}
+
+# Executables -> facade + CLI-shared
+exes.main       -> facade.root: "@import(\"zoqa\")" { style.stroke: "#7b1fa2" ; style.stroke-width: 2 }
+exes.main       -> cli_shared.arg_match
+exes.main       -> cli_shared.cli_credentials
+exes.clone_main -> facade.root: "@import(\"zoqa\")" { style.stroke: "#7b1fa2" ; style.stroke-width: 2 }
+exes.clone_main -> cli_shared.arg_match
+exes.clone_main -> cli_shared.cli_credentials
+
+# CLI-shared depends downward on library
+cli_shared.cli_credentials -> facade.root: "zoqa.config / zoqa.url"
+
+# Facade re-exports every internal module
+facade.root -> tier3.archive:     "re-export" { style.stroke-dash: 3 }
+facade.root -> tier3.monitor:     "re-export" { style.stroke-dash: 3 }
+facade.root -> tier3.schedule:    "re-export" { style.stroke-dash: 3 }
+facade.root -> tier2.http_client: "re-export" { style.stroke-dash: 3 }
+facade.root -> tier1.config:      "re-export" { style.stroke-dash: 3 }
+facade.root -> tier1.auth:        "re-export" { style.stroke-dash: 3 }
+facade.root -> tier0.url:         "re-export" { style.stroke-dash: 3 }
+facade.root -> tier0.clone_job:   "re-export" { style.stroke-dash: 3 }
+
+# Workflow tier -> HTTP tier
+tier3.archive  -> tier2.http_client
+tier3.monitor  -> tier2.http_client
+tier3.schedule -> tier2.http_client
+tier3.schedule -> tier3.monitor: "sideways" { style.stroke: "#1976d2" ; style.stroke-dash: 5 }
+
+# HTTP tier -> Tier 1
+tier2.http_client -> tier1.config
+tier2.http_client -> tier1.auth
