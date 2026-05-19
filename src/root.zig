@@ -27,6 +27,13 @@ const std = @import("std");
 const testing = std.testing;
 
 // ---------------------------------------------------------------------------
+// Tier 0 : Pure utilities (no I/O, no deps beyond stdlib)
+// ---------------------------------------------------------------------------
+
+pub const url = @import("url.zig");
+pub const clone_job = @import("clone_job.zig");
+
+// ---------------------------------------------------------------------------
 // Tier 1 : Configuration & auth
 // ---------------------------------------------------------------------------
 
@@ -70,13 +77,16 @@ pub const LinkIterator = struct {
     pub const Relation = struct { rel: []const u8, url: []const u8 };
 
     /// Return the next valid `(rel, url)` pair, or `null` when exhausted.
+    ///
+    /// Returns: A `Relation` with borrowed `rel` and `url` slices, or `null`
+    ///   when no more valid link entries remain.
     pub fn next(self: *LinkIterator) ?Relation {
         while (self.inner.next()) |entry| {
             const trimmed = std.mem.trim(u8, entry, " \t");
             const url_start = std.mem.indexOfScalar(u8, trimmed, '<') orelse continue;
             const url_end = std.mem.indexOfScalar(u8, trimmed, '>') orelse continue;
             if (url_end <= url_start) continue;
-            const url = trimmed[url_start + 1 .. url_end];
+            const parsed_url = trimmed[url_start + 1 .. url_end];
 
             var params = std.mem.splitScalar(u8, trimmed[url_end + 1 ..], ';');
             while (params.next()) |param| {
@@ -87,7 +97,7 @@ pub const LinkIterator = struct {
                         r = r[1 .. r.len - 1];
                     }
                     if (r.len > 0) {
-                        return .{ .rel = r, .url = url };
+                        return .{ .rel = r, .url = parsed_url };
                     }
                 }
             }
@@ -102,6 +112,11 @@ pub const LinkIterator = struct {
 /// The returned `LinkIterator` yields one `Relation` per valid
 /// comma-separated entry in the header. Zero allocation, all
 /// returned slices borrow from `header`.
+///
+/// Arguments:
+/// - `header`: The raw `Link` header string (e.g. `<url>; rel="next", <url>; rel="last"`).
+///
+/// Returns: A `LinkIterator` that lazily yields `Relation` pairs from the header.
 ///
 /// ```zig
 /// var it = zoqa.parseLinkHeader(resp.link.?);
@@ -222,6 +237,8 @@ test "re-exports: APIResponse accessible via zoqa" {
 // See https://github.com/ziglang/zig/issues/10018.
 // ---------------------------------------------------------------------------
 test {
+    _ = @import("url.zig");
+    _ = @import("clone_job.zig");
     _ = @import("auth.zig");
     _ = @import("config.zig");
     _ = @import("http_client.zig");

@@ -139,14 +139,26 @@ pub fn runSchedule(
         },
     };
 
-    // Check for `failed` entries
+    // Check for `failed` entries (partial job creation failures).
     if (checkFailedEntries(root)) {
         return 1;
     }
 
+    // Check for top-level `error` string (server-side scheduling error).
+    // NOTE: In practice, `error` and non-empty `failed` are mutually exclusive
+    // in the openQA server (Iso.pm returns `failed => {}` when `error` is set,
+    // and omits `error` entirely on partial success). Both are checked here for
+    // robustness against non-standard or future server versions.
+    if (root.get("error")) |error_val| {
+        if (error_val == .string and error_val.string.len > 0) {
+            if (!options.quiet) std.debug.print("{s}\n", .{error_val.string});
+            return 1;
+        }
+    }
+
     // Extract `ids` array (sync response) or `scheduled_product_id` (async).
-    // Distinguish sync-empty-ids (key present, array empty → exit 1) from
-    // async (key absent entirely → scheduled_product_id only → exit 0).
+    // Distinguish sync-empty-ids (key present, array empty → exit 0 per
+    // Perl parity) from async (key absent → scheduled_product_id only).
     const ids_val = root.get("ids");
     const ids_present = ids_val != null;
     const has_ids = if (ids_val) |iv| iv == .array and iv.array.items.len > 0 else false;
@@ -179,9 +191,13 @@ pub fn runSchedule(
             .poll_interval = options.poll_interval,
         });
     } else if (ids_present) {
-        // Sync response with empty ids array — zero products matched
+        // Sync response with empty ids array — zero products matched.
+        // Matches Perl's _create_jobs which returns 0 when there is neither
+        // a top-level `error` nor a non-empty `failed` array (see §15.4
+        // step 6). Print the empty-set note for visibility but do NOT
+        // override the exit code.
         if (!options.quiet) std.debug.print("schedule: no jobs scheduled\n", .{});
-        return 1;
+        return 0;
     } else if (scheduled_product_id != null and options.monitor_jobs) {
         // Async response with --monitor: poll for completion
         stdout.flush() catch {};
@@ -577,4 +593,168 @@ test "extractJobIds: negative integer is rejected (Gap 12 reproduction)" {
     var w: std.Io.Writer = .fixed(&buf);
 
     try testing.expectError(error.InvalidJobId, extractJobIds(allocator, .{ .quiet = true }, "http://localhost", &w, arr));
+}
+
+// ---------------------------------------------------------------------------
+// asyncPollAndMonitor — cancelled-mid-poll unit test (B1, see SPEC §15.6)
+// ---------------------------------------------------------------------------
+//
+// Why a unit test: provoking a `cancelled` status mid-poll against the live
+// e2e openQA scheduler is racy — by the time DELETE /api/v1/isos/{id} lands,
+// the product is often already `scheduled`. tests_schedule.sh SCH-15 documents
+// this and intentionally defers the case to here.
+//
+// Oracle: OpenQA::CLI::schedule::_wait_for_jobs.
+// Per-iteration order of operations:
+//   1. error check (`_error_from_json` on results-or-top-level) — wins over
+//      everything; non-empty `failed` short-circuits to exit 1.
+//   2. status == "scheduled" → populate from successful_job_ids.
+//   3. status ∈ {added, scheduling} → sleep, repeat.
+//   4. otherwise → "Scheduled product N ended up <status>" → exit 1.
+//
+// The pathological case under test: status == "cancelled" AND
+// results.successful_job_ids is non-empty. Per the precedence above, the IDs
+// must be silently dropped (rule 4 fires; rule 2 doesn't, because the loop
+// only enters rule 2 when status == "scheduled").
+
+/// Sequenced mock HTTP client for asyncPollAndMonitor unit tests.
+///
+/// Each call to `request()` advances through `bodies` and serves the next
+/// pre-staged JSON body as a 200 OK / application/json response. After all
+/// bodies are exhausted, an extra call returns `error.UnexpectedExtraCall`
+/// — proving the function under test made exactly the expected number of
+/// HTTP round-trips.
+const ScheduleMockHead = struct {
+    status: std.http.Status = .ok,
+    content_type: ?[]const u8 = "application/json",
+    content_length: ?u64 = null,
+
+    const HeaderIterator = struct {
+        done: bool = false,
+        pub fn next(self: *HeaderIterator) ?std.http.Header {
+            if (self.done) return null;
+            self.done = true;
+            return .{ .name = "Content-Type", .value = "application/json" };
+        }
+    };
+
+    pub fn iterateHeaders(_: *const ScheduleMockHead) HeaderIterator {
+        return .{};
+    }
+};
+
+const ScheduleMockReader = struct {
+    body: []const u8 = "",
+    consumed: bool = false,
+
+    pub fn streamRemaining(self: *ScheduleMockReader, w: anytype) anyerror!usize {
+        if (self.consumed) return 0;
+        self.consumed = true;
+        try w.writeAll(self.body);
+        return self.body.len;
+    }
+};
+
+const ScheduleMockResponse = struct {
+    head: ScheduleMockHead = .{},
+    mock_reader: ScheduleMockReader = .{},
+
+    pub fn deinit(_: *ScheduleMockResponse) void {}
+    pub fn sendBodiless(_: *ScheduleMockResponse) !void {}
+    pub fn sendBodyComplete(_: *ScheduleMockResponse, _: []u8) !void {}
+    pub fn reader(self: *ScheduleMockResponse, _: []u8) *ScheduleMockReader {
+        return &self.mock_reader;
+    }
+    pub fn receiveHead(self: *ScheduleMockResponse, _: []u8) !*ScheduleMockResponse {
+        return self;
+    }
+};
+
+const ScheduleSeqMock = struct {
+    bodies: []const []const u8,
+    call_count: usize = 0,
+    response: ?ScheduleMockResponse = null,
+
+    pub fn init(bodies: []const []const u8) ScheduleSeqMock {
+        return .{ .bodies = bodies };
+    }
+
+    pub fn request(self: *ScheduleSeqMock, _: std.http.Method, _: std.Uri, _: anytype) !*ScheduleMockResponse {
+        if (self.call_count >= self.bodies.len) return error.UnexpectedExtraCall;
+        const body = self.bodies[self.call_count];
+        self.call_count += 1;
+        self.response = .{ .mock_reader = .{ .body = body } };
+        return &self.response.?;
+    }
+};
+
+test "asyncPollAndMonitor: cancelled mid-poll → exit 1, successful_job_ids silently dropped" {
+    const allocator = testing.allocator;
+
+    // Two-step status sequence:
+    //   call 1: status=added (poll loop sleeps poll_interval and continues)
+    //   call 2: status=cancelled WITH results.successful_job_ids populated
+    //
+    // Per Perl _wait_for_jobs the IDs must be ignored; the function must
+    // return 1 with the "ended up cancelled" message. Verifying call_count==2
+    // proves we did NOT enter monitor.runMonitor (which would issue further
+    // GET /jobs/{id}/status calls and trip error.UnexpectedExtraCall).
+    var mock = ScheduleSeqMock.init(&.{
+        \\{"status":"added"}
+        ,
+        \\{"status":"cancelled","results":{"successful_job_ids":[111,222]}}
+        ,
+    });
+
+    var stdout_buf: [256]u8 = undefined;
+    var stdout: std.Io.Writer = .fixed(&stdout_buf);
+
+    const exit_code = try asyncPollAndMonitor(
+        allocator,
+        &mock,
+        "http://localhost",
+        7777,
+        &stdout,
+        // poll_interval=0 → std.Thread.sleep(0) keeps the test instant.
+        // quiet=true silences the schedule.zig stderr diagnostics, but does
+        // NOT silence the unconditional "Scheduled product N ended up
+        // cancelled" line at schedule.zig:289 — that print is intentional
+        // and matches the Perl reference.
+        .{ .quiet = true, .poll_interval = 0 },
+    );
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+    // Exactly two HTTP calls — proves we cancelled at the right step and
+    // never entered the monitor loop (which would dispatch more requests).
+    try testing.expectEqual(@as(usize, 2), mock.call_count);
+    // No URL list emitted — `successful_job_ids` were silently dropped.
+    try testing.expectEqual(@as(usize, 0), stdout.end);
+}
+
+test "asyncPollAndMonitor: unexpected status (not scheduled/added/scheduling/cancelled) → exit 1" {
+    // Companion case: the same step-5 path also fires for any unrecognised
+    // status, e.g. an upstream-side state we don't model. Same precedence:
+    // exit 1, IDs (if any) silently dropped.
+    const allocator = testing.allocator;
+
+    var mock = ScheduleSeqMock.init(&.{
+        \\{"status":"some_future_status","results":{"successful_job_ids":[42]}}
+        ,
+    });
+
+    var stdout_buf: [256]u8 = undefined;
+    var stdout: std.Io.Writer = .fixed(&stdout_buf);
+
+    const exit_code = try asyncPollAndMonitor(
+        allocator,
+        &mock,
+        "http://localhost",
+        9999,
+        &stdout,
+        .{ .quiet = true, .poll_interval = 0 },
+    );
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+    try testing.expectEqual(@as(usize, 1), mock.call_count);
+    try testing.expectEqual(@as(usize, 0), stdout.end);
 }
