@@ -70,7 +70,6 @@ test "matchBool: null short — empty token returns EmptyToken" {
     try std.testing.expectError(error.EmptyToken, matchBool("", "--osd", null));
 }
 
-
 /// Returns the value for a flag that takes an argument, handling both the space
 /// form (`--flag VALUE`) and the equals form (`--flag=VALUE`).
 ///

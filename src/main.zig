@@ -1,6 +1,7 @@
 const std = @import("std");
 const zoqa = @import("zoqa");
 const arg_match = @import("arg_match");
+const cli_credentials = @import("cli_credentials");
 const config = zoqa.config;
 
 // ---------------------------------------------------------------------------
@@ -1446,87 +1447,8 @@ test "jsonToFormEncoded: empty object" {
     try std.testing.expectEqualStrings("", result);
 }
 
-/// Test whether a byte can pass through literally when percent-encoding
-/// KEY=VALUE parameters for the openQA API request body or query string.
-///
-/// RFC 3986 (the URI standard) defines a set of "unreserved" characters that
-/// never need encoding because they carry no structural meaning in a URI.
-/// Everything else (spaces, punctuation like `&` and `=`, non-ASCII bytes)
-/// must be replaced with `%XX` hex escapes so the server can distinguish
-/// parameter delimiters from literal data.
-///
-/// This predicate is called per-byte by `formEncodeAppend`, which builds the
-/// encoded form body used by `zoqa api --form` and `zoqa schedule`.
-///
-/// Arguments:
-///   - `c`: The byte to test.
-///
-/// Returns: `true` when `c` is unreserved (A-Z, a-z, 0-9, '-', '_', '.', '~').
-fn isUnreserved(c: u8) bool {
-    return (c >= 'A' and c <= 'Z') or
-        (c >= 'a' and c <= 'z') or
-        (c >= '0' and c <= '9') or
-        c == '-' or c == '_' or c == '.' or c == '~';
-}
-
-/// Appends a percent-encoded version of `input` to `buf` following `application/x-www-form-urlencoded` rules.
-///
-/// Behavior:
-/// - Unreserved characters (A-Z, a-z, 0-9, '-', '_', '.', '~') are appended as-is.
-/// - Space characters (' ') are converted to '+'.
-/// - All other characters are percent-encoded as uppercase hex (e.g., '%0A').
-///
-/// Arguments:
-/// - `allocator`: Used to grow the `buf` ArrayList if needed.
-/// - `buf`: The destination buffer to append the encoded string to.
-/// - `input`: The raw string to be encoded.
-///
-/// Errors: `OutOfMemory` if the buffer cannot grow.
-fn formEncodeAppend(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), input: []const u8) !void {
-    for (input) |c| {
-        if (isUnreserved(c)) {
-            try buf.append(allocator, c);
-        } else if (c == ' ') {
-            try buf.append(allocator, '+');
-        } else {
-            var tmp: [3]u8 = undefined;
-            const enc = try std.fmt.bufPrint(&tmp, "%{X:0>2}", .{c});
-            try buf.appendSlice(allocator, enc);
-        }
-    }
-}
-
-test "formEncodeAppend: unreserved chars pass through" {
-    const allocator = std.testing.allocator;
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-    try formEncodeAppend(allocator, &buf, "hello_world-1.0~");
-    try std.testing.expectEqualStrings("hello_world-1.0~", buf.items);
-}
-
-test "formEncodeAppend: spaces become plus, specials percent-encoded" {
-    const allocator = std.testing.allocator;
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-    try formEncodeAppend(allocator, &buf, "a b=c&d");
-    try std.testing.expectEqualStrings("a+b%3Dc%26d", buf.items);
-}
-
-test "formEncodeAppend: empty input produces empty output" {
-    const allocator = std.testing.allocator;
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-    try formEncodeAppend(allocator, &buf, "");
-    try std.testing.expectEqual(@as(usize, 0), buf.items.len);
-}
-
-test "formEncodeAppend: all special bytes percent-encoded" {
-    const allocator = std.testing.allocator;
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-    try formEncodeAppend(allocator, &buf, "\x00\x01\xff");
-    try std.testing.expectEqualStrings("%00%01%FF", buf.items);
-}
+/// Alias for the shared URL form-encoding function (library layer).
+const formEncodeAppend = zoqa.url.formEncodeAppend;
 
 /// Post-parseArgs processing result, ready to pass to `zoqa.openQAReq()`.
 /// RequestConfig is purely a transitional container: it exists to bridge
@@ -2549,180 +2471,6 @@ test "buildMonitorRequest: missing positional arguments returns error" {
     try std.testing.expectError(error.MissingMonitorArgs, buildMonitorRequest(allocator, &parsed));
 }
 
-/// Resolve and merge API credentials from all possible sources according to priority.
-///
-/// Authentication to the openQA API requires two parts: a key and a secret.
-/// These can be provided through three mechanisms, evaluated independently
-/// for each field in the following priority order (highest to lowest):
-///
-/// 1. **CLI flags**: `--apikey` and `--apisecret`
-/// 2. **Environment variables**: `OPENQA_API_KEY` and `OPENQA_API_SECRET`
-/// 3. **Configuration file**: the `[<host>]` section in `client.conf`
-///
-/// Because priority is evaluated per-field, a user could theoretically provide
-/// the key via CLI flag and the secret via environment variable, though usually
-/// both come from the same source.
-///
-/// This function does **not** fetch the configuration file itself; it expects
-/// the already-parsed `conf` struct matching the target host, and simply applies
-/// the override logic.
-///
-/// Arguments:
-/// - `allocator`: Used to duplicate the final resolved key and secret strings.
-///   The caller will own these allocations.
-/// - `cli`: The key/secret optionally provided via command-line flags.
-/// - `env`: The key/secret optionally provided via environment variables.
-/// - `conf`: The key/secret optionally found in the parsed configuration file
-///   for the chosen host.
-///
-/// Returns:
-/// - `?config.Credentials`: A struct containing the fully resolved `key` and
-///   `secret`. The slices are newly allocated and **owned by the caller**, who
-///   must call `deinit()` or manually free both fields.
-/// - `null`: Returned if either the key or the secret (or both) are completely
-///   missing across all three sources. In this case, the request will proceed
-///   unauthenticated.
-///
-/// Errors:
-/// - `error.OutOfMemory`: If duplication of the resolved strings fails.
-fn mergeCredentials(
-    allocator: std.mem.Allocator,
-    cli: struct { key: ?[]const u8, secret: ?[]const u8 },
-    env: struct { key: ?[]const u8, secret: ?[]const u8 },
-    conf: ?config.Credentials,
-) !?config.Credentials {
-    const key = cli.key orelse env.key orelse if (conf) |c| c.key else null;
-    const secret = cli.secret orelse env.secret orelse if (conf) |c| c.secret else null;
-
-    if (key != null and secret != null) {
-        return config.Credentials{
-            .allocator = allocator,
-            .key = try allocator.dupe(u8, key.?),
-            .secret = try allocator.dupe(u8, secret.?),
-        };
-    }
-    return null;
-}
-
-test "mergeCredentials: field-level priority behavior" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    // Scenario 1: Partial CLI override (Secret only)
-    // Should combine CLI secret with Config key
-    {
-        const res = try mergeCredentials(
-            allocator,
-            .{ .key = null, .secret = "CLI_SECRET" },
-            .{ .key = null, .secret = null },
-            .{ .allocator = allocator, .key = "CONF_KEY", .secret = "CONF_SECRET" },
-        );
-        try testing.expect(res != null);
-        defer res.?.deinit();
-        try testing.expectEqualStrings("CONF_KEY", res.?.key);
-        try testing.expectEqualStrings("CLI_SECRET", res.?.secret);
-    }
-
-    // Scenario 2: CLI overrides ENV
-    {
-        const res = try mergeCredentials(
-            allocator,
-            .{ .key = "CLI_KEY", .secret = null },
-            .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
-            null,
-        );
-        try testing.expect(res != null);
-        defer res.?.deinit();
-        try testing.expectEqualStrings("CLI_KEY", res.?.key);
-        try testing.expectEqualStrings("ENV_SECRET", res.?.secret);
-    }
-
-    // Scenario 3: All null returns null
-    {
-        const res = try mergeCredentials(
-            allocator,
-            .{ .key = null, .secret = null },
-            .{ .key = null, .secret = null },
-            null,
-        );
-        try testing.expect(res == null);
-    }
-}
-
-test "mergeCredentials: env-only fallback (no CLI, no conf)" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    const res = try mergeCredentials(
-        allocator,
-        .{ .key = null, .secret = null },
-        .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
-        null,
-    );
-    try testing.expect(res != null);
-    defer res.?.deinit();
-    try testing.expectEqualStrings("ENV_KEY", res.?.key);
-    try testing.expectEqualStrings("ENV_SECRET", res.?.secret);
-}
-
-test "mergeCredentials: conf-only fallback (no CLI, no env)" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    const res = try mergeCredentials(
-        allocator,
-        .{ .key = null, .secret = null },
-        .{ .key = null, .secret = null },
-        .{ .allocator = allocator, .key = "CONF_KEY", .secret = "CONF_SECRET" },
-    );
-    try testing.expect(res != null);
-    defer res.?.deinit();
-    try testing.expectEqualStrings("CONF_KEY", res.?.key);
-    try testing.expectEqualStrings("CONF_SECRET", res.?.secret);
-}
-
-test "mergeCredentials: key from env, secret from conf" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    const res = try mergeCredentials(
-        allocator,
-        .{ .key = null, .secret = null },
-        .{ .key = "ENV_KEY", .secret = null },
-        .{ .allocator = allocator, .key = "CONF_KEY", .secret = "CONF_SECRET" },
-    );
-    try testing.expect(res != null);
-    defer res.?.deinit();
-    try testing.expectEqualStrings("ENV_KEY", res.?.key);
-    try testing.expectEqualStrings("CONF_SECRET", res.?.secret);
-}
-
-test "mergeCredentials: partial key only returns null (no secret anywhere)" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    const res = try mergeCredentials(
-        allocator,
-        .{ .key = "CLI_KEY", .secret = null },
-        .{ .key = null, .secret = null },
-        null,
-    );
-    try testing.expect(res == null);
-}
-
-test "mergeCredentials: partial secret only returns null (no key anywhere)" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    const res = try mergeCredentials(
-        allocator,
-        .{ .key = null, .secret = "CLI_SECRET" },
-        .{ .key = null, .secret = null },
-        null,
-    );
-    try testing.expect(res == null);
-}
-
 // ---------------------------------------------------------------------------
 // printResponse : format and write HTTP response to stdout/stderr
 // ---------------------------------------------------------------------------
@@ -2957,89 +2705,25 @@ pub fn main() !void {
         },
     }
 
-    // Resolve credentials
-    // Extract hostname from the resolved host URL for config file lookup.
-    // Note: a `switch (subcmd)` with `.?` unwraps would also work here since
-    // each config is guaranteed non-null by the dispatch above, but the orelse
-    // fallback below provides an extra safety net for future subcommands.
-    const host_for_uri = blk: {
+    // Resolve credentials via shared CLI module.
+    // Extract the effective host URL from whichever subcommand config was built.
+    const host_for_creds = blk: {
         if (req_cfg) |cfg| break :blk cfg.host;
         if (archive_cfg) |cfg| break :blk cfg.host;
         if (monitor_cfg) |cfg| break :blk cfg.host;
         if (schedule_cfg) |cfg| break :blk cfg.host;
         break :blk args.host orelse "localhost";
     };
-    const hostname = blk: {
-        const uri = std.Uri.parse(host_for_uri) catch {
-            break :blk host_for_uri;
-        };
-        break :blk if (uri.host) |h| h.percent_encoded else "localhost";
-    };
 
-    const conf_creds = try config.findCredentials(gpa, hostname);
-    defer if (conf_creds) |c| c.deinit();
-
-    const env_apikey = std.process.getEnvVarOwned(gpa, "OPENQA_API_KEY") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => null,
-        else => return err,
-    };
-    defer if (env_apikey) |s| gpa.free(s);
-
-    const env_apisecret = std.process.getEnvVarOwned(gpa, "OPENQA_API_SECRET") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => null,
-        else => return err,
-    };
-    defer if (env_apisecret) |s| gpa.free(s);
-
-    const creds = try mergeCredentials(
-        gpa,
-        .{ .key = args.apikey, .secret = args.apisecret },
-        .{ .key = env_apikey, .secret = env_apisecret },
-        conf_creds,
-    );
+    const creds = try cli_credentials.resolveCredentials(gpa, host_for_creds, args.apikey, args.apisecret);
     defer if (creds) |c| c.deinit();
 
-    // Retry count: --retries > OPENQA_CLI_RETRIES env > 0
-    const retries: u32 = args.retries orelse blk: {
-        const env_s = std.process.getEnvVarOwned(gpa, "OPENQA_CLI_RETRIES") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => break :blk 0,
-            else => return err,
-        };
-        defer gpa.free(env_s);
-        break :blk std.fmt.parseInt(u32, env_s, 10) catch 0;
-    };
-
-    // Execution knobs: resolved from env here and passed into CallOptions so
-    // that http_client.zig stays free of std.posix / env-var dependencies.
-    const connect_timeout_s: f64 = blk: {
-        const env_s = std.process.getEnvVarOwned(gpa, "OPENQA_CLI_CONNECT_TIMEOUT") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => break :blk 30.0,
-            else => return err,
-        };
-        defer gpa.free(env_s);
-        break :blk std.fmt.parseFloat(f64, env_s) catch {
-            std.debug.print("error: OPENQA_CLI_CONNECT_TIMEOUT={s}: not a valid number\n", .{env_s});
-            return error.InvalidConnectTimeout;
-        };
-    };
-
-    const retry_sleep_s: f64 = blk: {
-        const env_s = std.process.getEnvVarOwned(gpa, "OPENQA_CLI_RETRY_SLEEP_TIME_S") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => break :blk 3.0,
-            else => return err,
-        };
-        defer gpa.free(env_s);
-        break :blk std.fmt.parseFloat(f64, env_s) catch 3.0;
-    };
-
-    const retry_factor: f64 = blk: {
-        const env_s = std.process.getEnvVarOwned(gpa, "OPENQA_CLI_RETRY_FACTOR") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => break :blk 1.0,
-            else => return err,
-        };
-        defer gpa.free(env_s);
-        break :blk std.fmt.parseFloat(f64, env_s) catch 1.0;
-    };
+    // Retry/timeout knobs: --retries > OPENQA_CLI_* env vars > defaults.
+    const retry_cfg = try cli_credentials.resolveRetryConfig(gpa, args.retries);
+    const retries = retry_cfg.retries;
+    const connect_timeout_s = retry_cfg.connect_timeout_s;
+    const retry_sleep_s = retry_cfg.retry_sleep_s;
+    const retry_factor = retry_cfg.retry_factor;
 
     switch (subcmd) {
         .api => {

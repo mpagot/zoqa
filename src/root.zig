@@ -27,6 +27,13 @@ const std = @import("std");
 const testing = std.testing;
 
 // ---------------------------------------------------------------------------
+// Tier 0 : Pure utilities (no I/O, no deps beyond stdlib)
+// ---------------------------------------------------------------------------
+
+pub const url = @import("url.zig");
+pub const clone_job = @import("clone_job.zig");
+
+// ---------------------------------------------------------------------------
 // Tier 1 : Configuration & auth
 // ---------------------------------------------------------------------------
 
@@ -230,6 +237,8 @@ test "re-exports: APIResponse accessible via zoqa" {
 // See https://github.com/ziglang/zig/issues/10018.
 // ---------------------------------------------------------------------------
 test {
+    _ = @import("url.zig");
+    _ = @import("clone_job.zig");
     _ = @import("auth.zig");
     _ = @import("config.zig");
     _ = @import("http_client.zig");
