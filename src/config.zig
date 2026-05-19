@@ -187,6 +187,42 @@ pub fn findCredentials(allocator: std.mem.Allocator, hostname: []const u8) !?Cre
     return null;
 }
 
+/// Merge credentials from three priority layers: CLI args, environment
+/// variables, and config file. Priority per field: CLI > env > config.
+///
+/// Each field (key, secret) is resolved independently — it is valid to
+/// have the key come from one source and the secret from another.
+///
+/// Arguments:
+///   - `allocator`: Used to allocate owned copies of the merged key/secret.
+///   - `cli`: Key/secret from CLI flags (`--apikey`, `--apisecret`), or `null` per field.
+///   - `env`: Key/secret from environment variables, or `null` per field.
+///   - `conf`: Credentials from config file (output of `findCredentials`), or `null`.
+///
+/// Returns: Owned `Credentials` (caller must call `.deinit()`), or `null`
+///   when either key or secret is missing across all sources.
+///
+/// Errors:
+///   - `OutOfMemory` — allocator failure when duplicating strings.
+pub fn mergeCredentials(
+    allocator: std.mem.Allocator,
+    cli: struct { key: ?[]const u8, secret: ?[]const u8 },
+    env: struct { key: ?[]const u8, secret: ?[]const u8 },
+    conf: ?Credentials,
+) !?Credentials {
+    const key = cli.key orelse env.key orelse if (conf) |c| c.key else null;
+    const secret = cli.secret orelse env.secret orelse if (conf) |c| c.secret else null;
+
+    if (key != null and secret != null) {
+        return Credentials{
+            .allocator = allocator,
+            .key = try allocator.dupe(u8, key.?),
+            .secret = try allocator.dupe(u8, secret.?),
+        };
+    }
+    return null;
+}
+
 test "resolveHost" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -265,4 +301,117 @@ test "parseIni" {
 
     const creds3 = try parseIni(allocator, ini, "not.found");
     try testing.expect(creds3 == null);
+}
+
+test "mergeCredentials: field-level priority behavior" {
+    const testing_alloc = std.testing.allocator;
+
+    // Scenario 1: Partial CLI override (Secret only)
+    // Should combine CLI secret with Config key
+    {
+        const res = try mergeCredentials(
+            testing_alloc,
+            .{ .key = null, .secret = "CLI_SECRET" },
+            .{ .key = null, .secret = null },
+            .{ .allocator = testing_alloc, .key = "CONF_KEY", .secret = "CONF_SECRET" },
+        );
+        try std.testing.expect(res != null);
+        defer res.?.deinit();
+        try std.testing.expectEqualStrings("CONF_KEY", res.?.key);
+        try std.testing.expectEqualStrings("CLI_SECRET", res.?.secret);
+    }
+
+    // Scenario 2: CLI overrides ENV
+    {
+        const res = try mergeCredentials(
+            testing_alloc,
+            .{ .key = "CLI_KEY", .secret = null },
+            .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
+            null,
+        );
+        try std.testing.expect(res != null);
+        defer res.?.deinit();
+        try std.testing.expectEqualStrings("CLI_KEY", res.?.key);
+        try std.testing.expectEqualStrings("ENV_SECRET", res.?.secret);
+    }
+
+    // Scenario 3: All null returns null
+    {
+        const res = try mergeCredentials(
+            testing_alloc,
+            .{ .key = null, .secret = null },
+            .{ .key = null, .secret = null },
+            null,
+        );
+        try std.testing.expect(res == null);
+    }
+}
+
+test "mergeCredentials: env-only fallback (no CLI, no conf)" {
+    const allocator = std.testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
+        null,
+    );
+    try std.testing.expect(res != null);
+    defer res.?.deinit();
+    try std.testing.expectEqualStrings("ENV_KEY", res.?.key);
+    try std.testing.expectEqualStrings("ENV_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: conf-only fallback (no CLI, no env)" {
+    const allocator = std.testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = null, .secret = null },
+        .{ .allocator = allocator, .key = "CONF_KEY", .secret = "CONF_SECRET" },
+    );
+    try std.testing.expect(res != null);
+    defer res.?.deinit();
+    try std.testing.expectEqualStrings("CONF_KEY", res.?.key);
+    try std.testing.expectEqualStrings("CONF_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: key from env, secret from conf" {
+    const allocator = std.testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = "ENV_KEY", .secret = null },
+        .{ .allocator = allocator, .key = "CONF_KEY", .secret = "CONF_SECRET" },
+    );
+    try std.testing.expect(res != null);
+    defer res.?.deinit();
+    try std.testing.expectEqualStrings("ENV_KEY", res.?.key);
+    try std.testing.expectEqualStrings("CONF_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: partial key only returns null (no secret anywhere)" {
+    const allocator = std.testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = "CLI_KEY", .secret = null },
+        .{ .key = null, .secret = null },
+        null,
+    );
+    try std.testing.expect(res == null);
+}
+
+test "mergeCredentials: partial secret only returns null (no key anywhere)" {
+    const allocator = std.testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = "CLI_SECRET" },
+        .{ .key = null, .secret = null },
+        null,
+    );
+    try std.testing.expect(res == null);
 }

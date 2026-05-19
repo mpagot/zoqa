@@ -1,5 +1,6 @@
 const std = @import("std");
 const arg_match = @import("arg_match");
+const cli_credentials = @import("cli_credentials");
 const zoqa = @import("zoqa");
 
 // ---------------------------------------------------------------------------
@@ -14,11 +15,27 @@ fn isNumericId(s: []const u8) bool {
     }
     return true;
 }
+test "isNumericId: digits only" {
+    try std.testing.expect(isNumericId("42"));
+    try std.testing.expect(isNumericId("12345"));
+    try std.testing.expect(!isNumericId(""));
+    try std.testing.expect(!isNumericId("42a"));
+    try std.testing.expect(!isNumericId("a42"));
+    try std.testing.expect(!isNumericId("http://host/t42"));
+}
 
 /// Returns true when `s` starts with "http://" or "https://".
 fn hasHttpScheme(s: []const u8) bool {
     return std.mem.startsWith(u8, s, "http://") or
         std.mem.startsWith(u8, s, "https://");
+}
+
+test "hasHttpScheme: detection" {
+    try std.testing.expect(hasHttpScheme("http://localhost"));
+    try std.testing.expect(hasHttpScheme("https://openqa.opensuse.org"));
+    try std.testing.expect(!hasHttpScheme("openqa.opensuse.org"));
+    try std.testing.expect(!hasHttpScheme("ftp://example.com"));
+    try std.testing.expect(!hasHttpScheme(""));
 }
 
 /// Extract a numeric job ID from an openQA URL path.
@@ -29,17 +46,7 @@ fn hasHttpScheme(s: []const u8) bool {
 ///
 /// Returns the ID or null if the path does not match either pattern.
 fn extractJobIdFromPath(path: []const u8) ?u64 {
-    // /t{id}
-    if (std.mem.startsWith(u8, path, "/t")) {
-        const after_t = path[2..];
-        const end = std.mem.indexOfScalar(u8, after_t, '/') orelse after_t.len;
-        const id_part = after_t[0..end];
-        if (isNumericId(id_part)) {
-            return std.fmt.parseInt(u64, id_part, 10) catch null;
-        }
-    }
-
-    // /tests/{id}[/...]
+    // /tests/{id}[/...] — check longer prefix first (avoids false match on /t)
     const tests_pfx = "/tests/";
     if (std.mem.startsWith(u8, path, tests_pfx)) {
         const after = path[tests_pfx.len..];
@@ -50,14 +57,47 @@ fn extractJobIdFromPath(path: []const u8) ?u64 {
         }
     }
 
+    // /t{id}[/...] — short alias (only reached if /tests/ didn't match)
+    if (std.mem.startsWith(u8, path, "/t")) {
+        const after_t = path[2..];
+        const end = std.mem.indexOfScalar(u8, after_t, '/') orelse after_t.len;
+        const id_part = after_t[0..end];
+        if (isNumericId(id_part)) {
+            return std.fmt.parseInt(u64, id_part, 10) catch null;
+        }
+    }
+
     return null;
+}
+
+test "extractJobIdFromPath: /t{id}" {
+    try std.testing.expectEqual(@as(?u64, 42), extractJobIdFromPath("/t42"));
+    try std.testing.expectEqual(@as(?u64, 1234), extractJobIdFromPath("/t1234"));
+    // trailing slash variant
+    try std.testing.expectEqual(@as(?u64, 7), extractJobIdFromPath("/t7/"));
+    // non-numeric after /t
+    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/tests"));
+    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/top"));
+}
+
+test "extractJobIdFromPath: /tests/{id}" {
+    try std.testing.expectEqual(@as(?u64, 42), extractJobIdFromPath("/tests/42"));
+    try std.testing.expectEqual(@as(?u64, 100), extractJobIdFromPath("/tests/100/details"));
+    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/tests/"));
+    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/tests/abc"));
+}
+
+test "extractJobIdFromPath: no match" {
+    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/"));
+    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath(""));
+    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/jobs/42"));
 }
 
 // ---------------------------------------------------------------------------
 // JOBREF parsing — mirrors CloneJob.pm split_jobid()
 // ---------------------------------------------------------------------------
 
-pub const SplitJobRefResult = struct {
+const SplitJobRefResult = struct {
     /// Allocated host URL (scheme://authority). Null when the input was a bare integer.
     host: ?[]u8,
     /// Numeric job ID found in the URL path, or null.
@@ -81,10 +121,16 @@ pub const SplitJobRefResult = struct {
 ///
 /// The returned `host` is always an owned allocation; call `deinit` to free it.
 ///
+/// Arguments:
+/// - `allocator`: Used to allocate the returned host URL string.
+/// - `input`: The raw JOBREF string from the CLI (URL, hostname, or bare integer).
+///
+/// Returns: A `SplitJobRefResult` with an optional owned host URL and optional job ID.
+///
 /// Errors:
 ///   error.InvalidUrl — the string is neither a numeric ID nor a parseable URL.
 ///   error.UrlTooLong — the URL (after prepending a scheme) exceeds an internal limit.
-pub fn splitJobRef(allocator: std.mem.Allocator, input: []const u8) !SplitJobRefResult {
+fn splitJobRef(allocator: std.mem.Allocator, input: []const u8) !SplitJobRefResult {
     // Case 1: bare integer
     if (isNumericId(input)) {
         return .{
@@ -125,6 +171,62 @@ pub fn splitJobRef(allocator: std.mem.Allocator, input: []const u8) !SplitJobRef
     };
 }
 
+test "splitJobRef: bare integer" {
+    const allocator = std.testing.allocator;
+    var r = try splitJobRef(allocator, "42");
+    defer r.deinit(allocator);
+    try std.testing.expect(r.host == null);
+    try std.testing.expectEqual(@as(?u64, 42), r.job_id);
+}
+
+test "splitJobRef: https URL with /t42" {
+    const allocator = std.testing.allocator;
+    var r = try splitJobRef(allocator, "https://openqa.opensuse.org/t42");
+    defer r.deinit(allocator);
+    try std.testing.expectEqualStrings("https://openqa.opensuse.org", r.host.?);
+    try std.testing.expectEqual(@as(?u64, 42), r.job_id);
+}
+
+test "splitJobRef: https URL with /tests/42" {
+    const allocator = std.testing.allocator;
+    var r = try splitJobRef(allocator, "https://openqa.opensuse.org/tests/42");
+    defer r.deinit(allocator);
+    try std.testing.expectEqualStrings("https://openqa.opensuse.org", r.host.?);
+    try std.testing.expectEqual(@as(?u64, 42), r.job_id);
+}
+
+test "splitJobRef: bare hostname prepends http scheme" {
+    const allocator = std.testing.allocator;
+    var r = try splitJobRef(allocator, "openqa.opensuse.org");
+    defer r.deinit(allocator);
+    try std.testing.expectEqualStrings("http://openqa.opensuse.org", r.host.?);
+    try std.testing.expect(r.job_id == null);
+}
+
+test "splitJobRef: bare hostname with /t42 path" {
+    const allocator = std.testing.allocator;
+    var r = try splitJobRef(allocator, "openqa.opensuse.org/t42");
+    defer r.deinit(allocator);
+    try std.testing.expectEqualStrings("http://openqa.opensuse.org", r.host.?);
+    try std.testing.expectEqual(@as(?u64, 42), r.job_id);
+}
+
+test "splitJobRef: http URL no path returns no job_id" {
+    const allocator = std.testing.allocator;
+    var r = try splitJobRef(allocator, "http://openqa.example.com");
+    defer r.deinit(allocator);
+    try std.testing.expectEqualStrings("http://openqa.example.com", r.host.?);
+    try std.testing.expect(r.job_id == null);
+}
+
+test "splitJobRef: URL with port" {
+    const allocator = std.testing.allocator;
+    var r = try splitJobRef(allocator, "http://localhost:9526/t99");
+    defer r.deinit(allocator);
+    try std.testing.expectEqualStrings("http://localhost:9526", r.host.?);
+    try std.testing.expectEqual(@as(?u64, 99), r.job_id);
+}
+
 // ---------------------------------------------------------------------------
 // Host URL normalisation for --host
 // ---------------------------------------------------------------------------
@@ -146,61 +248,43 @@ fn normalizeHostUrl(allocator: std.mem.Allocator, host: []const u8) ![]u8 {
     return try std.fmt.allocPrint(allocator, "{s}://{s}", .{ scheme, host });
 }
 
+test "normalizeHostUrl: already has http scheme" {
+    const allocator = std.testing.allocator;
+    const r = try normalizeHostUrl(allocator, "http://localhost");
+    defer allocator.free(r);
+    try std.testing.expectEqualStrings("http://localhost", r);
+}
+
+test "normalizeHostUrl: already has https scheme" {
+    const allocator = std.testing.allocator;
+    const r = try normalizeHostUrl(allocator, "https://openqa.opensuse.org");
+    defer allocator.free(r);
+    try std.testing.expectEqualStrings("https://openqa.opensuse.org", r);
+}
+
+test "normalizeHostUrl: bare localhost uses http" {
+    const allocator = std.testing.allocator;
+    const r = try normalizeHostUrl(allocator, "localhost");
+    defer allocator.free(r);
+    try std.testing.expectEqualStrings("http://localhost", r);
+}
+
+test "normalizeHostUrl: bare non-localhost uses https" {
+    const allocator = std.testing.allocator;
+    const r = try normalizeHostUrl(allocator, "openqa.opensuse.org");
+    defer allocator.free(r);
+    try std.testing.expectEqualStrings("https://openqa.opensuse.org", r);
+}
+
 // ---------------------------------------------------------------------------
 // Settings helpers
 // ---------------------------------------------------------------------------
-
-/// A single job setting key/value pair.
-/// Both slices borrow from an arena allocator — no individual deinit needed.
-const SettingPair = struct {
-    key: []const u8,
-    value: []const u8,
-};
-
-/// Returns true when `c` is an RFC 3986 unreserved character.
-fn isUnreserved(c: u8) bool {
-    return (c >= 'A' and c <= 'Z') or
-        (c >= 'a' and c <= 'z') or
-        (c >= '0' and c <= '9') or
-        c == '-' or c == '_' or c == '.' or c == '~';
-}
-
-/// Appends a percent-encoded version of `input` to `buf` following
-/// `application/x-www-form-urlencoded` rules.
-fn formEncodeAppend(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), input: []const u8) !void {
-    for (input) |c| {
-        if (isUnreserved(c)) {
-            try buf.append(allocator, c);
-        } else if (c == ' ') {
-            try buf.append(allocator, '+');
-        } else {
-            var tmp: [3]u8 = undefined;
-            const enc = try std.fmt.bufPrint(&tmp, "%{X:0>2}", .{c});
-            try buf.appendSlice(allocator, enc);
-        }
-    }
-}
-
-/// Extract the hostname from a URL string for credential lookup.
-/// Returns a slice into `url` (no allocation).
-fn hostnameFromUrl(url: []const u8) []const u8 {
-    const uri = std.Uri.parse(url) catch return url;
-    return if (uri.host) |h| h.percent_encoded else url;
-}
-
-/// Parse a `KEY=VALUE` positional override string.
-/// Returns null when the string contains no `=`.
-const Override = struct { key: []const u8, value: []const u8 };
-fn parseOverride(input: []const u8) ?Override {
-    const eq = std.mem.indexOfScalar(u8, input, '=') orelse return null;
-    return Override{ .key = input[0..eq], .value = input[eq + 1 ..] };
-}
 
 // ---------------------------------------------------------------------------
 // JOBREF resolution
 // ---------------------------------------------------------------------------
 
-pub const ResolvedJobRef = struct {
+const ResolvedJobRef = struct {
     /// Source openQA instance URL (scheme://host). Owned.
     from_url: []u8,
     /// Destination openQA instance URL (scheme://host). Owned.
@@ -234,13 +318,19 @@ pub const ResolvedJobRef = struct {
 ///      on whether the first positional was used as the JOBREF).
 ///   5. --host HOST                    → overrides the destination; defaults to localhost.
 ///
+/// Arguments:
+/// - `allocator`: Used to allocate the returned URL strings.
+/// - `args`: Parsed CLI arguments (read-only; positionals are not consumed).
+///
+/// Returns: A `ResolvedJobRef` with owned from/host URLs, job ID, and flags.
+///
 /// Errors:
 ///   error.ConflictingOptions — both --within-instance and --from were supplied.
 ///   error.MissingFromHost    — no source host could be determined.
 ///   error.MissingJobId       — no job ID could be determined.
 ///   error.InvalidUrl         — a URL argument could not be parsed.
 ///   error.UrlTooLong         — a URL exceeded an internal buffer limit.
-pub fn resolveJobRef(allocator: std.mem.Allocator, args: *const CloneArgs) !ResolvedJobRef {
+fn resolveJobRef(allocator: std.mem.Allocator, args: *const CloneArgs) !ResolvedJobRef {
     // Conflicting options guard
     if (args.within_instance != null and args.from != null) {
         return error.ConflictingOptions;
@@ -257,7 +347,7 @@ pub fn resolveJobRef(allocator: std.mem.Allocator, args: *const CloneArgs) !Reso
         if (host_url) |u| allocator.free(u);
     }
 
-    // ── Step 1: --within-instance ──────────────────────────────────────────
+    // Step 1: --within-instance
     if (args.within_instance) |wi| {
         var result = try splitJobRef(allocator, wi);
         from_url = result.host orelse return error.MissingFromHost;
@@ -268,7 +358,7 @@ pub fn resolveJobRef(allocator: std.mem.Allocator, args: *const CloneArgs) !Reso
         skip_download = true;
     }
 
-    // ── Step 2: --from ────────────────────────────────────────────────────
+    // Step 2: --from
     if (args.from) |from| {
         var result = try splitJobRef(allocator, from);
         defer result.deinit(allocator); // frees result.host only if still non-null
@@ -286,7 +376,7 @@ pub fn resolveJobRef(allocator: std.mem.Allocator, args: *const CloneArgs) !Reso
         }
     }
 
-    // ── Step 3: first positional as JOBREF (only when job_id still unknown) ─
+    // Step 3: first positional as JOBREF (only when job_id still unknown)
     const jobref_in_positional = job_id == null;
     if (jobref_in_positional) {
         if (args.positionals.items.len == 0) return error.MissingJobId;
@@ -310,7 +400,7 @@ pub fn resolveJobRef(allocator: std.mem.Allocator, args: *const CloneArgs) !Reso
     if (job_id == null) return error.MissingJobId;
     if (from_url == null) return error.MissingFromHost;
 
-    // ── Step 4: resolve destination --host ────────────────────────────────
+    // Step 4: resolve destination --host
     if (args.host) |h| {
         if (host_url) |old| allocator.free(old);
         host_url = try normalizeHostUrl(allocator, h);
@@ -372,7 +462,7 @@ const help_text =
 // Argument parsing
 // ---------------------------------------------------------------------------
 
-pub const CloneArgs = struct {
+const CloneArgs = struct {
     // Connection
     host: ?[]const u8 = null,
     from: ?[]const u8 = null,
@@ -412,12 +502,18 @@ pub const CloneArgs = struct {
 
 /// Parse command-line arguments into a `CloneArgs` struct.
 ///
+/// Arguments:
+/// - `allocator`: Used to grow the positionals ArrayList.
+/// - `argv`: Raw argument vector (argv[0] is the program name, skipped).
+///
+/// Returns: A populated `CloneArgs` struct. The caller must call `deinit` when done.
+///
 /// Errors:
 ///   - `error.MissingJobRef` — no positional JOBREF argument found.
 ///   - `error.MissingValue` — a value-taking flag has no following token.
 ///   - `error.UnknownFlag` — unrecognised flag.
 ///   - `error.InvalidNumber` — a numeric flag has a non-numeric value.
-pub fn parseCloneArgs(allocator: std.mem.Allocator, argv: []const []const u8) !CloneArgs {
+fn parseCloneArgs(allocator: std.mem.Allocator, argv: []const []const u8) !CloneArgs {
     var args = CloneArgs{
         .positionals = .empty,
     };
@@ -541,67 +637,271 @@ fn printStderr(comptime fmt: []const u8, args_fmt: anytype) void {
 }
 
 // ---------------------------------------------------------------------------
-// Credential helpers
+// Phase 1: BFS dependency graph walk
 // ---------------------------------------------------------------------------
 
-/// Merge credentials from CLI args, environment variables, and config file.
-/// Priority: CLI > env > config. Returns null when neither key nor secret is available.
-fn mergeCredentials(
-    allocator: std.mem.Allocator,
-    cli: struct { key: ?[]const u8, secret: ?[]const u8 },
-    env: struct { key: ?[]const u8, secret: ?[]const u8 },
-    conf: ?zoqa.config.Credentials,
-) !?zoqa.config.Credentials {
-    const key = cli.key orelse env.key orelse if (conf) |c| c.key else null;
-    const secret = cli.secret orelse env.secret orelse if (conf) |c| c.secret else null;
+/// Walk the dependency graph starting from the origin job, fetching each
+/// reachable job from the source instance and recording its settings and deps.
+///
+/// Returns the walker with collected entries (owned by `arena_alloc`).
+/// Calls `std.process.exit(1)` on any fatal error (this is an exe-layer helper).
+fn walkDependencyGraph(
+    gpa: std.mem.Allocator,
+    arena_alloc: std.mem.Allocator,
+    resolved: anytype,
+    from_creds: ?zoqa.config.Credentials,
+    retry_cfg: cli_credentials.RetryConfig,
+    clone_opts: zoqa.clone_job.CloneOptions,
+    verbose: bool,
+    client: *std.http.Client,
+) zoqa.clone_job.DependencyWalker {
+    var walker = zoqa.clone_job.DependencyWalker.init(arena_alloc, resolved.job_id, clone_opts) catch |err| {
+        printStderr("Error: walker init failed: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
 
-    if (key != null and secret != null) {
-        return zoqa.config.Credentials{
-            .allocator = allocator,
-            .key = try allocator.dupe(u8, key.?),
-            .secret = try allocator.dupe(u8, secret.?),
+    while (walker.next()) |item| {
+        // Fetch job from source instance
+        const job_path = std.fmt.allocPrint(gpa, "jobs/{d}", .{item.job_id}) catch |err| {
+            printStderr("Error: allocPrint failed: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer gpa.free(job_path);
+
+        const get_resp = zoqa.openQAReq(resolved.from_url, job_path, .{
+            .allocator = gpa,
+            .method = .GET,
+            .credentials = from_creds,
+            .retries = retry_cfg.retries,
+            .connect_timeout_s = retry_cfg.connect_timeout_s,
+            .retry_sleep_s = retry_cfg.retry_sleep_s,
+            .retry_factor = retry_cfg.retry_factor,
+            .quiet = !verbose,
+        }, client) catch |err| {
+            printStderr("Error: GET job {d} failed: {s}\n", .{ item.job_id, @errorName(err) });
+            std.process.exit(1);
+        };
+        defer get_resp.deinit();
+
+        if (get_resp.exitCode() != 0) {
+            printStderr("Error: failed to get job '{d}': {d}\n", .{
+                item.job_id, @intFromEnum(get_resp.status),
+            });
+            std.process.exit(1);
+        }
+
+        // Parse job response
+        const get_parsed = std.json.parseFromSlice(std.json.Value, gpa, get_resp.body, .{}) catch |err| {
+            printStderr("Error: failed to parse job {d} response: {s}\n", .{ item.job_id, @errorName(err) });
+            std.process.exit(1);
+        };
+        defer get_parsed.deinit();
+
+        const job_val = get_parsed.value.object.get("job") orelse {
+            printStderr("Error: response for job {d} missing 'job' field\n", .{item.job_id});
+            std.process.exit(1);
+        };
+        const job_obj = switch (job_val) {
+            .object => |o| o,
+            else => {
+                printStderr("Error: 'job' field is not an object for job {d}\n", .{item.job_id});
+                std.process.exit(1);
+            },
+        };
+
+        // Feed parsed job to walker (extracts settings, deps, enqueues children)
+        walker.feed(arena_alloc, item, job_obj) catch |err| {
+            printStderr("Error: walker feed failed for job {d}: {s}\n", .{ item.job_id, @errorName(err) });
+            std.process.exit(1);
         };
     }
-    return null;
+
+    return walker;
 }
 
-/// Resolve credentials for a given host URL.
-/// Follows priority: CLI flags → OPENQA_API_KEY/OPENQA_API_SECRET env → config file.
-fn resolveCredentials(
-    allocator: std.mem.Allocator,
-    host_url: []const u8,
-    cli_key: ?[]const u8,
-    cli_secret: ?[]const u8,
-) !?zoqa.config.Credentials {
-    const hostname = hostnameFromUrl(host_url);
+// ---------------------------------------------------------------------------
+// Phase 2: Encode dependencies and apply overrides
+// ---------------------------------------------------------------------------
 
-    const conf_creds = try zoqa.config.findCredentials(allocator, hostname);
-    defer if (conf_creds) |c| c.deinit();
+/// Encode inter-job dependencies (filtering to only collected IDs) and apply
+/// user overrides to each job's settings. Returns the final job list and the
+/// encoded POST body.
+///
+/// Calls `std.process.exit(1)` on fatal errors (exe-layer helper).
+fn encodeDepsAndApplyOverrides(
+    gpa: std.mem.Allocator,
+    arena_alloc: std.mem.Allocator,
+    collected: []zoqa.clone_job.DependencyWalker.CollectedEntry,
+    overrides: []const zoqa.clone_job.Override,
+    clone_opts: zoqa.clone_job.CloneOptions,
+) struct { final_jobs: std.ArrayList(zoqa.clone_job.JobEntry), post_body: []const u8 } {
+    // Build a lookup table of JobEntry for dependency filtering.
+    var lookup_entries: std.ArrayList(zoqa.clone_job.JobEntry) = .empty;
+    for (collected) |c| {
+        lookup_entries.append(arena_alloc, .{
+            .job_id = c.job_id,
+            .settings = c.settings,
+            .name = c.name,
+        }) catch |err| {
+            printStderr("Error: lookup_entries append failed: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+    }
 
-    const env_key = std.process.getEnvVarOwned(allocator, "OPENQA_API_KEY") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => null,
-        else => return err,
+    var final_jobs: std.ArrayList(zoqa.clone_job.JobEntry) = .empty;
+
+    for (collected) |*entry| {
+        // Encode parent dependencies into settings
+        zoqa.clone_job.assignExistingDeps(
+            arena_alloc,
+            &entry.settings,
+            "_PARALLEL",
+            entry.parent_parallel,
+            lookup_entries.items,
+        ) catch |err| {
+            printStderr("Error: dep encoding failed for job {d}: {s}\n", .{ entry.job_id, @errorName(err) });
+            std.process.exit(1);
+        };
+        zoqa.clone_job.assignExistingDeps(
+            arena_alloc,
+            &entry.settings,
+            "_START_AFTER",
+            entry.parent_chained,
+            lookup_entries.items,
+        ) catch |err| {
+            printStderr("Error: dep encoding failed for job {d}: {s}\n", .{ entry.job_id, @errorName(err) });
+            std.process.exit(1);
+        };
+        zoqa.clone_job.assignExistingDeps(
+            arena_alloc,
+            &entry.settings,
+            "_START_DIRECTLY_AFTER",
+            entry.parent_directly_chained,
+            lookup_entries.items,
+        ) catch |err| {
+            printStderr("Error: dep encoding failed for job {d}: {s}\n", .{ entry.job_id, @errorName(err) });
+            std.process.exit(1);
+        };
+
+        // Apply settings overrides (depth-based)
+        const override_depth: u32 = if (entry.relation == .children) 0 else entry.depth;
+        zoqa.clone_job.applySettings(
+            arena_alloc,
+            &entry.settings,
+            overrides,
+            override_depth,
+            clone_opts.parental_inheritance,
+        ) catch |err| {
+            printStderr("Error: failed to apply overrides for job {d}: {s}\n", .{ entry.job_id, @errorName(err) });
+            std.process.exit(1);
+        };
+
+        // Add to final output
+        final_jobs.append(arena_alloc, .{
+            .job_id = entry.job_id,
+            .settings = entry.settings,
+            .name = entry.name,
+        }) catch |err| {
+            printStderr("Error: final_jobs append failed: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+    }
+
+    // Build POST body
+    const post_body = zoqa.clone_job.buildPostBody(gpa, final_jobs.items) catch |err| {
+        printStderr("Error: failed to build POST body: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
     };
-    defer if (env_key) |s| allocator.free(s);
 
-    const env_secret = std.process.getEnvVarOwned(allocator, "OPENQA_API_SECRET") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => null,
-        else => return err,
+    return .{ .final_jobs = final_jobs, .post_body = post_body };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: POST to destination and format output
+// ---------------------------------------------------------------------------
+
+/// POST the assembled clone request to the destination instance, parse the
+/// response, and write formatted output to stdout.
+///
+/// Calls `std.process.exit(1)` on fatal errors (exe-layer helper).
+fn postAndFormatOutput(
+    gpa: std.mem.Allocator,
+    resolved: anytype,
+    host_creds: ?zoqa.config.Credentials,
+    retry_cfg: cli_credentials.RetryConfig,
+    verbose: bool,
+    client: *std.http.Client,
+    post_body: []const u8,
+    final_jobs: []const zoqa.clone_job.JobEntry,
+) !void {
+    const post_form_headers = [_]std.http.Header{
+        .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" },
     };
-    defer if (env_secret) |s| allocator.free(s);
+    const post_resp = zoqa.openQAReq(resolved.host_url, "jobs", .{
+        .allocator = gpa,
+        .method = .POST,
+        .headers = &post_form_headers,
+        .params = post_body,
+        .credentials = host_creds,
+        .retries = retry_cfg.retries,
+        .connect_timeout_s = retry_cfg.connect_timeout_s,
+        .retry_sleep_s = retry_cfg.retry_sleep_s,
+        .retry_factor = retry_cfg.retry_factor,
+        .quiet = !verbose,
+    }, client) catch |err| {
+        printStderr("Error: POST jobs failed: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer post_resp.deinit();
 
-    return try mergeCredentials(
-        allocator,
-        .{ .key = cli_key, .secret = cli_secret },
-        .{ .key = env_key, .secret = env_secret },
-        conf_creds,
-    );
+    if (post_resp.exitCode() != 0) {
+        printStderr("Error: failed to create job: {s}\n", .{post_resp.body});
+        std.process.exit(1);
+    }
+
+    // Parse POST response
+    const post_parsed = std.json.parseFromSlice(std.json.Value, gpa, post_resp.body, .{}) catch |err| {
+        printStderr("Error: failed to parse POST response: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer post_parsed.deinit();
+
+    const ids_val = post_parsed.value.object.get("ids") orelse {
+        printStderr("Error: POST response missing 'ids' field\n", .{});
+        std.process.exit(1);
+    };
+    const ids_map = switch (ids_val) {
+        .object => |o| o,
+        else => {
+            printStderr("Error: POST response 'ids' is not an object\n", .{});
+            std.process.exit(1);
+        },
+    };
+
+    const output = zoqa.clone_job.formatOutput(gpa, ids_map, final_jobs, resolved.host_url) catch |err| {
+        printStderr("Error: failed to format output: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer gpa.free(output);
+
+    // Write to stdout
+    var stdout_buf: [8192]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_writer.interface;
+    try stdout.writeAll(output);
+    try stdout.flush();
 }
 
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
+/// Clone-job CLI entry point: parses arguments, walks the dependency graph,
+/// and POSTs the assembled multi-job clone request to the destination instance.
+///
+/// Errors: Returns an error union only for fatal I/O failures writing to
+///   stdout; all other errors are handled internally and result in
+///   `std.process.exit(1)` or `std.process.exit(255)`.
 pub fn main() !void {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();
@@ -668,7 +968,7 @@ pub fn main() !void {
 
     // ── Credentials ──────────────────────────────────────────────────────────
     // Resolve credentials for source (from_url) and destination (host_url).
-    const from_creds = resolveCredentials(gpa, resolved.from_url, args.apikey, args.apisecret) catch |err| {
+    const from_creds = cli_credentials.resolveCredentials(gpa, resolved.from_url, args.apikey, args.apisecret) catch |err| {
         printStderr("Error: credential lookup failed: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
@@ -685,253 +985,77 @@ pub fn main() !void {
                 .secret = try gpa.dupe(u8, c.secret),
             };
         } else break :blk null;
-    } else try resolveCredentials(gpa, resolved.host_url, args.apikey, args.apisecret);
+    } else try cli_credentials.resolveCredentials(gpa, resolved.host_url, args.apikey, args.apisecret);
     defer if (host_creds) |c| c.deinit();
 
-    // ── GET /api/v1/jobs/{job_id} from the source instance ───────────────────
-    var client = std.http.Client{ .allocator = gpa };
-    defer client.deinit();
-
-    const job_path = try std.fmt.allocPrint(gpa, "jobs/{d}", .{resolved.job_id});
-    defer gpa.free(job_path);
-
-    const get_resp = zoqa.openQAReq(resolved.from_url, job_path, .{
-        .allocator = gpa,
-        .method = .GET,
-        .credentials = from_creds,
-        .quiet = !args.verbose,
-    }, &client) catch |err| {
-        printStderr("Error: GET job failed: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-    defer get_resp.deinit();
-
-    if (get_resp.exitCode() != 0) {
-        printStderr("Error: failed to get job '{d}': {d}\n", .{
-            resolved.job_id, @intFromEnum(get_resp.status),
-        });
-        std.process.exit(1);
-    }
-
-    // ── Parse GET response ────────────────────────────────────────────────────
-    const get_parsed = std.json.parseFromSlice(std.json.Value, gpa, get_resp.body, .{}) catch |err| {
-        printStderr("Error: failed to parse job response: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-    defer get_parsed.deinit();
-
-    const job_val = get_parsed.value.object.get("job") orelse {
-        printStderr("Error: response missing 'job' field\n", .{});
+    // ── Retry/timeout knobs ──────────────────────────────────────────────────
+    const retry_cfg = cli_credentials.resolveRetryConfig(gpa, args.retry) catch |err| {
+        printStderr("Error: retry config resolution failed: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
 
-    // Extract job name for output
-    const job_name: []const u8 = if (job_val.object.get("name")) |n|
-        switch (n) {
-            .string => |s| s,
-            else => "unknown",
-        }
-    else
-        "unknown";
-
-    // Extract group_id if present (may be null in JSON)
-    const group_id: ?i64 = if (job_val.object.get("group_id")) |g|
-        switch (g) {
-            .integer => |i| i,
-            else => null,
-        }
-    else
-        null;
-
-    // Extract settings object
-    const settings_val = job_val.object.get("settings") orelse {
-        printStderr("Error: response missing 'settings' field\n", .{});
-        std.process.exit(1);
-    };
-
-    // ── Build settings list ───────────────────────────────────────────────────
-    // Use an arena for all string copies; freed as a unit at the end.
+    // ── Arena for all job settings (freed as a unit at the end) ──────────────
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
-    var settings: std.ArrayList(SettingPair) = .empty;
-    // No deinit needed — arena owns all the memory.
-
-    // Copy settings from API response, skipping "NAME" (server auto-generates it).
-    {
-        var it = settings_val.object.iterator();
-        while (it.next()) |entry| {
-            const k = entry.key_ptr.*;
-            if (std.mem.eql(u8, k, "NAME")) continue;
-            const v: []const u8 = switch (entry.value_ptr.*) {
-                .string => |s| s,
-                .integer => |i| try std.fmt.allocPrint(arena_alloc, "{d}", .{i}),
-                .float => |f| try std.fmt.allocPrint(arena_alloc, "{d}", .{f}),
-                .bool => |b| if (b) "1" else "0",
-                else => continue,
-            };
-            try settings.append(arena_alloc, .{
-                .key = try arena_alloc.dupe(u8, k),
-                .value = v,
-            });
-        }
-    }
-
-    // Add CLONED_FROM = "{from_url}/tests/{job_id}"
-    {
-        const cloned_from = try std.fmt.allocPrint(arena_alloc, "{s}/tests/{d}", .{
-            resolved.from_url, resolved.job_id,
-        });
-        try settings.append(arena_alloc, .{ .key = "CLONED_FROM", .value = cloned_from });
-    }
-
-    // Add _GROUP_ID if the source job had a group (preserves group membership).
-    if (group_id) |gid| {
-        const gid_str = try std.fmt.allocPrint(arena_alloc, "{d}", .{gid});
-        // Remove any existing _GROUP_ID / _GROUP before adding ours.
-        var wi: usize = 0;
-        while (wi < settings.items.len) {
-            const k = settings.items[wi].key;
-            if (std.mem.eql(u8, k, "_GROUP_ID") or std.mem.eql(u8, k, "_GROUP")) {
-                _ = settings.orderedRemove(wi);
-            } else {
-                wi += 1;
-            }
-        }
-        try settings.append(arena_alloc, .{ .key = "_GROUP_ID", .value = gid_str });
-    }
-
-    // ── Apply user setting overrides (KEY=VALUE positionals) ─────────────────
+    // ── Parse user overrides ─────────────────────────────────────────────────
     const override_start: usize = if (resolved.jobref_consumed_positional) 1 else 0;
-    const overrides = args.positionals.items[override_start..];
+    const raw_overrides = args.positionals.items[override_start..];
 
-    for (overrides) |ov| {
-        const parsed_ov = parseOverride(ov) orelse continue;
-        const ov_key = try arena_alloc.dupe(u8, parsed_ov.key);
-        const ov_val = try arena_alloc.dupe(u8, parsed_ov.value);
-
-        // If value is empty: delete the setting.
-        if (ov_val.len == 0) {
-            var wi: usize = 0;
-            while (wi < settings.items.len) {
-                if (std.mem.eql(u8, settings.items[wi].key, ov_key)) {
-                    _ = settings.orderedRemove(wi);
-                } else {
-                    wi += 1;
-                }
-            }
-            continue;
-        }
-
-        // Override: find and replace existing, or append.
-        // Also delete _GROUP when _GROUP_ID is set and vice-versa (§7 JOB_SETTING_OVERRIDES).
-        var found = false;
-        for (settings.items) |*s| {
-            if (std.mem.eql(u8, s.key, ov_key)) {
-                s.value = ov_val;
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            try settings.append(arena_alloc, .{ .key = ov_key, .value = ov_val });
-        }
-        // Delete counterpart (_GROUP ↔ _GROUP_ID)
-        const counterpart: ?[]const u8 = if (std.mem.eql(u8, ov_key, "_GROUP"))
-            "_GROUP_ID"
-        else if (std.mem.eql(u8, ov_key, "_GROUP_ID"))
-            "_GROUP"
-        else
-            null;
-        if (counterpart) |cp| {
-            var wi: usize = 0;
-            while (wi < settings.items.len) {
-                if (std.mem.eql(u8, settings.items[wi].key, cp)) {
-                    _ = settings.orderedRemove(wi);
-                } else {
-                    wi += 1;
-                }
-            }
+    var overrides: std.ArrayList(zoqa.clone_job.Override) = .empty;
+    for (raw_overrides) |ov_str| {
+        if (zoqa.clone_job.parseOverride(ov_str)) |ov| {
+            try overrides.append(arena_alloc, ov);
         }
     }
 
-    // ── Build POST body (application/x-www-form-urlencoded) ──────────────────
-    // Format: KEY:{job_id}=percent_encoded_VALUE&...&is_clone_job=1
-    // The colon and job ID are literal (not encoded); only values are encoded.
-    var body_buf: std.ArrayList(u8) = .empty;
-    defer body_buf.deinit(gpa);
+    // ── Recursive dependency graph walk ──────────────────────────────────────
+    var client = std.http.Client{ .allocator = gpa };
+    defer client.deinit();
 
-    var id_buf: [20]u8 = undefined;
-    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{resolved.job_id}) catch unreachable;
-
-    for (settings.items) |s| {
-        if (body_buf.items.len > 0) try body_buf.append(gpa, '&');
-        try formEncodeAppend(gpa, &body_buf, s.key);
-        try body_buf.append(gpa, ':');
-        try body_buf.appendSlice(gpa, id_str);
-        try body_buf.append(gpa, '=');
-        try formEncodeAppend(gpa, &body_buf, s.value);
-    }
-    if (body_buf.items.len > 0) try body_buf.append(gpa, '&');
-    try body_buf.appendSlice(gpa, "is_clone_job=1");
-
-    // ── POST /api/v1/jobs to the destination instance ─────────────────────────
-    const post_form_headers = [_]std.http.Header{
-        .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" },
-    };
-    const post_resp = zoqa.openQAReq(resolved.host_url, "jobs", .{
-        .allocator = gpa,
-        .method = .POST,
-        .headers = &post_form_headers,
-        .params = body_buf.items,
-        .credentials = host_creds,
-        .quiet = !args.verbose,
-    }, &client) catch |err| {
-        printStderr("Error: POST jobs failed: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-    defer post_resp.deinit();
-
-    if (post_resp.exitCode() != 0) {
-        printStderr("Error: failed to create job: {s}\n", .{post_resp.body});
-        std.process.exit(1);
-    }
-
-    // ── Parse POST response, extract new job ID ───────────────────────────────
-    const post_parsed = std.json.parseFromSlice(std.json.Value, gpa, post_resp.body, .{}) catch |err| {
-        printStderr("Error: failed to parse POST response: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-    defer post_parsed.deinit();
-
-    const ids_val = post_parsed.value.object.get("ids") orelse {
-        printStderr("Error: POST response missing 'ids' field\n", .{});
-        std.process.exit(1);
+    const clone_opts = zoqa.clone_job.CloneOptions{
+        .skip_deps = args.skip_deps,
+        .skip_chained_deps = args.skip_chained_deps,
+        .clone_children = args.clone_children,
+        .max_depth = args.max_depth,
+        .parental_inheritance = args.parental_inheritance,
+        .from_url = resolved.from_url,
     };
 
-    var ids_it = ids_val.object.iterator();
-    const first_id_entry = ids_it.next() orelse {
-        printStderr("Error: POST response 'ids' is empty\n", .{});
-        std.process.exit(1);
-    };
-    const new_job_id: i64 = switch (first_id_entry.value_ptr.*) {
-        .integer => |i| i,
-        else => {
-            printStderr("Error: unexpected type in POST response 'ids'\n", .{});
-            std.process.exit(1);
-        },
-    };
+    // Phase 1: Walk dependency graph, fetch all reachable jobs.
+    const walker = walkDependencyGraph(
+        gpa,
+        arena_alloc,
+        &resolved,
+        from_creds,
+        retry_cfg,
+        clone_opts,
+        args.verbose,
+        &client,
+    );
 
-    // ── Print success output (matches Perl format) ────────────────────────────
-    // "1 job has been created:\n - {name} -> {host_url}/tests/{id}\n"
-    var stdout_buf: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-    const stdout = &stdout_writer.interface;
-    try stdout.print("1 job has been created:\n - {s} -> {s}/tests/{d}\n", .{
-        job_name, resolved.host_url, new_job_id,
-    });
-    try stdout.flush();
+    // Phase 2: Encode dependencies and apply overrides.
+    const phase2 = encodeDepsAndApplyOverrides(
+        gpa,
+        arena_alloc,
+        walker.collected.items,
+        overrides.items,
+        clone_opts,
+    );
+    defer gpa.free(phase2.post_body);
+
+    // Phase 3: POST to destination and format output.
+    try postAndFormatOutput(
+        gpa,
+        &resolved,
+        host_creds,
+        retry_cfg,
+        args.verbose,
+        &client,
+        phase2.post_body,
+        phase2.final_jobs.items,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1042,142 +1166,6 @@ test "parseCloneArgs: no args produces empty positionals" {
     defer parsed.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), parsed.positionals.items.len);
     try std.testing.expect(!parsed.help);
-}
-
-// ---------------------------------------------------------------------------
-// Tests: URL helpers
-// ---------------------------------------------------------------------------
-
-test "isNumericId: digits only" {
-    try std.testing.expect(isNumericId("42"));
-    try std.testing.expect(isNumericId("12345"));
-    try std.testing.expect(!isNumericId(""));
-    try std.testing.expect(!isNumericId("42a"));
-    try std.testing.expect(!isNumericId("a42"));
-    try std.testing.expect(!isNumericId("http://host/t42"));
-}
-
-test "hasHttpScheme: detection" {
-    try std.testing.expect(hasHttpScheme("http://localhost"));
-    try std.testing.expect(hasHttpScheme("https://openqa.opensuse.org"));
-    try std.testing.expect(!hasHttpScheme("openqa.opensuse.org"));
-    try std.testing.expect(!hasHttpScheme("ftp://example.com"));
-    try std.testing.expect(!hasHttpScheme(""));
-}
-
-test "extractJobIdFromPath: /t{id}" {
-    try std.testing.expectEqual(@as(?u64, 42), extractJobIdFromPath("/t42"));
-    try std.testing.expectEqual(@as(?u64, 1234), extractJobIdFromPath("/t1234"));
-    // trailing slash variant
-    try std.testing.expectEqual(@as(?u64, 7), extractJobIdFromPath("/t7/"));
-    // non-numeric after /t
-    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/tests"));
-    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/top"));
-}
-
-test "extractJobIdFromPath: /tests/{id}" {
-    try std.testing.expectEqual(@as(?u64, 42), extractJobIdFromPath("/tests/42"));
-    try std.testing.expectEqual(@as(?u64, 100), extractJobIdFromPath("/tests/100/details"));
-    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/tests/"));
-    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/tests/abc"));
-}
-
-test "extractJobIdFromPath: no match" {
-    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/"));
-    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath(""));
-    try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/jobs/42"));
-}
-
-// ---------------------------------------------------------------------------
-// Tests: splitJobRef
-// ---------------------------------------------------------------------------
-
-test "splitJobRef: bare integer" {
-    const allocator = std.testing.allocator;
-    var r = try splitJobRef(allocator, "42");
-    defer r.deinit(allocator);
-    try std.testing.expect(r.host == null);
-    try std.testing.expectEqual(@as(?u64, 42), r.job_id);
-}
-
-test "splitJobRef: https URL with /t42" {
-    const allocator = std.testing.allocator;
-    var r = try splitJobRef(allocator, "https://openqa.opensuse.org/t42");
-    defer r.deinit(allocator);
-    try std.testing.expectEqualStrings("https://openqa.opensuse.org", r.host.?);
-    try std.testing.expectEqual(@as(?u64, 42), r.job_id);
-}
-
-test "splitJobRef: https URL with /tests/42" {
-    const allocator = std.testing.allocator;
-    var r = try splitJobRef(allocator, "https://openqa.opensuse.org/tests/42");
-    defer r.deinit(allocator);
-    try std.testing.expectEqualStrings("https://openqa.opensuse.org", r.host.?);
-    try std.testing.expectEqual(@as(?u64, 42), r.job_id);
-}
-
-test "splitJobRef: bare hostname prepends http scheme" {
-    const allocator = std.testing.allocator;
-    var r = try splitJobRef(allocator, "openqa.opensuse.org");
-    defer r.deinit(allocator);
-    try std.testing.expectEqualStrings("http://openqa.opensuse.org", r.host.?);
-    try std.testing.expect(r.job_id == null);
-}
-
-test "splitJobRef: bare hostname with /t42 path" {
-    const allocator = std.testing.allocator;
-    var r = try splitJobRef(allocator, "openqa.opensuse.org/t42");
-    defer r.deinit(allocator);
-    try std.testing.expectEqualStrings("http://openqa.opensuse.org", r.host.?);
-    try std.testing.expectEqual(@as(?u64, 42), r.job_id);
-}
-
-test "splitJobRef: http URL no path returns no job_id" {
-    const allocator = std.testing.allocator;
-    var r = try splitJobRef(allocator, "http://openqa.example.com");
-    defer r.deinit(allocator);
-    try std.testing.expectEqualStrings("http://openqa.example.com", r.host.?);
-    try std.testing.expect(r.job_id == null);
-}
-
-test "splitJobRef: URL with port" {
-    const allocator = std.testing.allocator;
-    var r = try splitJobRef(allocator, "http://localhost:9526/t99");
-    defer r.deinit(allocator);
-    try std.testing.expectEqualStrings("http://localhost:9526", r.host.?);
-    try std.testing.expectEqual(@as(?u64, 99), r.job_id);
-}
-
-// ---------------------------------------------------------------------------
-// Tests: normalizeHostUrl
-// ---------------------------------------------------------------------------
-
-test "normalizeHostUrl: already has http scheme" {
-    const allocator = std.testing.allocator;
-    const r = try normalizeHostUrl(allocator, "http://localhost");
-    defer allocator.free(r);
-    try std.testing.expectEqualStrings("http://localhost", r);
-}
-
-test "normalizeHostUrl: already has https scheme" {
-    const allocator = std.testing.allocator;
-    const r = try normalizeHostUrl(allocator, "https://openqa.opensuse.org");
-    defer allocator.free(r);
-    try std.testing.expectEqualStrings("https://openqa.opensuse.org", r);
-}
-
-test "normalizeHostUrl: bare localhost uses http" {
-    const allocator = std.testing.allocator;
-    const r = try normalizeHostUrl(allocator, "localhost");
-    defer allocator.free(r);
-    try std.testing.expectEqualStrings("http://localhost", r);
-}
-
-test "normalizeHostUrl: bare non-localhost uses https" {
-    const allocator = std.testing.allocator;
-    const r = try normalizeHostUrl(allocator, "openqa.opensuse.org");
-    defer allocator.free(r);
-    try std.testing.expectEqualStrings("https://openqa.opensuse.org", r);
 }
 
 // ---------------------------------------------------------------------------
