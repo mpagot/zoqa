@@ -27,7 +27,16 @@
 #   dump_job_logs()     — fetch and print per-job diagnostics on failure
 #   register_deletable_asset() — create a file-backed asset, prints asset ID
 #
-# Performance helpers (moved here from tests_perf.sh):
+# Sourced on demand from lib_topology.sh (topology fixtures — tests_clone_job.sh only):
+#   schedule_topology_jobs() — generic multi-job topology scheduler
+#   ensure_chained_jobs()    — lazy-init CHAIN_*_ID variables
+#   ensure_fanout_jobs()     — lazy-init FANOUT_*_ID variables
+#   ensure_multilayer_jobs() — lazy-init LAYER_*_ID variables
+#   ensure_diamond_jobs()    — lazy-init DIAMOND_*_ID variables
+#   ensure_parallel_jobs()   — lazy-init PARALLEL_*_ID variables
+#   assert_job_has_chained_parent() — verify chained dependency
+#
+# Performance helpers:
 #   _perf_wall_time_s()  — measure wall-clock time of a container command
 #   _perf_peak_rss_kb()  — measure peak RSS via /usr/bin/time -v
 #   _perf_timev_field()  — read a field from the saved /usr/bin/time -v output
