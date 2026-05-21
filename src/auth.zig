@@ -2,6 +2,11 @@ const std = @import("std");
 const HmacSha1 = std.crypto.auth.hmac.HmacSha1;
 
 /// Writes 40-char lowercase hex HMAC-SHA1 digest into `out[0..40]`.
+///
+/// Arguments:
+///   - `key`: The HMAC key (API secret).
+///   - `message`: The data to be signed.
+///   - `out`: Pointer to a 40-byte buffer that receives the hex digest.
 pub fn hmacSha1Hex(
     key: []const u8,
     message: []const u8,
@@ -12,9 +17,17 @@ pub fn hmacSha1Hex(
     out.* = std.fmt.bytesToHex(hmac_out, .lower);
 }
 
-/// Returns a stack-allocated array of the three auth headers.
-/// `timestamp` must outlive the returned headers (they borrow from it).
-/// `api_key` and `hash_buf` must outlive the returned headers.
+/// Builds the three openQA authentication headers (X-API-Microtime,
+/// X-API-Key, X-API-Hash) from the given credentials and request path.
+///
+/// Arguments:
+///   - `api_key`: The API key string (borrowed; must outlive the returned headers).
+///   - `api_secret`: The API secret used as the HMAC key.
+///   - `path_and_query`: The request path including query string (e.g. `/api/v1/jobs?limit=5`).
+///   - `timestamp`: Microtime string (borrowed; must outlive the returned headers).
+///   - `hash_buf`: Pointer to a 40-byte buffer for the hex digest (must outlive headers).
+///
+/// Returns: A stack-allocated array of three `std.http.Header` values.
 pub fn buildAuthHeaders(
     api_key: []const u8,
     api_secret: []const u8,

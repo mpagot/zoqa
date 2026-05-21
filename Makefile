@@ -6,15 +6,15 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help build release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint fuzz-lint lint fuzz-build
+.PHONY: help zig-build-debug zig-release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint fuzz-lint zig-docstring lint fuzz-build
 
 # Default target
 help:
 	@echo "Usage: make <target>"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build       Build the zoqa executable and static library."
-	@echo "  release     Build with release optimizations."
+	@echo "  zig-build-debug  Build the zoqa executable and static library (debug)."
+	@echo "  zig-release      Build with release optimizations and strip symbols."
 	@echo "  zig-test    Run all Zig unit tests."
 	@echo "  zig-test-discovery  Verify every \`test\` block in src/ is actually run."
 	@echo "                      Catches Zig issue #10018 (lazy-analysis silently"
@@ -31,16 +31,18 @@ help:
 	@echo "  manual-lint     Run bash -n and shellcheck on manual test scripts."
 	@echo "  fuzz-lint       Run bash -n and shellcheck on tests/fuzz/ scripts."
 	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint, fuzz-lint)."
+	@echo "  zig-docstring  Check /// docstring completeness for fn declarations in src/."
+	@echo "                  Optional: WITH_PRIVATE=1  — also check private functions."
 	@echo "  fuzz-build  Build the fuzzy app."
 
 # -----------------------------------------------------------------------------
 # Build
 # -----------------------------------------------------------------------------
-build:
+zig-build-debug:
 	zig build
 
-release:
-	zig build -Doptimize=ReleaseFast
+zig-release:
+	zig build -Doptimize=ReleaseFast -Dstrip=true
 
 # -----------------------------------------------------------------------------
 # Fuzz
@@ -51,7 +53,7 @@ fuzz-build:
 # -----------------------------------------------------------------------------
 # Unit Tests
 # -----------------------------------------------------------------------------
-zig-test:
+zig-test: zig-test-discovery
 	zig build test --summary all
 
 # Verify every `test` block declared in src/*.zig is actually executed by the
@@ -105,6 +107,7 @@ E2E_SCRIPTS := \
 	tests/e2e/tests_robustness.sh \
 	tests/e2e/tests_monitor.sh \
 	tests/e2e/tests_schedule.sh \
+	tests/e2e/tests_clone_job.sh \
 	tests/e2e/tests_help.sh \
 	tests/e2e/tests_perf.sh \
 	tests/e2e/tests_stress.sh \
@@ -165,6 +168,21 @@ zig-lint:
 	@echo "==> zig fmt --check src/"
 	@zig fmt --check src/
 	@echo "==> zig-lint passed"
+
+# -----------------------------------------------------------------------------
+# Docstring completeness check
+# -----------------------------------------------------------------------------
+# Check that every pub/export fn declaration in src/*.zig has a complete /// doc
+# comment (summary, Arguments:, Returns:, Errors: as appropriate).
+# Optional: pass WITH_PRIVATE=1 to also check private functions.
+#   make zig-docstring
+#   make zig-docstring WITH_PRIVATE=1
+DOCSTRING_FLAGS := $(if $(WITH_PRIVATE),--with-private,)
+
+zig-docstring:
+	@echo "==> docstring completeness check"
+	@python3 tools/check_docstrings.py $(DOCSTRING_FLAGS) .
+	@echo "==> zig-docstring passed"
 
 # -----------------------------------------------------------------------------
 # Aggregate lint target

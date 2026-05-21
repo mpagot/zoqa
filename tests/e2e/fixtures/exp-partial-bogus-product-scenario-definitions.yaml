@@ -1,0 +1,21 @@
+---
+# Experiment fixture: one valid job_template + one referencing a nonexistent
+# product key. Hypothesis: openQA schedules the valid one and reports the
+# bogus one in failed/failed_job_info — yielding the partial-success shape
+# we need to exercise §15.4 / §15.6 precedence.
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  simple_boot:
+    product: "example"
+    machine: "64bit"
+  bogus_extra:
+    product: "undefined_product_key_xyz"
+    machine: "64bit"

@@ -91,6 +91,7 @@ pwsh tests\e2e\run_windows.ps1 -WslDistro "openSUSE-Tumbleweed"
 | `tests_archive.sh` | Section H — archive subcommand tests (ARC-1–ARC-63). |
 | `tests_monitor.sh` | Section I — monitor subcommand tests (MON-1–MON-51). |
 | `tests_schedule.sh` | Section J — schedule subcommand tests (SCH-1–SCH-50). |
+| `tests_clone_job.sh` | Section K — clone-job subcommand tests (M1–M17). |
 | `tests_help.sh` | Help output structure tests (global, api, archive, monitor, schedule). |
 | `tests_perf.sh` | Section G — wall-clock timing and peak RSS comparisons (PERF-B1–B2, T1–T8, R1–R9). |
 | `tests_stress.sh` | Section L — large response stress and gzip negotiation tests. |
@@ -466,6 +467,7 @@ tests/e2e/
   tests_archive.sh            — Section H: archive subcommand
   tests_monitor.sh            — Section I: monitor subcommand
   tests_schedule.sh           — Section J: schedule subcommand
+  tests_clone_job.sh          — Section K: clone-job subcommand
   tests_help.sh               — help output structure tests
   tests_perf.sh               — Section G: wall-clock timing and peak RSS
   tests_stress.sh             — Section L: large response stress tests

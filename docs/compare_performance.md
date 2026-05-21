@@ -31,10 +31,10 @@ will experience in practice. Container-based E2E measurements follow for referen
 | **CPU user time `archive` (~3.4 GB) †** | ~151 s | ~2.9 s (52× less) |
 | **Peak memory (`archive`, ~3.4 GB) †** | ~70 MB | ~11 MB (6.3× less) |
 | | | |
-| **Wall-time per `api` call (E2E, container)** | ~0.5–1.1 s | ~0.02–0.08 s (12–37× faster) |
-| **Peak memory (`api`, E2E)** | ~57 MB | ~3.7 MB (93% less) |
-| **Wall-time `archive` (~21 MB, E2E)** | ~1.0 s | ~0.4 s (~3× faster) |
-| **Peak memory (`archive`, ~21 MB, E2E)** | ~60 MB | ~4 MB (93% less) |
+| **Wall-time per `api` call (E2E, container)** | ~0.5–1.3 s | ~0.01–0.09 s (12–62× faster) |
+| **Peak memory (`api`, E2E)** | ~57 MB | ~0.9 MB (98% less) |
+| **Wall-time `archive` (~21 MB, E2E)** | ~1.2 s | ~0.25 s (~5× faster) |
+| **Peak memory (`archive`, ~21 MB, E2E)** | ~61 MB | ~1.1 MB (98% less) |
 
 <sup>† Measured against a production openQA server over the network. API numbers:
 3 runs each via `tests/manual/test_api.sh` (T4 excluded — server-side table scan dominates).
@@ -44,7 +44,7 @@ raw-curl baseline for the same data: ~10m 40s.</sup>
 
 ## Where the time goes: decomposing the `api` speedup
 
-The 12–37× speedup measured in the E2E suite is real, but it reflects a
+The 12–62× speedup measured in the E2E suite is real, but it reflects a
 near-zero-latency environment where client-side overhead dominates. Against a
 production server, the ratio compresses to 4–5×. Both numbers trace to the same
 root cause: **Perl + Mojolicious startup overhead**, not HTTP performance.
@@ -57,7 +57,7 @@ that quantify this directly:
 | `perl -e '1'` (bare interpreter) | ~3–7 ms (avg 5 ms) | ~4.7 MB | 215 |
 | `perl -MMojo::UserAgent -e '1'` (framework load) | ~400–1,100 ms (avg 730 ms) | ~41 MB | ~7,900 |
 | `openqa-cli api …` (full request) | ~500–1,100 ms | ~57 MB | ~12,000 |
-| `zoqa api …` (full request) | ~20–80 ms | ~3.7 MB | ~200 |
+| `zoqa api …` (full request) | ~15–90 ms | ~0.9 MB | ~80 |
 
 These are measured values from PERF-B1 and PERF-B2 in the E2E suite (5 runs each).
 
@@ -81,13 +81,13 @@ These are measured values from PERF-B1 and PERF-B2 in the E2E suite (5 runs each
    `OpenQA::Client`, etc.) loading on top of the framework. The actual HTTP
    round-trip to a local server adds negligible time — it is lost in the noise.
 
-4. **zoqa full request** does all of the above in ~20–80 ms total, with ~3.7 MB
-   RSS and ~200 minor faults. There is no framework to load; the binary maps
+4. **zoqa full request** does all of the above in ~15–90 ms total, with ~0.9 MB
+   RSS and ~80 minor faults. There is no framework to load; the binary maps
    into memory in one shot at startup.
 
 
 The "speedup" is honest but should be understood correctly: zoqa is not doing
-the HTTP work 13–37× faster. The network round-trip is roughly the same for
+the HTTP work 12–62× faster. The network round-trip is roughly the same for
 both.
 The difference is that openqa-cli pays a ~730 ms average tax on every
 invocation to load Mojolicious — highly variable, and unavoidable, because
@@ -138,11 +138,11 @@ The 91% reduction is consistent across all normal API workloads — Perl loads
 the full Mojolicious stack regardless of response size. For T4, both tools
 buffer a multi-megabyte response body; Zig still uses 47% less memory.
 
-### Why 4× here vs 12–37× in E2E
+### Why 4× here vs 12–62× in E2E
 
 The E2E suite runs against a local containerised server with sub-millisecond
 network latency. There, the ~730 ms Mojolicious startup tax is nearly the
-entire wall time of a Perl request, yielding 12–37× ratios. Over a real
+entire wall time of a Perl request, yielding 12–62× ratios. Over a real
 network, the ~100–200 ms of round-trip time is a fixed floor for both tools,
 compressing the ratio. The typical speedup against a production server is
 **4–5× on wall-clock**, with the startup tax still visible but diluted by I/O
@@ -166,8 +166,8 @@ are *two* distinct effects at play.
 
 | Metric | openqa-cli | zoqa | Ratio |
 |---|---|---|---|
-| Wall time | ~1.0 s | ~0.4 s | ~3× faster |
-| Peak RSS | ~60 MB | ~4 MB | 93% less |
+| Wall time | ~1.2 s | ~0.25 s | ~5× faster |
+| Peak RSS | ~61 MB | ~1.1 MB | 98% less |
 
 On small downloads, most of the gap is still startup overhead. The actual I/O
 completes in a fraction of a second for both tools.
@@ -219,22 +219,23 @@ Both the E2E suite and the manual API tests collect detailed process metrics via
 
 ```
                       E2E (local)           Manual (remote)
-PERL peak RSS:        57,880 kB             61,580 kB
-ZIG  peak RSS:         3,756 kB              5,344 kB
-Minor faults:  PERL:  11,943       PERL:    12,179
-               ZIG:      202       ZIG:        266
-User time (s): PERL:    0.79       PERL:      0.57
+PERL peak RSS:        58,064 kB             61,580 kB
+ZIG  peak RSS:           868 kB              5,344 kB
+Minor faults:  PERL:  11,907       PERL:    12,179
+               ZIG:       77       ZIG:        266
+User time (s): PERL:    0.50       PERL:      0.57
                ZIG:     0.00       ZIG:       0.00
 ```
 
 The ~12,000 minor page faults on the Perl side are the Mojolicious module pages
-being demand-paged into RSS. zoqa's ~200–270 minor faults are the ELF loader
-mapping the static binary — its entire working set fits in ~3.7–5.4 MB.
+being demand-paged into RSS. zoqa's ~80–270 minor faults are the ELF loader
+mapping the static binary — its entire working set fits in ~0.9–5.4 MB.
 
 Perl's RSS is dominated by the framework regardless of what the application
 does. Whether it's a plain GET, a config-file read, a pretty-print, or an
 authenticated request, the peak RSS stays at ~57–62 MB. zoqa stays at
-~3.7–5.4 MB across all scenarios.
+~0.9–5.4 MB across all scenarios (the lower end in E2E with local loopback;
+the higher end against production servers where TLS adds overhead).
 
 For the `archive` subcommand, the pattern holds at larger scale. On a ~3.4 GB
 download against a production server, openqa-cli peaks at 70 MB RSS while zoqa
@@ -251,7 +252,7 @@ and smaller than curl's heap allocations.
 | **CI pipeline with hundreds of `api` calls** | Startup compounds: ~500 ms × 200 calls = ~100 s of pure framework loading |
 | **Containers / minimal images** | zoqa is a single static binary (zero deps); openqa-cli needs Perl + ~15 CPAN packages |
 | **Large `archive` downloads (GB-scale)** | Streaming vs. buffering: 52× less CPU, 6× less memory, no temp-file doubling |
-| **Memory-constrained environments** | ~4 MB vs ~57 MB baseline — matters on small VMs or when running many parallel clients |
+| **Memory-constrained environments** | ~1 MB vs ~57 MB baseline — matters on small VMs or when running many parallel clients |
 
 
 ## About openqa-cli

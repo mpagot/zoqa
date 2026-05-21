@@ -7,51 +7,97 @@ of the harness and how to run it, see [README.md](README.md).
 
 ## Test Coverage
 
-### API & Protocol
+### Core Protocol & CLI Flags (`tests_core.sh`)
 | # | Test | Verification |
 |---|---|---|
 | 1 | GET `jobs/overview` | Basic endpoint connectivity and JSON array response. |
 | 2 | GET `workers` | Basic endpoint connectivity. |
-| 3 | Query Parameters | Appending filters (e.g., `distri=opensuse`) to the URL. |
-| 14 | Nested JSON Parsing | Correctly parsing and returning complex nested objects (e.g., `settings`). |
-| 19 | Resource Discovery | Retrieving seeded groups and verifying data persistence. |
-| 21 | Relative vs Absolute Path | `zoqa api jobs/1` and `zoqa api http://localhost/api/v1/jobs/1` produce identical output. |
+| 3 | GET with query params | Appending filters (e.g., `distri=opensuse`) to the URL. |
+| 4 | GET 404 | Standard API error propagation (`jobs/999999`). |
+| 5 | Missing PATH argument | Both Perl and Zig exit 255 with usage text when PATH is omitted. |
+| 6 | Invalid host | Connection refused on unreachable port (exit 1). |
+| 7 | `--host` before subcommand | Flags placed before `api` rejected (exit 255). |
+| 8 | `--` stop accepted | `-- jobs/overview` behaves same as without `--` (exit 0). |
+| 9 | `--` dash-prefixed path | `-- -X` used as literal path (404, not flag error). |
+| 10 | `--param-file` | Reading key/value pairs from external files. |
+| 10b | `--param-file` matching | `--param-file` with a value that matches seeded data returns results. |
+| 36 | `--data` / `-d` raw body POST | Raw body sent verbatim via `--data`. |
+| 36b | `--data-file` POST | `--data-file` with matching product schedules a job (`count:1`). |
+| 37 | `--form` JSON to form-encoded | `--form` converts JSON body to `application/x-www-form-urlencoded`. |
+| 38 | `-a` / `--header` | Custom request header injected without breaking the request. |
+| 39 | `--json` + `--data-file` + PUT | Content-Type set to `application/json`; raw JSON body via file. |
+| 40 | `--param-file` + positional KV | File value merged with inline `key=value` parameter. |
+| 41a | Bare hostname to `https://` | Bare `--host localhost` prepends `https://` (TLS error, exit 1). |
+| 41b | Unresolvable hostname | DNS failure on non-existent hostname (exit 1). |
+| 41c | Explicit URL wrong port | Fully-qualified URL with wrong port (ECONNREFUSED, exit 1). |
+| 42 | Combined short flags `-vp` | Flag bundling rejected (exit 255). |
+| 43 | Cross-subcommand flag rejection | Archive-only `--with-thumbnails` rejected for `api` (exit 255). |
 
-### Authentication (HMAC-SHA1)
+### Authentication (`tests_auth.sh`)
 | # | Test | Verification |
 |---|---|---|
-| 5 | DELETE HMAC | Correct signature generation for `DELETE` requests (verified via 404). |
-| 6 | POST HMAC | Correct signature generation for `POST` requests. |
-| 18 | Authenticated DELETE | Successful deletion of a real asset using full HMAC handshake. |
-| 9 | Auth Failure (403) | Graceful handling of invalid secrets/signatures. |
+| 11 | DELETE HMAC | Correct signature generation for `DELETE` requests (verified via 404). |
+| 12 | POST HMAC | Correct signature generation for `POST` requests via config file credentials. |
+| 13 | Wrong `--apisecret` (403) | Graceful handling of invalid secrets/signatures. |
+| 14 | CLI flags override config | `--apikey`/`--apisecret` override wrong `client.conf` credentials. |
+| 15 | Env var credentials | `OPENQA_API_KEY`+`OPENQA_API_SECRET` as sole credential source. |
+| 16 | Wrong env var secret (403) | Invalid `OPENQA_API_SECRET` env var is rejected by server. |
+| 17 | CLI flags override env vars | `--apikey`/`--apisecret` override wrong env var credentials. |
 
-### CLI Flags & Configuration
+### Seeded Data (`tests_data.sh`)
 | # | Test | Verification |
 |---|---|---|
-| 7 | `--param-file` | Reading key/value pairs from external files. |
-| 8 | CLI Overrides | Explicit flags (`--apikey`) take precedence over `client.conf`. |
-| 15 | `--links` Flag | Parsing and displaying `Link` pagination headers. |
-| 16 | `--verbose` Flag | HTTP status line and `Content-Type` header present in output. |
-| 12, 17 | `--pretty` Flag | JSON indentation logic for both empty and populated responses. |
-| 22 | `--name` Flag | Accepted by both Perl and Zig; sets `User-Agent` header. |
+| 18 | GET `jobs/overview` (non-empty) | After seeding, response contains test name. |
+| 19 | Nested JSON Parsing | Correctly parsing and returning complex nested objects (e.g., `settings`). |
+| 20 | Pagination `--links` + follow | `--links` prints `next:` URL to stderr; following it returns expected data. |
+| 21 | Authenticated DELETE | Successful deletion of a real asset using full HMAC handshake (exit 0). |
+| 22 | Resource Discovery | Retrieving seeded job groups and verifying data persistence. |
+| 23 | Output Parity | Hard `diff` comparison between Perl and Zig output for a nested object. |
+| 24 | Relative vs Absolute Path | `zoqa api jobs/1` and `zoqa api http://localhost/api/v1/jobs/1` produce identical output. |
 
-### Error Handling & Edge Cases
+### Output Formatting (`tests_output.sh`)
 | # | Test | Verification |
 |---|---|---|
-| 4 | 404 Not Found | Standard API error propagation. |
-| 10 | Missing Arguments | Both Perl and Zig exit 255 with usage text when PATH is omitted. |
-| 11 | Connection Refused | Graceful exit when the host is unreachable. |
-| 11b | Arg-order Divergence | Both Perl and Zig reject `--host` before the subcommand with exit 255. |
-| 20 | Output Parity | Hard `diff` comparison between Perl and Zig output for a nested object. |
-| 23 | Broken Pipe | `zoqa … \| head -c 1` exits cleanly without crashing on SIGPIPE. |
-| 25, 26 | Non-2xx stderr | `404` reported on stderr without `--quiet`; suppressed with `--quiet`. |
+| 25 | `--verbose` | HTTP status line and `Content-Type` header present in output. |
+| 26 | `--pretty` (non-empty) | JSON indentation logic on populated response. |
+| 27 | `--name` Flag | Accepted by both Perl and Zig; sets `User-Agent` header. |
+| 28 | Verbose Header Count | Perl vs Zig header line count comparison — both print matching header lines. |
+| 42 | `--pretty` (empty result) | No crash on empty JSON array response. |
+| 43 | `--links` outputs `next:` | Link header's `rel=next` URL printed to stderr for paginated response. |
+| 44 | `--verbose` on 404 | HTTP status line printed even on error responses. |
+| 45 | `--quiet --verbose` on 404 | `--quiet` suppresses stderr error; `--verbose` still prints headers to stdout. |
 
-### Verbose Headers (Phase 1.3)
+### Robustness (`tests_robustness.sh`)
 | # | Test | Verification |
 |---|---|---|
-| 24 | Verbose Header Count | Perl vs Zig header line count comparison — both print 5 header lines. |
+| 29 | Broken Pipe | `zoqa ... \| head -c 1` exits cleanly without crashing on SIGPIPE. |
+| 30 | Non-2xx stderr | `404` reported on stderr without `--quiet`. |
+| 31 | `--quiet` suppresses stderr | `--quiet` suppresses the non-2xx status line on stderr. |
 
-### Archive Subcommand
+### Retry & Timeout Knobs (`tests_retry_knobs.sh`)
+| # | Test | Verification |
+|---|---|---|
+| 32 | `OPENQA_CLI_RETRIES=0` | Explicit zero accepted on a good request (exit 0). |
+| 33 | `OPENQA_CLI_RETRIES=abc` | Invalid value falls back gracefully, no crash. |
+| 34 | `RETRY_SLEEP_TIME_S` + `RETRY_FACTOR` | Valid numeric values accepted (exit 0). |
+| 35 | Invalid sleep/factor values | Invalid env var values fall back gracefully, no crash. |
+| 46 | `--retries 0` CLI flag | CLI flag accepted by both implementations (exit 0). |
+| 47 | `OPENQA_CLI_CONNECT_TIMEOUT` valid | Valid numeric connect timeout accepted (exit 0). |
+| 48 | `OPENQA_CLI_CONNECT_TIMEOUT` invalid | Invalid (non-numeric) value rejected (exit 1). |
+
+### Help Output Structure (`tests_help.sh`)
+| # | Test | Verification |
+|---|---|---|
+| H-1 | Global `--help` | Contains "Options (for all commands):" and lists subcommands. |
+| H-2 | `api --help` | Contains "Options for api:", global options, and "Usage:". |
+| H-3 | `archive --help` | Contains "Options for archive:", global options, and "Usage:". |
+| H-4 | `monitor --help` | Contains "Options for monitor:", global options, and "Usage:". |
+| H-5 | `schedule --help` | Contains "Options for schedule:", global options, and "Usage:". |
+| H-6 | Global help hides subcommand options | Global `--help` does NOT show "Options for api:". |
+| H-7 | `--help` stream routing | `--help` writes to stdout and exits 0; bare invocation does the same. |
+| H-8 | Error stream routing | Unknown subcmd writes to stderr (non-zero); missing PATH writes to stderr (non-zero). |
+
+### Archive Subcommand (`tests_archive.sh`)
 | # | Test | Verification |
 |---|---|---|
 | ARC-1 | Missing All Arguments | `archive` with no JOB_ID or OUTPUT_PATH exits 255 (usage error). |
@@ -97,7 +143,7 @@ of the harness and how to run it, see [README.md](README.md).
 | ARC-41 | Asset Size Parity | CirrOS image byte size identical between Perl and Zig. |
 | ARC-42 | Size Limit Skips CirrOS (Zig) | `--asset-size-limit 1` prints "exceeds maximum size limit" (Zig). |
 | ARC-43 | Size Limit Skips CirrOS (Perl) | `--asset-size-limit 1` prints "Maximum message size exceeded" (Perl). |
-| ARC-44 | Progress Percentage | stdout contains "Downloading…%" for rich job (Zig). |
+| ARC-44 | Progress Percentage | stdout contains "Downloading...%" for rich job (Zig). |
 | ARC-45 | Saved Details Message | stdout contains "Saved details for" (Zig). |
 | ARC-46 | Full Dir Structure Parity | `find -type d` full comparison on rich archive. |
 | ARC-47 | Full File Listing Parity | `find -type f` full comparison on rich archive. |
@@ -110,13 +156,15 @@ of the harness and how to run it, see [README.md](README.md).
 | ARC-62 | Wrong Env Secret (GET public) | Wrong `OPENQA_API_SECRET` env var does not fail read-only archive. |
 | ARC-63 | --osd Alias | `archive --osd` resolves to `openqa.suse.de` (connection fails as expected). |
 
-### Monitor Subcommand
+### Monitor Subcommand (`tests_monitor.sh`)
 | # | Test | Verification |
 |---|---|---|
-| MON-1,2 | Missing JOB_ID | `monitor` with no arguments exits 255. |
-| MON-3,4 | Non-numeric JOB_ID | `monitor abc` exits 255 in Zig. |
-| MON-5,6 | Completed Job | `monitor RICH_JOB_ID` exits based on final state (0 or 2). |
-| MON-7 | Stdout Format | Contains "Job state of job ID". |
+| MON-1 | PERL: No JOB_ID | Captures Perl behaviour (no validation, exits 0 — known divergence). |
+| MON-2 | ZIG: No JOB_ID | `monitor` with no arguments exits 255. |
+| MON-3 | PERL: Non-numeric JOB_ID | Captures Perl behaviour (no upfront validation). |
+| MON-4 | ZIG: Non-numeric JOB_ID | `monitor abc` exits 255 in Zig. |
+| MON-5,6 | Completed Job | `monitor RICH_JOB_ID` exits based on final state (Zig matches Perl). |
+| MON-7 | Stdout Format | Diff comparison of stdout output between Perl and Zig. |
 | MON-9,10 | Cancelled Job | `monitor JOB_ID` exits 2 when job is cancelled. |
 | MON-11,12 | Missing Job | `monitor 999999999` exits 1. |
 | MON-13,14 | --follow | Flag accepted (returns newest clone). |
@@ -125,23 +173,130 @@ of the harness and how to run it, see [README.md](README.md).
 | MON-19 | Already-terminal Fast Return | `monitor` on a completed job returns in < 5s (regression: off-by-one sleep bug). |
 | MON-50,51 | Invalid Flag | `monitor --extract` exits 255. |
 
-### Schedule Subcommand
+### Schedule Subcommand (`tests_schedule.sh`)
 | # | Test | Verification |
 |---|---|---|
 | SCH-1 | Sync Schedule (inline) | Both Perl and Zig schedule via `schedule` with inline `SCENARIO_DEFINITIONS_YAML`, exit 0, stdout contains `"has/have been created"` and job URLs. |
 | SCH-2 | Sync Schedule (--param-file) | Both schedule using `--param-file SCENARIO_DEFINITIONS_YAML=/tmp/scenario.yaml`, exit 0, stdout contains `"has/have been created"`. |
-| SCH-3 | Async Without --monitor | Both schedule with `async=1` (no `--monitor`), exit 0. No `"has been created"` line expected. |
+| SCH-3 | Async Without --monitor | Both schedule with `async=1` (no `--monitor`), exit 0. |
 | SCH-4 | Async With --monitor | Both schedule with `async=1 --monitor`, poll until jobs complete, exit 0. |
 | SCH-6 | --follow Without --monitor | Both schedule with `--follow` (no `--monitor`), exit 0 immediately after printing job URLs. `--follow` is a modifier, not a trigger. |
 | SCH-7 | --poll-interval + async --monitor | Both schedule with `--poll-interval 1 --monitor async=1`, poll and exit 0. |
 | SCH-8 | Missing Mandatory Params | Both schedule with `BOGUS=1` only, server returns 400, exit 1. |
 | SCH-9 | Zero Products Scheduled | Both schedule with non-matching `FLAVOR=NONEXISTENT`, exit 1. |
 | SCH-10 | Repeated --param-file | Two `--param-file` flags in one invocation; both Perl and Zig exit 0 and produce job URLs. |
+| SCH-11 | Sync All Entries Fail | Parity test: all job_template entries reference nonexistent machine. Both exit non-zero with stderr output. |
+| SCH-12 | Sync Partial Success | Parity test: one valid + one invalid entry. Both print URLs AND exit with error. |
+| SCH-13 | Async --monitor All Fail | Parity test: async polling with all-failed entries. Both exit non-zero. |
+| SCH-14 | Async --monitor Partial | Parity test: async polling with mixed results. `failed` wins over `successful_job_ids`. |
+| SCH-15 | Cancelled Mid-poll | SKIPPED (timing non-deterministic; deferred to unit test with stubbed server). |
+| SCH-EX1 | No YAML, FLAVOR=NONEXISTENT | Failure-trigger experiment: parity on exit code (TRIGGERED or PERMISSIVE). |
+| SCH-EX2 | Inline YAML, undefined product | Failure-trigger experiment: parity + audit (no `job_create` events). |
+| SCH-EX3 | Inline YAML, empty job_templates | Failure-trigger experiment: parity + audit (no `job_create` events). |
+| SCH-EX4 | Nonexistent _GROUP_ID | Failure-trigger experiment: parity on exit code. |
+| SCH-EX5 | Nonexistent HDD_1 asset | Failure-trigger experiment: parity on exit code. |
+| SCH-EX6 | Partial bogus product ref | Failure-trigger experiment: valid + undefined product in YAML. |
+| SCH-EX7 | Async --monitor, FLAVOR mismatch | Failure-trigger experiment: captures `failed_job_info` shape. |
 | SCH-50 | Invalid Flag (--extract) | `schedule --extract` exits 255 (cross-subcommand flag rejection). |
+| SCH-RK-1 | `OPENQA_CLI_RETRIES=0` | Retry env var accepted by schedule (exit 1, not crash). |
+| SCH-RK-2 | `OPENQA_CLI_RETRIES=abc` | Invalid retry env var falls back gracefully. |
+| SCH-RK-3 | `--retries 0` CLI flag | Perl rejects (exit 255); Zig accepts (exit 1). |
 
-### Stress Subcommand
+### Clone-Job Subcommand (`tests_clone_job.sh`)
 | # | Test | Verification |
 |---|---|---|
-| STRESS-1 | Response Size Sanity | Large job details response is > 10 000 bytes (Zig). |
+| M1 | `--help` exits 0 | Both `openqa-clone-job --help` and `zoqa-clone-job --help` exit 0. |
+| M2 | `--help` has Usage: | Help output contains "Usage:" header. |
+| M3 | `--help` mentions --within-instance | Flag advertised in help text. |
+| M4 | `--help` mentions --skip-download | Flag advertised in help text. |
+| M5 | `--help` mentions --from | Flag advertised in help text. |
+| M6 | `--help` mentions --host | Flag advertised in help text. |
+| M7 | `--help` writes to stdout | Help output on stdout, nothing on stderr. |
+| M8 | No args exits non-zero | Both tools exit non-zero without arguments. |
+| M9 | No args writes to stderr | Error output on stderr, nothing on stdout. |
+| M10 | Bare integer without --from | Exits non-zero (no source host known). |
+| M11 | Stream routing for bare integer | Perl writes to stdout (pod2usage quirk); Zig writes to stderr. |
+| M12 | --within-instance exits 0 | Clone of a known job succeeds. |
+| M13 | Stdout creation message + URL | stdout has "has been created" and `http://localhost/tests/N`. |
+| M14 | CLONED_FROM setting correct | Cloned job's `CLONED_FROM` matches original job URL. |
+| M15 | BUILD override | `BUILD=e2e-clone-override` reflected in cloned job settings. |
+| M16 | Non-existent job | Cloning job 999999 exits non-zero. |
+| M17 | --from --host --skip-download | Long-form flag equivalent of `--within-instance` exits 0. |
+| M20 | Chained child clones both | Default clone of chained child creates parent + child (2 jobs). |
+| M21 | Cloned parent CLONED_FROM | Correct `CLONED_FROM` on the cloned parent job. |
+| M22 | Child points to cloned parent | `_START_AFTER` dependency links to the new parent, not the original. |
+| M23 | --skip-deps | Only the child is cloned (1 job); no chained parents. |
+| M24 | --skip-chained-deps | Same as M23 but with the specific chained-dep flag. |
+| M25 | Override applies to child only | `BUILD=dep-override` on child; parent retains original BUILD. |
+| M26 | --parental-inheritance | Override propagates to ALL ancestors (parent + child get same BUILD). |
+| M27 | Fan-out child_a clones 2 | Cloning one sibling creates parent + that sibling only (not other siblings). |
+| M28 | --clone-children | Cloning parent with `--clone-children` creates all 4 fan-out jobs. |
+| M29 | Fan-out override isolation | Override on child_b doesn't leak to parent. |
+| M30 | Multi-layer child clones all 3 | Grandparent + parent + child all created. |
+| M31 | Multi-layer dependency chain | `_START_AFTER` chain preserved through all layers. |
+| M32 | Multi-layer override isolation | Override at child doesn't reach grandparent or parent. |
+| M33 | Multi-layer --parental-inheritance | Override propagates to all ancestors. |
+| M34 | Diamond merge clones all 4 | Root + left + right + merge all created. |
+| M35 | Diamond dependencies preserved | Merge depends on left+right; both depend on root. |
+| M37 | Diamond override isolation | Override on merge doesn't reach root/left/right. |
+| M38 | Diamond --skip-deps | Only merge is cloned (1 job). |
+| M39 | Multi-layer --skip-chained-deps | Only the leaf is cloned (1 job). |
+| M41 | Parallel child clones parent | `parallel_child` clone creates parent + child (2 jobs). |
+| M42 | --clone-children (parallel) | Cloning parallel parent with `--clone-children` creates both (2 jobs). |
+| M43 | Bare --host localhost to http:// | Clone-job special-cases bare `localhost` to `http://` (not `https://`). |
+| M44 | Bare --host 127.0.0.1 to https:// | Non-localhost bare host gets `https://` (TLS error expected). |
+
+### Stress Tests (`tests_stress.sh`)
+| # | Test | Verification |
+|---|---|---|
+| STRESS-1 | Response Size Sanity | Large job details response is >= 30 MB (Perl). |
 | STRESS-2 | Output Parity | Full JSON output identical between Perl and Zig for large response. |
 | STRESS-3 | Gzip Negotiation | `Accept-Encoding` header contains "gzip" (Zig sends compression request). |
+| (info) | Wall-clock timing | Informational: timing comparison for large response (no PASS/FAIL). |
+| (info) | Peak RSS | Informational: memory comparison for large response (no PASS/FAIL). |
+
+### Performance (`tests_perf.sh`)
+
+All performance tests are **informational only** (no PASS/FAIL threshold).
+
+| # | Test | Metric |
+|---|---|---|
+| PERF-B1 | Bare Perl startup (`perl -e '1'`) | Wall-clock + RSS baseline. |
+| PERF-B2 | Perl + Mojo::UserAgent load | Wall-clock + RSS baseline (framework overhead). |
+| PERF-T1 | Plain `jobs/overview` | Wall-clock timing (3 runs, min/avg/max). |
+| PERF-T2 | Plain `jobs/:id` | Wall-clock timing (3 runs). |
+| PERF-T3 | Config-file creds `jobs/overview` | Wall-clock with `OPENQA_CONFIG=/etc/openqa`. |
+| PERF-T4 | CLI-flag creds `jobs/overview` | Wall-clock with `--apikey`/`--apisecret`. |
+| PERF-T5 | `--pretty jobs/overview` | Wall-clock with JSON re-indentation. |
+| PERF-T6 | Archive baseline (dummy job) | Wall-clock for archive subcommand (3 runs). |
+| PERF-T7 | Archive `--asset-size-limit 1` | Wall-clock with assets skipped (3 runs). |
+| PERF-T8 | Archive rich job (~21 MB) | Wall-clock with real I/O throughput (3 runs). |
+| PERF-R1 | Plain `jobs/overview` | Peak RSS (Perl ~50-60 MB, Zig ~3-8 MB). |
+| PERF-R2 | Plain `jobs/:id` | Peak RSS. |
+| PERF-R3 | Config-file creds | Peak RSS with config-file code path. |
+| PERF-R4 | CLI-flag creds | Peak RSS with argument-parser credential path. |
+| PERF-R5 | `--pretty jobs/overview` | Peak RSS with formatting code path. |
+| PERF-R6 | Archive baseline (dummy job) | Peak RSS for archive subcommand. |
+| PERF-R7 | Archive `--asset-size-limit 1` | Peak RSS with assets skipped. |
+| PERF-R8 | Archive rich job (~21 MB) | Peak RSS with real I/O. |
+| PERF-R9 | Monitor 5 completed jobs | Peak RSS for monitor subcommand (5 simultaneous jobs). |
+
+---
+
+## Test File Index
+
+| File | Section | Description |
+|---|---|---|
+| `tests_core.sh` | A | Core protocol, CLI flags, cross-subcommand rejection |
+| `tests_auth.sh` | B | Authentication (HMAC-SHA1), credential priority chain |
+| `tests_data.sh` | C | Seeded data: pagination, DELETE, output parity, path handling |
+| `tests_output.sh` | D | Output formatting: --verbose, --pretty, --name, header count |
+| `tests_robustness.sh` | E | Broken pipe, non-2xx stderr, --quiet suppression |
+| `tests_retry_knobs.sh` | F | Retry/timeout env vars and CLI flags |
+| `tests_perf.sh` | G | Performance: timing, peak RSS, interpreter baseline |
+| `tests_archive.sh` | H | Archive subcommand (ARC-1 through ARC-63) |
+| `tests_help.sh` | I | Help output structure and stream routing |
+| `tests_monitor.sh` | I | Monitor subcommand (MON-1 through MON-51) |
+| `tests_schedule.sh` | J | Schedule subcommand (SCH-1 through SCH-RK-3) |
+| `tests_stress.sh` | L | Large response stress tests (STRESS-1 through STRESS-3) |
+| `tests_clone_job.sh` | M | Clone-job subcommand (M1 through M44) |

@@ -13,6 +13,27 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    // Shared argument-parsing module — CLI-only utilities shared between
+    // executables (matchBool, matchValue, tryCommonFlag). Intentionally kept
+    // out of root.zig to maintain library UX-agnosticism.
+    const arg_match_mod = b.createModule(.{
+        .root_source_file = b.path("src/arg_match.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Shared CLI credential/retry resolution module — orchestrates the
+    // credential priority chain (CLI > env > config) and env-var parsing for
+    // retry/timeout knobs. Uses std.process; NOT part of the library.
+    const cli_creds_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli_credentials.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zoqa", .module = lib_mod },
+        },
+    });
+
     // Executable
     // Similarly, only files @import'ed from src/main.zig will be part of the executable.
     // The executable also imports the library module below so it can use its public API.
@@ -25,11 +46,30 @@ pub fn build(b: *std.Build) void {
             .strip = strip,
             .imports = &.{
                 .{ .name = "zoqa", .module = lib_mod },
+                .{ .name = "arg_match", .module = arg_match_mod },
+                .{ .name = "cli_credentials", .module = cli_creds_mod },
             },
         }),
     });
 
     b.installArtifact(exe);
+
+    // Second executable: zoqa-clone-job (stub — see ROADMAP §5.1)
+    const clone_exe = b.addExecutable(.{
+        .name = "zoqa-clone-job",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/clone_job_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .imports = &.{
+                .{ .name = "zoqa", .module = lib_mod },
+                .{ .name = "arg_match", .module = arg_match_mod },
+                .{ .name = "cli_credentials", .module = cli_creds_mod },
+            },
+        }),
+    });
+    b.installArtifact(clone_exe);
 
     // Run step
     const run_cmd = b.addRunArtifact(exe);
@@ -51,9 +91,27 @@ pub fn build(b: *std.Build) void {
     });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    const clone_exe_tests = b.addTest(.{
+        .root_module = clone_exe.root_module,
+    });
+    const run_clone_exe_tests = b.addRunArtifact(clone_exe_tests);
+
+    const arg_match_tests = b.addTest(.{
+        .root_module = arg_match_mod,
+    });
+    const run_arg_match_tests = b.addRunArtifact(arg_match_tests);
+
+    const cli_creds_tests = b.addTest(.{
+        .root_module = cli_creds_mod,
+    });
+    const run_cli_creds_tests = b.addRunArtifact(cli_creds_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_clone_exe_tests.step);
+    test_step.dependOn(&run_arg_match_tests.step);
+    test_step.dependOn(&run_cli_creds_tests.step);
 
     if (b.option(bool, "fuzz", "enable building tooling for fuzz testing") orelse false) {
         setupFuzzing(b, target, optimize);
@@ -103,12 +161,27 @@ fn setupFuzzing(
 
     // Build a module for src/main.zig so fuzz_request can import it as "main".
     // It depends on the library module for config/http_client access.
+    const arg_match_mod = b.createModule(.{
+        .root_source_file = b.path("src/arg_match.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = .Debug,
+    });
+    const cli_creds_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli_credentials.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "zoqa", .module = lib_mod },
+        },
+    });
     const main_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = b.resolveTargetQuery(.{}),
         .optimize = .Debug,
         .imports = &.{
             .{ .name = "zoqa", .module = lib_mod },
+            .{ .name = "arg_match", .module = arg_match_mod },
+            .{ .name = "cli_credentials", .module = cli_creds_mod },
         },
     });
 

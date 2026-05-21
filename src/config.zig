@@ -18,9 +18,21 @@ pub const HostResult = struct {
     allocated: bool,
 };
 
-/// Resolves the effective base URL string. Returned slice is either a
-/// compile-time literal or a newly allocated string; caller owns it when
-/// allocated is true in the result.
+/// Resolves the effective base URL string from alias flags and host argument.
+///
+/// Arguments:
+///   - `allocator`: Used to allocate the `https://` prefix when a bare hostname is given.
+///   - `flag_osd`: `true` if `--osd` was passed (maps to `http://openqa.suse.de`).
+///   - `flag_o3`: `true` if `--o3` was passed (maps to `https://openqa.opensuse.org`).
+///   - `flag_odn`: `true` if `--odn` was passed (maps to `https://openqa.debian.net`).
+///   - `host_arg`: Explicit `--host` value, or `null`.
+///
+/// Returns: A `HostResult` whose `.url` is either a compile-time literal
+///   (`.allocated = false`) or a newly allocated string (`.allocated = true`).
+///   Caller must free `.url` when `.allocated` is true.
+///
+/// Errors:
+///   - `OutOfMemory` — allocator failure when prefixing bare hostname with `https://`.
 pub fn resolveHost(
     allocator: std.mem.Allocator,
     flag_osd: bool,
@@ -50,8 +62,19 @@ pub fn resolveHost(
     return .{ .url = "http://localhost", .allocated = false };
 }
 
-/// Parses the INI file content to find credentials for a specific hostname.
-/// Returns allocated struct fields on success, null if not found.
+/// Parses INI file content to find credentials for a specific hostname.
+///
+/// Arguments:
+///   - `allocator`: Used to allocate owned copies of the key and secret strings.
+///   - `content`: The raw INI file content to parse.
+///   - `hostname`: The section name to search for (e.g. `"openqa.suse.de"`).
+///
+/// Returns: A `Credentials` struct with owned key/secret on success (caller
+///   must call `.deinit()`), or `null` if no matching section with both
+///   `key` and `secret` is found.
+///
+/// Errors:
+///   - `OutOfMemory` — allocator failure when duplicating the key/secret strings.
 pub fn parseIni(allocator: std.mem.Allocator, content: []const u8, hostname: []const u8) !?Credentials {
     var it = std.mem.splitScalar(u8, content, '\n');
     var in_target_section = false;
@@ -99,7 +122,21 @@ pub fn parseIni(allocator: std.mem.Allocator, content: []const u8, hostname: []c
     return null;
 }
 
-/// Finds credentials in the filesystem based on priority.
+/// Finds credentials by searching config files in priority order.
+///
+/// Search order: `$OPENQA_CONFIG/client.conf` > `~/.config/openqa/client.conf`
+/// > `/etc/openqa/client.conf` > `/usr/etc/openqa/client.conf`.
+///
+/// Arguments:
+///   - `allocator`: Used for path construction, file I/O, and result allocation.
+///   - `hostname`: The INI section name to look up (e.g. `"openqa.opensuse.org"`).
+///
+/// Returns: A `Credentials` struct with owned key/secret (caller must call
+///   `.deinit()`), or `null` if no config file contains a matching section.
+///
+/// Errors:
+///   - `OutOfMemory` — allocator failure.
+///   - Any OS error from `std.process.getEnvVarOwned` (other than `EnvironmentVariableNotFound`).
 pub fn findCredentials(allocator: std.mem.Allocator, hostname: []const u8) !?Credentials {
     // OPENQA_CONFIG overrides the default config directory.
     const openqa_config_dir = std.process.getEnvVarOwned(allocator, "OPENQA_CONFIG") catch |err| switch (err) {
@@ -147,6 +184,42 @@ pub fn findCredentials(allocator: std.mem.Allocator, hostname: []const u8) !?Cre
         }
     }
 
+    return null;
+}
+
+/// Merge credentials from three priority layers: CLI args, environment
+/// variables, and config file. Priority per field: CLI > env > config.
+///
+/// Each field (key, secret) is resolved independently — it is valid to
+/// have the key come from one source and the secret from another.
+///
+/// Arguments:
+///   - `allocator`: Used to allocate owned copies of the merged key/secret.
+///   - `cli`: Key/secret from CLI flags (`--apikey`, `--apisecret`), or `null` per field.
+///   - `env`: Key/secret from environment variables, or `null` per field.
+///   - `conf`: Credentials from config file (output of `findCredentials`), or `null`.
+///
+/// Returns: Owned `Credentials` (caller must call `.deinit()`), or `null`
+///   when either key or secret is missing across all sources.
+///
+/// Errors:
+///   - `OutOfMemory` — allocator failure when duplicating strings.
+pub fn mergeCredentials(
+    allocator: std.mem.Allocator,
+    cli: struct { key: ?[]const u8, secret: ?[]const u8 },
+    env: struct { key: ?[]const u8, secret: ?[]const u8 },
+    conf: ?Credentials,
+) !?Credentials {
+    const key = cli.key orelse env.key orelse if (conf) |c| c.key else null;
+    const secret = cli.secret orelse env.secret orelse if (conf) |c| c.secret else null;
+
+    if (key != null and secret != null) {
+        return Credentials{
+            .allocator = allocator,
+            .key = try allocator.dupe(u8, key.?),
+            .secret = try allocator.dupe(u8, secret.?),
+        };
+    }
     return null;
 }
 
@@ -228,4 +301,117 @@ test "parseIni" {
 
     const creds3 = try parseIni(allocator, ini, "not.found");
     try testing.expect(creds3 == null);
+}
+
+test "mergeCredentials: field-level priority behavior" {
+    const testing_alloc = std.testing.allocator;
+
+    // Scenario 1: Partial CLI override (Secret only)
+    // Should combine CLI secret with Config key
+    {
+        const res = try mergeCredentials(
+            testing_alloc,
+            .{ .key = null, .secret = "CLI_SECRET" },
+            .{ .key = null, .secret = null },
+            .{ .allocator = testing_alloc, .key = "CONF_KEY", .secret = "CONF_SECRET" },
+        );
+        try std.testing.expect(res != null);
+        defer res.?.deinit();
+        try std.testing.expectEqualStrings("CONF_KEY", res.?.key);
+        try std.testing.expectEqualStrings("CLI_SECRET", res.?.secret);
+    }
+
+    // Scenario 2: CLI overrides ENV
+    {
+        const res = try mergeCredentials(
+            testing_alloc,
+            .{ .key = "CLI_KEY", .secret = null },
+            .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
+            null,
+        );
+        try std.testing.expect(res != null);
+        defer res.?.deinit();
+        try std.testing.expectEqualStrings("CLI_KEY", res.?.key);
+        try std.testing.expectEqualStrings("ENV_SECRET", res.?.secret);
+    }
+
+    // Scenario 3: All null returns null
+    {
+        const res = try mergeCredentials(
+            testing_alloc,
+            .{ .key = null, .secret = null },
+            .{ .key = null, .secret = null },
+            null,
+        );
+        try std.testing.expect(res == null);
+    }
+}
+
+test "mergeCredentials: env-only fallback (no CLI, no conf)" {
+    const allocator = std.testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = "ENV_KEY", .secret = "ENV_SECRET" },
+        null,
+    );
+    try std.testing.expect(res != null);
+    defer res.?.deinit();
+    try std.testing.expectEqualStrings("ENV_KEY", res.?.key);
+    try std.testing.expectEqualStrings("ENV_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: conf-only fallback (no CLI, no env)" {
+    const allocator = std.testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = null, .secret = null },
+        .{ .allocator = allocator, .key = "CONF_KEY", .secret = "CONF_SECRET" },
+    );
+    try std.testing.expect(res != null);
+    defer res.?.deinit();
+    try std.testing.expectEqualStrings("CONF_KEY", res.?.key);
+    try std.testing.expectEqualStrings("CONF_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: key from env, secret from conf" {
+    const allocator = std.testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = null },
+        .{ .key = "ENV_KEY", .secret = null },
+        .{ .allocator = allocator, .key = "CONF_KEY", .secret = "CONF_SECRET" },
+    );
+    try std.testing.expect(res != null);
+    defer res.?.deinit();
+    try std.testing.expectEqualStrings("ENV_KEY", res.?.key);
+    try std.testing.expectEqualStrings("CONF_SECRET", res.?.secret);
+}
+
+test "mergeCredentials: partial key only returns null (no secret anywhere)" {
+    const allocator = std.testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = "CLI_KEY", .secret = null },
+        .{ .key = null, .secret = null },
+        null,
+    );
+    try std.testing.expect(res == null);
+}
+
+test "mergeCredentials: partial secret only returns null (no key anywhere)" {
+    const allocator = std.testing.allocator;
+
+    const res = try mergeCredentials(
+        allocator,
+        .{ .key = null, .secret = "CLI_SECRET" },
+        .{ .key = null, .secret = null },
+        null,
+    );
+    try std.testing.expect(res == null);
 }

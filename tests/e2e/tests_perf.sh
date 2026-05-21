@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2153
 # tests_perf.sh — Section G: Performance comparison tests.
 #
 # Compares wall-clock execution time and peak RSS (resident set size) between
@@ -532,9 +533,9 @@ for i in $(seq 1 5); do
 		FLAVOR=DVD \
 		ARCH=x86_64 \
 		BUILD="perf-mon-$i" \
-		HDD_1="cirros-0.6.3-x86_64-disk.qcow2" \
+		HDD_1="$CIRROS_IMG" \
 		ISO_1="seed-nocloud.iso" \
-		CASEDIR="/var/lib/openqa/share/tests/cirros" \
+		CASEDIR="$CIRROS_TESTDIR" \
 		NEEDLES_DIR="%CASEDIR%/needles" \
 		"_GROUP_ID=${GROUP_ID:-1}")
 	echo "    Scheduled job $i: $_id" >&2

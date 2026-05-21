@@ -1,0 +1,23 @@
+---
+# Partial-success scenario for SCH-12 / SCH-14.
+# One job_template (simple_boot) references a valid machine and should
+# schedule successfully; the second (bogus_extra) references a nonexistent
+# machine and should land in the failed array.
+# Expected POST /api/v1/isos response:
+#   non-empty ids AND non-empty failed.
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  simple_boot:
+    product: "example"
+    machine: "64bit"
+  bogus_extra:
+    product: "example"
+    machine: "nonexistent_machine_xyz"

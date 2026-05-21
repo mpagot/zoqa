@@ -115,16 +115,16 @@ MONITOR_JOB_ID=$(schedule_job \
 	FLAVOR=DVD \
 	ARCH=x86_64 \
 	BUILD=e2e-test-mon \
-	HDD_1="cirros-0.6.3-x86_64-disk.qcow2" \
+	HDD_1="$CIRROS_IMG" \
 	ISO_1="seed-nocloud.iso" \
-	CASEDIR="/var/lib/openqa/share/tests/cirros" \
+	CASEDIR="$CIRROS_TESTDIR" \
 	NEEDLES_DIR="%CASEDIR%/needles" \
 	"_GROUP_ID=${GROUP_ID:-1}" \
 	"SLEEPTEST=1")
 echo "  MONITOR_JOB_ID=$MONITOR_JOB_ID"
 
 # Give the worker a moment to pick up the job before cancelling.
-sleep 5
+e2e_sleep 5
 
 # MON-8: Cancel the sleep job
 echo "--- Setup: Cancel MONITOR_JOB_ID ($MONITOR_JOB_ID) ---"
