@@ -2,7 +2,7 @@
 
 ## Overview
 
-openQAclient is structured as **one library and multiple executables**. The
+zoqa is structured as **one library and multiple executables**. The
 library provides the core openQA protocol logic; executables handle
 CLI-specific concerns (argument parsing, environment variables, process
 lifecycle).

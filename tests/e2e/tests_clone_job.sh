@@ -22,6 +22,9 @@
 #   M10–M11: JOBREF error cases (bare int without --from)    (DONE - resolveJobRef)
 #   M12+:   Real API interactions (requires server fixture)
 
+# Load topology fixtures (ensure_chained_jobs, ensure_fanout_jobs, etc.)
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_topology.sh"
+
 echo "==> [clone_job] Running clone-job command tests..."
 
 # Local binary handles — different from the global PERL_EXE/ZIG_EXE which
