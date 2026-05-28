@@ -1325,6 +1325,9 @@ test "parseArgs: --links accepted for archive no effects" {
     try std.testing.expect(parsed.links);
 }
 
+/// Alias for the shared URL form-encoding function (library layer).
+const formEncodeAppend = zoqa.url.formEncodeAppend;
+
 // ---------------------------------------------------------------------------
 // --form: JSON object → application/x-www-form-urlencoded
 // ---------------------------------------------------------------------------
@@ -1446,9 +1449,6 @@ test "jsonToFormEncoded: empty object" {
     defer allocator.free(result);
     try std.testing.expectEqualStrings("", result);
 }
-
-/// Alias for the shared URL form-encoding function (library layer).
-const formEncodeAppend = zoqa.url.formEncodeAppend;
 
 /// Post-parseArgs processing result, ready to pass to `zoqa.openQAReq()`.
 /// RequestConfig is purely a transitional container: it exists to bridge

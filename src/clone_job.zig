@@ -69,6 +69,23 @@ pub const Override = struct {
     value: []const u8,
 };
 
+/// Asset type as returned by the openQA API `job.assets` object.
+pub const AssetType = enum {
+    iso,
+    hdd,
+    other,
+};
+
+/// A single downloadable asset extracted from a job's JSON.
+pub const AssetEntry = struct {
+    /// Job ID this asset belongs to (for URL construction).
+    job_id: u64,
+    /// Asset type (iso, hdd, other).
+    asset_type: AssetType,
+    /// Filename (basename). Arena-owned.
+    filename: []const u8,
+};
+
 // ---------------------------------------------------------------------------
 // Override parsing
 // ---------------------------------------------------------------------------
@@ -525,6 +542,384 @@ pub fn formatOutput(
     }
 
     return try allocator.dupe(u8, out.items);
+}
+
+/// Format an export-command string.
+///
+/// Produces:
+///   zoqa api --host '{dest_host}' -X POST jobs '{KEY}:{JOBID}={VALUE}' ... 'is_clone_job=1'
+///
+/// Values are emitted unencoded (human-readable, not percent-encoded).
+/// Each key-value pair is single-quoted as a separate shell argument.
+///
+/// Arguments:
+/// - `allocator`: Used for internal buffers and the returned owned slice.
+/// - `collected_jobs`: Job entries with finalized settings.
+/// - `dest_host`: Resolved destination host URL.
+///
+/// Returns: An owned `[]u8` with the formatted command string (includes trailing newline).
+///   The caller must free it with `allocator`.
+///
+/// Errors: `OutOfMemory` if allocation fails.
+pub fn formatExportCommand(
+    allocator: std.mem.Allocator,
+    collected_jobs: []const JobEntry,
+    dest_host: []const u8,
+) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    const w = out.writer(allocator);
+    try std.fmt.format(w, "zoqa api --host '{s}' -X POST jobs", .{dest_host});
+
+    for (collected_jobs) |entry| {
+        var id_buf: [20]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{entry.job_id}) catch unreachable;
+
+        for (entry.settings.items) |s| {
+            try std.fmt.format(w, " '{s}:{s}={s}'", .{ s.key, id_str, s.value });
+        }
+    }
+
+    try out.appendSlice(allocator, " 'is_clone_job=1'\n");
+
+    return try allocator.dupe(u8, out.items);
+}
+
+/// Format badge output for successful clone results.
+///
+/// Produces one line per created job in markdown badge format:
+///   * [![{name}]({host}/tests/{new_id}/badge?label={name})]({host}/tests/{new_id})
+///
+/// Sorted ascending by original job ID (same order as formatOutput).
+///
+/// Arguments:
+/// - `allocator`: Used for internal buffers and the returned owned slice.
+/// - `ids_map`: JSON object mapping original job ID strings to new job ID integers.
+/// - `collected_jobs`: Job entries for name lookup by original ID.
+/// - `host_url`: Destination instance URL used to construct badge links.
+///
+/// Returns: An owned `[]u8` with the formatted badge output.
+///
+/// Errors: `OutOfMemory` if allocation fails.
+pub fn formatBadgeOutput(
+    allocator: std.mem.Allocator,
+    ids_map: std.json.ObjectMap,
+    collected_jobs: []const JobEntry,
+    host_url: []const u8,
+) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    // Collect and sort entries by original ID ascending
+    const Entry = struct {
+        original_id: u64,
+        new_id: i64,
+        name: []const u8,
+    };
+    var entries: std.ArrayList(Entry) = .empty;
+    defer entries.deinit(allocator);
+
+    var it = ids_map.iterator();
+    while (it.next()) |kv| {
+        const orig_id = std.fmt.parseInt(u64, kv.key_ptr.*, 10) catch continue;
+        const new_id: i64 = switch (kv.value_ptr.*) {
+            .integer => |i| i,
+            else => continue,
+        };
+        const name: []const u8 = blk: {
+            for (collected_jobs) |entry| {
+                if (entry.job_id == orig_id) break :blk entry.name;
+            }
+            break :blk "unknown";
+        };
+        try entries.append(allocator, .{
+            .original_id = orig_id,
+            .new_id = new_id,
+            .name = name,
+        });
+    }
+
+    std.mem.sortUnstable(Entry, entries.items, {}, struct {
+        fn lessThan(_: void, a: Entry, b: Entry) bool {
+            return a.original_id < b.original_id;
+        }
+    }.lessThan);
+
+    const w = out.writer(allocator);
+    for (entries.items) |e| {
+        try std.fmt.format(w, "* [![{s}]({s}/tests/{d}/badge?label={s})]({s}/tests/{d})\n", .{
+            e.name, host_url, e.new_id, e.name, host_url, e.new_id,
+        });
+    }
+
+    return try allocator.dupe(u8, out.items);
+}
+
+/// Format JSON output for successful clone results.
+///
+/// Produces a JSON object mapping original job IDs (as string keys) to new job IDs
+/// (as integer values), sorted ascending by original job ID.
+///
+/// Example: {"1233":5000,"1234":5001}
+///
+/// Arguments:
+/// - `allocator`: Used for internal buffers and the returned owned slice.
+/// - `ids_map`: JSON object mapping original job ID strings to new job ID integers.
+///
+/// Returns: An owned `[]u8` with the JSON string (includes trailing newline).
+///
+/// Errors: `OutOfMemory` if allocation fails.
+pub fn formatJsonOutput(
+    allocator: std.mem.Allocator,
+    ids_map: std.json.ObjectMap,
+) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    // Collect entries and sort by original ID ascending
+    const Entry = struct {
+        original_id: u64,
+        new_id: i64,
+    };
+    var entries: std.ArrayList(Entry) = .empty;
+    defer entries.deinit(allocator);
+
+    var it = ids_map.iterator();
+    while (it.next()) |kv| {
+        const orig_id = std.fmt.parseInt(u64, kv.key_ptr.*, 10) catch continue;
+        const new_id: i64 = switch (kv.value_ptr.*) {
+            .integer => |i| i,
+            else => continue,
+        };
+        try entries.append(allocator, .{
+            .original_id = orig_id,
+            .new_id = new_id,
+        });
+    }
+
+    std.mem.sortUnstable(Entry, entries.items, {}, struct {
+        fn lessThan(_: void, a: Entry, b: Entry) bool {
+            return a.original_id < b.original_id;
+        }
+    }.lessThan);
+
+    const w = out.writer(allocator);
+    try w.writeByte('{');
+    for (entries.items, 0..) |e, i| {
+        if (i > 0) try w.writeByte(',');
+        try std.fmt.format(w, "\"{d}\":{d}", .{ e.original_id, e.new_id });
+    }
+    try out.appendSlice(allocator, "}\n");
+
+    return try allocator.dupe(u8, out.items);
+}
+
+/// Append or replace a repeat-iteration suffix on the `TEST` setting of each
+/// job in `collected`. Implements the Perl `append_idx_to_test_name` behaviour:
+///
+/// - Iteration 1: append `-NN` to the existing TEST value.
+/// - Iterations 2+: replace the trailing `-\d+` with the new suffix.
+///
+/// The suffix is zero-padded to 2 digits (e.g. `-01`, `-02`).
+///
+/// Arguments:
+/// - `allocator`: Allocator for the new TEST value strings.
+/// - `collected`: Slice of job entries whose TEST settings will be mutated.
+/// - `iteration`: 1-based iteration number (determines suffix `-01`, `-02`, etc.).
+///
+/// Errors: `OutOfMemory` if the allocator cannot produce the new string.
+pub fn appendRepeatSuffix(
+    allocator: std.mem.Allocator,
+    collected: []JobEntry,
+    iteration: u32,
+) !void {
+    const suffix = try std.fmt.allocPrint(allocator, "-{d:0>2}", .{iteration});
+    defer allocator.free(suffix);
+
+    for (collected) |*entry| {
+        for (entry.settings.items) |*pair| {
+            if (std.mem.eql(u8, pair.key, "TEST")) {
+                if (iteration == 1) {
+                    // First iteration: append suffix to original value
+                    pair.value = try std.fmt.allocPrint(allocator, "{s}{s}", .{ pair.value, suffix });
+                } else {
+                    // Subsequent iterations: replace trailing -\d+ with new suffix
+                    const base = stripTrailingDigitSuffix(pair.value);
+                    pair.value = try std.fmt.allocPrint(allocator, "{s}{s}", .{ base, suffix });
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Strip a trailing `-\d+` pattern from a string.
+/// Returns the slice up to (but not including) the last `-` followed by only digits.
+/// If no such pattern exists, returns the full input.
+fn stripTrailingDigitSuffix(s: []const u8) []const u8 {
+    // Find the last '-' in the string
+    const last_dash = std.mem.lastIndexOfScalar(u8, s, '-') orelse return s;
+    // Check that everything after the dash is digits
+    const after_dash = s[last_dash + 1 ..];
+    if (after_dash.len == 0) return s;
+    for (after_dash) |c| {
+        if (c < '0' or c > '9') return s;
+    }
+    return s[0..last_dash];
+}
+
+// ---------------------------------------------------------------------------
+// Reproduce: vars.json injection
+// ---------------------------------------------------------------------------
+
+/// Inject versioning settings from a parsed `vars.json` response into a job's
+/// settings list. Implements the `--reproduce` mapping:
+///
+/// | Target key           | Source key in vars.json |
+/// |----------------------|------------------------|
+/// | `CASEDIR`            | `TEST_GIT_URL`         |
+/// | `TEST_GIT_REFSPEC`   | `TEST_GIT_HASH`        |
+/// | `NEEDLES_DIR`        | `NEEDLES_GIT_URL`      |
+/// | `NEEDLES_GIT_REFSPEC`| `NEEDLES_GIT_HASH`     |
+///
+/// Each mapping is applied only if the source key exists and has a non-empty
+/// value in `vars_json`. Settings are appended (user overrides applied later
+/// take precedence).
+///
+/// Arguments:
+/// - `allocator`: Allocator for new setting value strings.
+/// - `settings`: The job's settings list to mutate.
+/// - `vars_json`: Parsed JSON object from `GET /tests/{id}/file/vars.json`.
+///
+/// Errors: `OutOfMemory` if string duplication fails.
+pub fn injectReproduceSettings(
+    allocator: std.mem.Allocator,
+    settings: *std.ArrayList(SettingPair),
+    vars_json: std.json.ObjectMap,
+) !void {
+    const mappings = [_]struct { target: []const u8, source: []const u8 }{
+        .{ .target = "CASEDIR", .source = "TEST_GIT_URL" },
+        .{ .target = "TEST_GIT_REFSPEC", .source = "TEST_GIT_HASH" },
+        .{ .target = "NEEDLES_DIR", .source = "NEEDLES_GIT_URL" },
+        .{ .target = "NEEDLES_GIT_REFSPEC", .source = "NEEDLES_GIT_HASH" },
+    };
+
+    for (&mappings) |m| {
+        const val = vars_json.get(m.source) orelse continue;
+        const str = switch (val) {
+            .string => |s| s,
+            else => continue,
+        };
+        if (str.len == 0) continue;
+
+        // Check if target key already exists (from BFS settings extraction)
+        var found = false;
+        for (settings.items) |*pair| {
+            if (std.mem.eql(u8, pair.key, m.target)) {
+                pair.value = try allocator.dupe(u8, str);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            try settings.append(allocator, .{
+                .key = try allocator.dupe(u8, m.target),
+                .value = try allocator.dupe(u8, str),
+            });
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Asset extraction and filtering
+// ---------------------------------------------------------------------------
+
+/// Extract downloadable assets from a job's JSON `assets` object.
+///
+/// Collects entries from the `iso`, `hdd`, and `other` arrays. Skips the
+/// `repo` type entirely (repos are not downloadable).
+///
+/// Arguments:
+/// - `allocator`: Arena allocator for filename duplication.
+/// - `job_obj`: The parsed JSON ObjectMap for the `"job"` key.
+/// - `job_id`: The job ID (used in URL construction later).
+///
+/// Returns: A slice of `AssetEntry` items (arena-owned).
+///
+/// Errors: `OutOfMemory` if allocations fail.
+pub fn extractAssets(
+    allocator: std.mem.Allocator,
+    job_obj: std.json.ObjectMap,
+    job_id: u64,
+) ![]AssetEntry {
+    var assets: std.ArrayList(AssetEntry) = .empty;
+    defer assets.deinit(allocator);
+
+    const assets_val = job_obj.get("assets") orelse return try allocator.alloc(AssetEntry, 0);
+    const assets_obj = switch (assets_val) {
+        .object => |o| o,
+        else => return try allocator.alloc(AssetEntry, 0),
+    };
+
+    const type_names = [_]struct { name: []const u8, asset_type: AssetType }{
+        .{ .name = "iso", .asset_type = .iso },
+        .{ .name = "hdd", .asset_type = .hdd },
+        .{ .name = "other", .asset_type = .other },
+    };
+
+    for (&type_names) |entry| {
+        const arr_val = assets_obj.get(entry.name) orelse continue;
+        const arr = switch (arr_val) {
+            .array => |a| a,
+            else => continue,
+        };
+        for (arr.items) |item| {
+            const filename = switch (item) {
+                .string => |s| s,
+                else => continue,
+            };
+            if (filename.len == 0) continue;
+            try assets.append(allocator, .{
+                .job_id = job_id,
+                .asset_type = entry.asset_type,
+                .filename = try allocator.dupe(u8, filename),
+            });
+        }
+    }
+
+    return try allocator.dupe(AssetEntry, assets.items);
+}
+
+/// Check whether an asset filename is generated by one of the cloned jobs.
+///
+/// An asset is considered "generated" if any job in `collected` has a
+/// `PUBLISH_HDD_*` or `PUBLISH_PFLASH_VARS` setting whose value matches
+/// the given filename. In that case, the asset need not be downloaded
+/// because the cloned parent will regenerate it.
+///
+/// Arguments:
+/// - `filename`: The asset filename to check.
+/// - `collected`: Slice of all collected job entries.
+///
+/// Returns: `true` if the asset is generated by a cloned job (skip download).
+pub fn isAssetGeneratedByClonedJobs(
+    filename: []const u8,
+    collected: []const JobEntry,
+) bool {
+    for (collected) |entry| {
+        for (entry.settings.items) |pair| {
+            // Check PUBLISH_HDD_* keys
+            if (std.mem.startsWith(u8, pair.key, "PUBLISH_HDD_")) {
+                if (std.mem.eql(u8, pair.value, filename)) return true;
+            }
+            // Check PUBLISH_PFLASH_VARS
+            if (std.mem.eql(u8, pair.key, "PUBLISH_PFLASH_VARS")) {
+                if (std.mem.eql(u8, pair.value, filename)) return true;
+            }
+        }
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1198,6 +1593,280 @@ test "formatOutput: multiple jobs sorted by original ID" {
     const parent_pos = std.mem.indexOf(u8, output, "parent -> http://localhost/tests/5001").?;
     const child_pos = std.mem.indexOf(u8, output, "child -> http://localhost/tests/5002").?;
     try std.testing.expect(parent_pos < child_pos);
+}
+
+test "formatExportCommand: single job with settings" {
+    const allocator = std.testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s1: std.ArrayList(SettingPair) = .empty;
+    try s1.append(a, .{ .key = "TEST", .value = "simple_boot" });
+    try s1.append(a, .{ .key = "BUILD", .value = "export-test" });
+    const collected = [_]JobEntry{
+        .{ .job_id = 42, .settings = s1, .name = "simple_boot" },
+    };
+
+    const output = try formatExportCommand(allocator, &collected, "http://localhost");
+    defer allocator.free(output);
+
+    try std.testing.expect(std.mem.startsWith(u8, output, "zoqa api --host 'http://localhost' -X POST jobs"));
+    try std.testing.expect(std.mem.indexOf(u8, output, "'TEST:42=simple_boot'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "'BUILD:42=export-test'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "'is_clone_job=1'") != null);
+}
+
+test "formatBadgeOutput: produces markdown badge lines" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, "{\"42\": 5001}", .{});
+    defer parsed.deinit();
+    const ids_map = parsed.value.object;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s1: std.ArrayList(SettingPair) = .empty;
+    try s1.append(a, .{ .key = "TEST", .value = "x" });
+    const collected = [_]JobEntry{
+        .{ .job_id = 42, .settings = s1, .name = "mytest" },
+    };
+
+    const output = try formatBadgeOutput(allocator, ids_map, &collected, "http://localhost");
+    defer allocator.free(output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "* [![mytest](http://localhost/tests/5001/badge?label=mytest)](http://localhost/tests/5001)") != null);
+}
+
+test "formatJsonOutput: produces sorted JSON object" {
+    const allocator = std.testing.allocator;
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, "{\"42\": 5002, \"41\": 5001}", .{});
+    defer parsed.deinit();
+    const ids_map = parsed.value.object;
+
+    const output = try formatJsonOutput(allocator, ids_map);
+    defer allocator.free(output);
+
+    // Keys sorted ascending: 41 before 42
+    try std.testing.expectEqualStrings("{\"41\":5001,\"42\":5002}\n", output);
+}
+
+test "appendRepeatSuffix: iteration 1 appends suffix" {
+    const allocator = std.testing.allocator;
+
+    var settings: std.ArrayList(SettingPair) = .empty;
+    defer settings.deinit(allocator);
+    try settings.append(allocator, .{ .key = "TEST", .value = "mytest" });
+    try settings.append(allocator, .{ .key = "BUILD", .value = "123" });
+
+    var entries = [_]JobEntry{.{
+        .job_id = 42,
+        .settings = settings,
+        .name = "test-job",
+    }};
+
+    try appendRepeatSuffix(allocator, &entries, 1);
+    defer allocator.free(entries[0].settings.items[0].value);
+
+    try std.testing.expectEqualStrings("mytest-01", entries[0].settings.items[0].value);
+    // BUILD unchanged
+    try std.testing.expectEqualStrings("123", entries[0].settings.items[1].value);
+}
+
+test "appendRepeatSuffix: iteration 2 replaces trailing digits" {
+    const allocator = std.testing.allocator;
+
+    var settings: std.ArrayList(SettingPair) = .empty;
+    defer settings.deinit(allocator);
+    try settings.append(allocator, .{ .key = "TEST", .value = "mytest-01" });
+
+    var entries = [_]JobEntry{.{
+        .job_id = 42,
+        .settings = settings,
+        .name = "test-job",
+    }};
+
+    try appendRepeatSuffix(allocator, &entries, 2);
+    defer allocator.free(entries[0].settings.items[0].value);
+
+    try std.testing.expectEqualStrings("mytest-02", entries[0].settings.items[0].value);
+}
+
+test "appendRepeatSuffix: no TEST key is a no-op" {
+    const allocator = std.testing.allocator;
+
+    var settings: std.ArrayList(SettingPair) = .empty;
+    defer settings.deinit(allocator);
+    try settings.append(allocator, .{ .key = "BUILD", .value = "123" });
+
+    var entries = [_]JobEntry{.{
+        .job_id = 42,
+        .settings = settings,
+        .name = "test-job",
+    }};
+
+    try appendRepeatSuffix(allocator, &entries, 1);
+
+    try std.testing.expectEqualStrings("123", entries[0].settings.items[0].value);
+}
+
+test "stripTrailingDigitSuffix: removes -NN suffix" {
+    try std.testing.expectEqualStrings("foo", stripTrailingDigitSuffix("foo-01"));
+    try std.testing.expectEqualStrings("foo-bar", stripTrailingDigitSuffix("foo-bar-99"));
+    try std.testing.expectEqualStrings("abc", stripTrailingDigitSuffix("abc-123"));
+}
+
+test "stripTrailingDigitSuffix: no suffix returns full string" {
+    try std.testing.expectEqualStrings("foo", stripTrailingDigitSuffix("foo"));
+    try std.testing.expectEqualStrings("foo-bar", stripTrailingDigitSuffix("foo-bar"));
+    try std.testing.expectEqualStrings("foo-", stripTrailingDigitSuffix("foo-"));
+    try std.testing.expectEqualStrings("foo-abc", stripTrailingDigitSuffix("foo-abc"));
+}
+
+test "extractAssets: extracts iso, hdd, other arrays" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{"assets":{"iso":["test.iso"],"hdd":["disk.qcow2","second.raw"],"other":["log.txt"],"repo":["skip-me"]}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    const assets = try extractAssets(allocator, parsed.value.object, 42);
+    defer allocator.free(assets);
+
+    try std.testing.expectEqual(@as(usize, 4), assets.len);
+    try std.testing.expectEqualStrings("test.iso", assets[0].filename);
+    try std.testing.expect(assets[0].asset_type == .iso);
+    try std.testing.expectEqualStrings("disk.qcow2", assets[1].filename);
+    try std.testing.expect(assets[1].asset_type == .hdd);
+    try std.testing.expectEqualStrings("second.raw", assets[2].filename);
+    try std.testing.expectEqualStrings("log.txt", assets[3].filename);
+    try std.testing.expect(assets[3].asset_type == .other);
+    try std.testing.expectEqual(@as(u64, 42), assets[0].job_id);
+
+    // Cleanup arena-duped filenames
+    for (assets) |a| allocator.free(a.filename);
+}
+
+test "extractAssets: missing assets key returns empty" {
+    const allocator = std.testing.allocator;
+    const json_str = "{}";
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    const assets = try extractAssets(allocator, parsed.value.object, 1);
+    defer allocator.free(assets);
+
+    try std.testing.expectEqual(@as(usize, 0), assets.len);
+}
+
+test "isAssetGeneratedByClonedJobs: matches PUBLISH_HDD" {
+    const allocator = std.testing.allocator;
+    var settings: std.ArrayList(SettingPair) = .empty;
+    defer settings.deinit(allocator);
+    try settings.append(allocator, .{ .key = "PUBLISH_HDD_1", .value = "base-disk.qcow2" });
+
+    const entries = [_]JobEntry{.{
+        .job_id = 10,
+        .settings = settings,
+        .name = "parent",
+    }};
+
+    try std.testing.expect(isAssetGeneratedByClonedJobs("base-disk.qcow2", &entries));
+    try std.testing.expect(!isAssetGeneratedByClonedJobs("other-disk.qcow2", &entries));
+}
+
+test "isAssetGeneratedByClonedJobs: matches PUBLISH_PFLASH_VARS" {
+    const allocator = std.testing.allocator;
+    var settings: std.ArrayList(SettingPair) = .empty;
+    defer settings.deinit(allocator);
+    try settings.append(allocator, .{ .key = "PUBLISH_PFLASH_VARS", .value = "uefi-vars.qcow2" });
+
+    const entries = [_]JobEntry{.{
+        .job_id = 10,
+        .settings = settings,
+        .name = "parent",
+    }};
+
+    try std.testing.expect(isAssetGeneratedByClonedJobs("uefi-vars.qcow2", &entries));
+    try std.testing.expect(!isAssetGeneratedByClonedJobs("other.qcow2", &entries));
+}
+
+test "injectReproduceSettings: injects all four mappings" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{"TEST_GIT_URL":"https://github.com/os-autoinst/os-autoinst-distri-opensuse.git","TEST_GIT_HASH":"abc123","NEEDLES_GIT_URL":"https://github.com/os-autoinst/os-autoinst-needles-opensuse.git","NEEDLES_GIT_HASH":"def456"}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    var settings: std.ArrayList(SettingPair) = .empty;
+    defer settings.deinit(allocator);
+    try settings.append(allocator, .{ .key = "TEST", .value = "mytest" });
+
+    try injectReproduceSettings(allocator, &settings, parsed.value.object);
+
+    // Should now have 5 settings: original TEST + 4 injected
+    try std.testing.expectEqual(@as(usize, 5), settings.items.len);
+
+    // Verify injected values
+    var found_casedir = false;
+    var found_refspec = false;
+    var found_needles = false;
+    var found_needles_ref = false;
+    for (settings.items) |pair| {
+        if (std.mem.eql(u8, pair.key, "CASEDIR")) {
+            try std.testing.expectEqualStrings("https://github.com/os-autoinst/os-autoinst-distri-opensuse.git", pair.value);
+            found_casedir = true;
+        }
+        if (std.mem.eql(u8, pair.key, "TEST_GIT_REFSPEC")) {
+            try std.testing.expectEqualStrings("abc123", pair.value);
+            found_refspec = true;
+        }
+        if (std.mem.eql(u8, pair.key, "NEEDLES_DIR")) {
+            try std.testing.expectEqualStrings("https://github.com/os-autoinst/os-autoinst-needles-opensuse.git", pair.value);
+            found_needles = true;
+        }
+        if (std.mem.eql(u8, pair.key, "NEEDLES_GIT_REFSPEC")) {
+            try std.testing.expectEqualStrings("def456", pair.value);
+            found_needles_ref = true;
+        }
+    }
+    try std.testing.expect(found_casedir);
+    try std.testing.expect(found_refspec);
+    try std.testing.expect(found_needles);
+    try std.testing.expect(found_needles_ref);
+
+    // Free allocated keys/values
+    for (settings.items[1..]) |pair| {
+        allocator.free(pair.key);
+        allocator.free(pair.value);
+    }
+}
+
+test "injectReproduceSettings: skips missing and empty source keys" {
+    const allocator = std.testing.allocator;
+    // Only TEST_GIT_URL present, NEEDLES fields missing, TEST_GIT_HASH empty
+    const json_str =
+        \\{"TEST_GIT_URL":"https://example.com/repo.git","TEST_GIT_HASH":""}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    var settings: std.ArrayList(SettingPair) = .empty;
+    defer settings.deinit(allocator);
+
+    try injectReproduceSettings(allocator, &settings, parsed.value.object);
+
+    // Only CASEDIR should be injected (TEST_GIT_HASH is empty, NEEDLES_* missing)
+    try std.testing.expectEqual(@as(usize, 1), settings.items.len);
+    try std.testing.expectEqualStrings("CASEDIR", settings.items[0].key);
+    try std.testing.expectEqualStrings("https://example.com/repo.git", settings.items[0].value);
+
+    allocator.free(settings.items[0].key);
+    allocator.free(settings.items[0].value);
 }
 
 // ---------------------------------------------------------------------------

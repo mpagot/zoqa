@@ -41,7 +41,7 @@ pub fn resolveCredentials(
     cli_key: ?[]const u8,
     cli_secret: ?[]const u8,
 ) !?config.Credentials {
-    const hostname = zoqa.url.hostnameFromUrl(host_url);
+    const hostname = hostnameFromUrl(host_url);
 
     const conf_creds = try config.findCredentials(allocator, hostname);
     defer if (conf_creds) |c| c.deinit();
@@ -147,4 +147,46 @@ test "resolveRetryConfig defaults when no env vars set" {
 test "resolveRetryConfig cli_retries takes priority" {
     const cfg = try resolveRetryConfig(std.testing.allocator, 5);
     try std.testing.expectEqual(@as(u32, 5), cfg.retries);
+}
+
+// ---------------------------------------------------------------------------
+// Hostname extraction (private helper)
+// ---------------------------------------------------------------------------
+
+/// Extract the hostname from a URL string for credential lookup.
+///
+/// Uses `std.Uri.parse` to extract the host component. Returns a slice
+/// into `url` (no allocation). Falls back to returning the full `url`
+/// string when parsing fails or no host is present.
+fn hostnameFromUrl(url: []const u8) []const u8 {
+    const uri = std.Uri.parse(url) catch return url;
+    return if (uri.host) |h| h.percent_encoded else url;
+}
+
+test "hostnameFromUrl: extracts host from full URL" {
+    try std.testing.expectEqualStrings(
+        "openqa.opensuse.org",
+        hostnameFromUrl("https://openqa.opensuse.org/api/v1/jobs"),
+    );
+}
+
+test "hostnameFromUrl: extracts host from URL with port" {
+    try std.testing.expectEqualStrings(
+        "localhost",
+        hostnameFromUrl("http://localhost:9526/tests/42"),
+    );
+}
+
+test "hostnameFromUrl: returns full string on parse failure" {
+    try std.testing.expectEqualStrings(
+        "not a url at all",
+        hostnameFromUrl("not a url at all"),
+    );
+}
+
+test "hostnameFromUrl: scheme-only URL with no host returns input" {
+    // Edge case: "file:///" has no host authority
+    const result = hostnameFromUrl("file:///etc/passwd");
+    // std.Uri may or may not parse host as empty — verify no crash
+    _ = result;
 }

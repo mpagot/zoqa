@@ -15,11 +15,41 @@ const std = @import("std");
 ///
 /// This predicate is called per-byte by `formEncodeAppend`, which builds
 /// the encoded form body used for POST requests.
-pub fn isUnreserved(c: u8) bool {
+/// Arguments:
+/// - `c`: input character to check
+fn isUnreserved(c: u8) bool {
     return (c >= 'A' and c <= 'Z') or
         (c >= 'a' and c <= 'z') or
         (c >= '0' and c <= '9') or
         c == '-' or c == '_' or c == '.' or c == '~';
+}
+
+test "isUnreserved: letters, digits, and special unreserved chars" {
+    const testing = std.testing;
+    try testing.expect(isUnreserved('A'));
+    try testing.expect(isUnreserved('Z'));
+    try testing.expect(isUnreserved('a'));
+    try testing.expect(isUnreserved('z'));
+    try testing.expect(isUnreserved('0'));
+    try testing.expect(isUnreserved('9'));
+    try testing.expect(isUnreserved('-'));
+    try testing.expect(isUnreserved('_'));
+    try testing.expect(isUnreserved('.'));
+    try testing.expect(isUnreserved('~'));
+}
+
+test "isUnreserved: reserved and special chars return false" {
+    const testing = std.testing;
+    try testing.expect(!isUnreserved(' '));
+    try testing.expect(!isUnreserved('='));
+    try testing.expect(!isUnreserved('&'));
+    try testing.expect(!isUnreserved('%'));
+    try testing.expect(!isUnreserved('+'));
+    try testing.expect(!isUnreserved('/'));
+    try testing.expect(!isUnreserved('?'));
+    try testing.expect(!isUnreserved('#'));
+    try testing.expect(!isUnreserved('\x00'));
+    try testing.expect(!isUnreserved('\xff'));
 }
 
 /// Appends a percent-encoded version of `input` to `buf` following
@@ -48,48 +78,6 @@ pub fn formEncodeAppend(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), i
             try buf.appendSlice(allocator, enc);
         }
     }
-}
-
-/// Extract the hostname from a URL string for credential lookup.
-///
-/// Uses `std.Uri.parse` to extract the host component. Returns a slice
-/// into `url` (no allocation). Falls back to returning the full `url`
-/// string when parsing fails or no host is present.
-pub fn hostnameFromUrl(url: []const u8) []const u8 {
-    const uri = std.Uri.parse(url) catch return url;
-    return if (uri.host) |h| h.percent_encoded else url;
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-test "isUnreserved: letters, digits, and special unreserved chars" {
-    const testing = std.testing;
-    try testing.expect(isUnreserved('A'));
-    try testing.expect(isUnreserved('Z'));
-    try testing.expect(isUnreserved('a'));
-    try testing.expect(isUnreserved('z'));
-    try testing.expect(isUnreserved('0'));
-    try testing.expect(isUnreserved('9'));
-    try testing.expect(isUnreserved('-'));
-    try testing.expect(isUnreserved('_'));
-    try testing.expect(isUnreserved('.'));
-    try testing.expect(isUnreserved('~'));
-}
-
-test "isUnreserved: reserved and special chars return false" {
-    const testing = std.testing;
-    try testing.expect(!isUnreserved(' '));
-    try testing.expect(!isUnreserved('='));
-    try testing.expect(!isUnreserved('&'));
-    try testing.expect(!isUnreserved('%'));
-    try testing.expect(!isUnreserved('+'));
-    try testing.expect(!isUnreserved('/'));
-    try testing.expect(!isUnreserved('?'));
-    try testing.expect(!isUnreserved('#'));
-    try testing.expect(!isUnreserved('\x00'));
-    try testing.expect(!isUnreserved('\xff'));
 }
 
 test "formEncodeAppend: unreserved chars pass through" {
@@ -122,32 +110,4 @@ test "formEncodeAppend: all special bytes percent-encoded" {
     defer buf.deinit(allocator);
     try formEncodeAppend(allocator, &buf, "\x00\x01\xff");
     try std.testing.expectEqualStrings("%00%01%FF", buf.items);
-}
-
-test "hostnameFromUrl: extracts host from full URL" {
-    try std.testing.expectEqualStrings(
-        "openqa.opensuse.org",
-        hostnameFromUrl("https://openqa.opensuse.org/api/v1/jobs"),
-    );
-}
-
-test "hostnameFromUrl: extracts host from URL with port" {
-    try std.testing.expectEqualStrings(
-        "localhost",
-        hostnameFromUrl("http://localhost:9526/tests/42"),
-    );
-}
-
-test "hostnameFromUrl: returns full string on parse failure" {
-    try std.testing.expectEqualStrings(
-        "not a url at all",
-        hostnameFromUrl("not a url at all"),
-    );
-}
-
-test "hostnameFromUrl: scheme-only URL with no host returns input" {
-    // Edge case: "file:///" has no host authority
-    const result = hostnameFromUrl("file:///etc/passwd");
-    // std.Uri may or may not parse host as empty — verify no crash
-    _ = result;
 }

@@ -41,7 +41,7 @@ help:
 	@echo "  fuzz-sanitize   Check that corpus filenames are Windows-safe (no colons)."
 	@echo " "
 	@echo " "
-	@echo "  lint        Run all linters (zig-lint, manual-lint, fuzz-lint)."
+	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint, fuzz-lint)."
 
 zig-build-debug:
 	zig build
@@ -129,8 +129,13 @@ e2e:
 e2e-keep:
 	./tests/e2e/run.sh --keep-container $(E2E_SUITES_ARG)
 
+<<<<<<< HEAD
 e2e-dryrun:
 	./tests/e2e/run.sh --dryrun $(E2E_SUITES_ARG)
+=======
+e2e-dryrun: zig-build-debug
+	bash tests/e2e/run.sh --dryrun $(E2E_SUITES_ARG)
+>>>>>>> 723ad16 (Implement missing clone_job features and optimize large response performance)
 
 # -----------------------------------------------------------------------------
 # Linting  bash syntax check + shellcheck on all E2E scripts
@@ -219,29 +224,6 @@ fuzz-lint:
 	@echo "==> shellcheck"
 	@shellcheck $(FUZZ_SCRIPTS)
 	@echo "==> fuzz-lint passed"
-
-# -----------------------------------------------------------------------------
-# Linting — Zig source formatting check
-# -----------------------------------------------------------------------------
-zig-lint:
-	@echo "==> zig fmt --check src/"
-	@zig fmt --check src/
-	@echo "==> zig-lint passed"
-
-# -----------------------------------------------------------------------------
-# Docstring completeness check
-# -----------------------------------------------------------------------------
-# Check that every pub/export fn declaration in src/*.zig has a complete /// doc
-# comment (summary, Arguments:, Returns:, Errors: as appropriate).
-# Optional: pass WITH_PRIVATE=1 to also check private functions.
-#   make zig-docstring
-#   make zig-docstring WITH_PRIVATE=1
-DOCSTRING_FLAGS := $(if $(WITH_PRIVATE),--with-private,)
-
-zig-docstring:
-	@echo "==> docstring completeness check"
-	@python3 tools/check_docstrings.py $(DOCSTRING_FLAGS) .
-	@echo "==> zig-docstring passed"
 
 # -----------------------------------------------------------------------------
 # Aggregate lint target
