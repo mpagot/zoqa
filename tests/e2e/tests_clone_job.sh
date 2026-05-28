@@ -772,3 +772,119 @@ run_test "PERL: bare --host 127.0.0.1 → https:// → TLS error (exit non-zero)
 run_test "ZIG : bare --host 127.0.0.1 → https:// → TLS error (exit non-zero)" \
 	"bash -c \"$ZIG_CLONE_EXE --from http://localhost --host 127.0.0.1 --skip-download $JOB_ID; test \\\$? -ne 0\"" 0
 
+# =============================================================================
+# M50-M78: Missing Features
+# =============================================================================
+
+echo "--- Test M50-M54: --export-command ---"
+run_capture_both "clone_export" \
+	"$PERL_CLONE_EXE --within-instance http://localhost --export-command $JOB_ID BUILD=export-test" \
+	"$ZIG_CLONE_EXE --within-instance http://localhost --export-command $JOB_ID BUILD=export-test"
+assert_capture_exits "clone_export" 0
+
+# Perl outputs openqa-cli api, Zig outputs zoqa api. Check logs directly on host.
+if grep -q "openqa-cli api.*-X POST jobs" "$LOG_DIR/clone_export_perl_stdout.log"; then
+	echo "PASS: Perl export-command outputs openqa-cli"
+else
+	echo "FAIL: Perl export-command outputs openqa-cli"
+	failed_tests=$((failed_tests + 1))
+fi
+
+if grep -q "zoqa api.*-X POST jobs" "$LOG_DIR/clone_export_zig_stdout.log"; then
+	echo "PASS: Zig export-command outputs zoqa api"
+else
+	echo "FAIL: Zig export-command outputs zoqa api"
+	failed_tests=$((failed_tests + 1))
+fi
+
+if grep -q "BUILD:.*=export-test" "$LOG_DIR/clone_export_zig_stdout.log"; then
+	echo "PASS: Zig export-command includes overrides"
+else
+	echo "FAIL: Zig export-command includes overrides"
+	failed_tests=$((failed_tests + 1))
+fi
+
+echo "--- Test M55-M59: --reproduce ---"
+run_capture_both "clone_reproduce" \
+	"$PERL_CLONE_EXE --within-instance http://localhost --reproduce $JOB_ID" \
+	"$ZIG_CLONE_EXE --within-instance http://localhost --reproduce $JOB_ID"
+assert_capture_exits "clone_reproduce" 0
+
+echo "--- Test M60-M63: --repeat ---"
+run_capture_both "clone_repeat" \
+	"$PERL_CLONE_EXE --within-instance http://localhost --repeat 2 $JOB_ID" \
+	"$ZIG_CLONE_EXE --within-instance http://localhost --repeat 2 $JOB_ID"
+assert_capture_exits "clone_repeat" 0
+
+if [ "$(grep -c '1 job has been created:' "$LOG_DIR/clone_repeat_perl_stdout.log" || true)" -eq 2 ]; then
+	echo "PASS: Perl repeat 2 creates 2 jobs"
+else
+	echo "FAIL: Perl repeat 2 creates 2 jobs"
+	failed_tests=$((failed_tests + 1))
+fi
+
+if [ "$(grep -c '1 job has been created:' "$LOG_DIR/clone_repeat_zig_stdout.log" || true)" -eq 2 ]; then
+	echo "PASS: Zig repeat 2 creates 2 jobs"
+else
+	echo "FAIL: Zig repeat 2 creates 2 jobs"
+	failed_tests=$((failed_tests + 1))
+fi
+
+echo "--- Test M65-M67: --badge ---"
+run_capture_both "clone_badge" \
+	"$PERL_CLONE_EXE --within-instance http://localhost --badge $JOB_ID" \
+	"$ZIG_CLONE_EXE --within-instance http://localhost --badge $JOB_ID"
+assert_capture_exits "clone_badge" 0
+# Both should output markdown badge format `[![`
+assert_stdout_pattern "clone_badge" "\[\!\["
+
+echo "--- Test M68-M70: --json-output ---"
+run_capture_both "clone_json_output" \
+	"$PERL_CLONE_EXE --within-instance http://localhost --json-output $JOB_ID" \
+	"$ZIG_CLONE_EXE --within-instance http://localhost --json-output $JOB_ID"
+assert_capture_exits "clone_json_output" 0
+
+# Validate non-empty valid JSON with at least one numeric value (new job ID).
+if jq -e 'to_entries | length > 0' "$LOG_DIR/clone_json_output_perl_stdout.log" >/dev/null 2>&1; then
+	echo "PASS: Perl json-output is valid non-empty JSON"
+else
+	echo "FAIL: Perl json-output is valid non-empty JSON"
+	failed_tests=$((failed_tests + 1))
+fi
+
+if jq -e 'to_entries | length > 0' "$LOG_DIR/clone_json_output_zig_stdout.log" >/dev/null 2>&1; then
+	echo "PASS: Zig json-output is valid non-empty JSON"
+else
+	echo "FAIL: Zig json-output is valid non-empty JSON"
+	failed_tests=$((failed_tests + 1))
+fi
+
+echo "--- Test M71-M78: Asset download ---"
+# --dir path must exist inside the container (commands run via container_exec).
+# Use separate dirs so Perl's downloads don't mask Zig's absence.
+ASSET_DIR_PERL="/tmp/e2e-assets-perl-$$"
+ASSET_DIR_ZIG="/tmp/e2e-assets-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_PERL" "$ASSET_DIR_ZIG"
+run_capture_both "clone_assets" \
+	"$PERL_CLONE_EXE --from http://localhost --host localhost $JOB_ID --dir $ASSET_DIR_PERL" \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost $JOB_ID --dir $ASSET_DIR_ZIG"
+assert_capture_exits "clone_assets" 0
+
+# Verify Perl downloaded at least one asset file (HDD or ISO).
+if container_exec find "$ASSET_DIR_PERL" -type f | grep -q .; then
+	echo "PASS: Perl asset download produced files"
+else
+	echo "FAIL: Perl asset download produced files"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Verify Zig downloaded at least one asset file.
+if container_exec find "$ASSET_DIR_ZIG" -type f | grep -q .; then
+	echo "PASS: Zig asset download produced files"
+else
+	echo "FAIL: Zig asset download produced files"
+	failed_tests=$((failed_tests + 1))
+fi
+
+container_exec rm -rf "$ASSET_DIR_PERL" "$ASSET_DIR_ZIG"
+

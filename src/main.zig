@@ -96,7 +96,7 @@ pub const Args = struct {
     // schedule subcommand options
     schedule_monitor: bool = false,
 
-    /// Release the three owned ArrayLists.  Call this (via `defer`) immediately
+    /// Release the three owned ArrayLists. Call this (via `defer`) immediately
     /// after a successful `parseArgs` return.
     ///
     /// Parameters:
@@ -605,7 +605,7 @@ test "tryArchiveFlag: unrecognized token returns false" {
 /// Try to match `token` against a flag specific to the `monitor` subcommand
 /// (`zoqa monitor ...`).
 ///
-/// Recognised flags:
+/// Recognized flags:
 ///   - `--follow` / `-f` : track the newest clone of each job during
 ///     polling; sets `args.follow`.
 ///   - `--poll-interval` / `-i` : polling interval in seconds;
@@ -707,7 +707,7 @@ test "tryMonitorFlag: unrecognized token returns false" {
 /// Try to match `token` against a flag specific to the `schedule` subcommand
 /// (`zoqa schedule ...`).
 ///
-/// Recognised flags:
+/// Recognized flags:
 ///   - `--monitor` / `-m` : after scheduling, enter the blocking job monitor
 ///     loop; sets `args.schedule_monitor`.
 ///   - `--follow` / `-f` : track the newest clone of each job during
@@ -1295,8 +1295,8 @@ test "parseArgs: archive flag --asset-size-limit rejected for api" {
 
 // ---------------------------------------------------------------------------
 // --pretty and --links are "accepted but have no
-// observable effect" for the archive subcommand.  These tests should PASS
-// with the current code : they confirm the spec-mandated behaviour.
+// observable effect" for the archive subcommand. These tests should PASS
+// with the current code : they confirm the spec-mandated behavior.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: --pretty accepted for archive no effects" {
@@ -1316,6 +1316,13 @@ test "parseArgs: --links accepted for archive no effects" {
 
     try std.testing.expect(parsed.links);
 }
+
+/// Alias for the shared URL form-encoding function (library layer).
+const formEncodeAppend = zoqa.url.formEncodeAppend;
+
+// ---------------------------------------------------------------------------
+// --form: JSON object → application/x-www-form-urlencoded
+// ---------------------------------------------------------------------------
 
 /// Converts a JSON-formatted string into an application/x-www-form-urlencoded string.
 ///
@@ -1434,9 +1441,6 @@ test "jsonToFormEncoded: empty object" {
     defer allocator.free(result);
     try std.testing.expectEqualStrings("", result);
 }
-
-/// Alias for the shared URL form-encoding function (library layer).
-const formEncodeAppend = zoqa.url.formEncodeAppend;
 
 /// Post-parseArgs processing result, ready to pass to `zoqa.openQAReq()`.
 /// RequestConfig is purely a transitional container: it exists to bridge
