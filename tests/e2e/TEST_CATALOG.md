@@ -16,6 +16,7 @@ of the harness and how to run it, see [README.md](README.md).
 | `tests_archive.sh` | Section H — archive subcommand tests (ARC-1–ARC-63). |
 | `tests_monitor.sh` | Section I — monitor subcommand tests (MON-1–MON-51). |
 | `tests_schedule.sh` | Section J — schedule subcommand tests (SCH-1–SCH-50). |
+| `tests_clone_job.sh` | Section K — clone-job subcommand tests (M1–M17). |
 | `tests_help.sh` | Help output structure tests (global, api, archive, monitor, schedule). |
 | `tests_perf.sh` | Section G — wall-clock timing and peak RSS comparisons (PERF-B1–B2, T1–T8, R1–R9). |
 | `tests_stress.sh` | Section L — large response stress and gzip negotiation tests. |
@@ -74,13 +75,13 @@ of the harness and how to run it, see [README.md](README.md).
 ### Authentication (`tests_auth.sh`)
 | # | Test | Verification |
 |---|---|---|
-| 11 | DELETE HMAC | Correct signature generation for `DELETE` requests (verified via 404). |
-| 12 | POST HMAC | Correct signature generation for `POST` requests via config file credentials. |
-| 13 | Wrong `--apisecret` (403) | Graceful handling of invalid secrets/signatures. |
-| 14 | CLI flags override config | `--apikey`/`--apisecret` override wrong `client.conf` credentials. |
-| 15 | Env var credentials | `OPENQA_API_KEY`+`OPENQA_API_SECRET` as sole credential source. |
-| 16 | Wrong env var secret (403) | Invalid `OPENQA_API_SECRET` env var is rejected by server. |
-| 17 | CLI flags override env vars | `--apikey`/`--apisecret` override wrong env var credentials. |
+| AUT-1 | DELETE HMAC | Correct signature generation for `DELETE` requests (verified via 404). |
+| AUT-2 | POST HMAC | Correct signature generation for `POST` requests via config file credentials. |
+| AUT-3 | Wrong `--apisecret` (403) | Graceful handling of invalid secrets/signatures. |
+| AUT-4 | CLI flags override config | `--apikey`/`--apisecret` override wrong `client.conf` credentials. |
+| AUT-5 | Env var credentials | `OPENQA_API_KEY`+`OPENQA_API_SECRET` as sole credential source. |
+| AUT-6 | Wrong env var secret (403) | Invalid `OPENQA_API_SECRET` env var is rejected by server. |
+| AUT-7 | CLI flags override env vars | `--apikey`/`--apisecret` override wrong env var credentials. |
 
 ### Seeded Data (`tests_data.sh`)
 | # | Test | Verification |
