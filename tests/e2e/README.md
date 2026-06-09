@@ -82,18 +82,7 @@ pwsh tests\e2e\run_windows.ps1 -WslDistro "openSUSE-Tumbleweed"
 | `seed_fixtures.sh` | Runs **inside** the container. Loads templates, schedules jobs, registers assets, writes `/tmp/seeded_ids.env`. |
 | `lib.sh` | Shared library sourced by all scripts above. Provides `run_cmd()`, `container_exec()`, `die()`, and common defaults (`CONTAINER_NAME`, `DRY_RUN`, `LOG_PREFIX`). |
 | `tests.sh` | Sources all `tests_*.sh` domain files. |
-| `tests_core.sh` | Section A — core protocol and CLI flag tests (tests 1–10). |
-| `tests_auth.sh` | Section B — authentication tests (tests 11–17). |
-| `tests_data.sh` | Section C — seeded data, pagination, parity tests (tests 18–24). |
-| `tests_output.sh` | Section D — `--verbose`, `--pretty`, `--name` (tests 25–28). |
-| `tests_robustness.sh` | Section E — broken pipe, non-2xx stderr, `--quiet` (tests 29–31). |
-| `tests_retry_knobs.sh` | Section F — retry/timeout env var smoke tests (tests 32–35). |
-| `tests_archive.sh` | Section H — archive subcommand tests (ARC-1–ARC-63). |
-| `tests_monitor.sh` | Section I — monitor subcommand tests (MON-1–MON-51). |
-| `tests_schedule.sh` | Section J — schedule subcommand tests (SCH-1–SCH-50). |
-| `tests_help.sh` | Help output structure tests (global, api, archive, monitor, schedule). |
-| `tests_perf.sh` | Section G — wall-clock timing and peak RSS comparisons (PERF-B1–B2, T1–T8, R1–R9). |
-| `tests_stress.sh` | Section L — large response stress and gzip negotiation tests. |
+| `tests_*.sh` | Refer to [TEST_CATALOG.md](TEST_CATALOG.md) |
 
 `run.sh` is the only script you need to call directly in normal use. The others are
 invoked automatically.
@@ -337,8 +326,8 @@ failed_tests=0; warned_tests=0; E2E_SUITES="all"
 source tests/e2e/lib.sh
 
 # Source just the helpers from tests.sh without running all suites.
-# The helper functions (run_test, run_diff_test, run_comparison) are
-# defined before the suite-sourcing loop, so we can extract them with:
+# The helper functions (run_test, run_diff_test, run_comparison_api)
+# are defined before the suite-sourcing loop, so we can extract them with:
 _E2E_DIR="tests/e2e"
 source <(sed -n '1,/^# Source domain test files/p' tests/e2e/tests.sh)
 
