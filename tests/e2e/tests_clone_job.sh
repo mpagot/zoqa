@@ -888,3 +888,127 @@ fi
 
 container_exec rm -rf "$ASSET_DIR_PERL" "$ASSET_DIR_ZIG"
 
+# =============================================================================
+# M80-M83: --ignore-missing-assets
+#
+# TDD: Perl passes these tests; Zig currently does NOT implement the flag
+# behavior (it parses the flag but always aborts on download errors).
+# M80: Without --ignore-missing-assets, clone of a job with a non-existent
+#      asset exits non-zero (both Perl and Zig should fail).
+# M81: WITH --ignore-missing-assets, Perl succeeds (exit 0); Zig FAILS (TDD).
+# M82: With the flag, stderr contains a warning about the missing asset (Perl).
+# M83: With the flag, stdout contains "has been created" (job POST succeeded).
+# =============================================================================
+echo "--- Test M80-M83: --ignore-missing-assets ---"
+
+# Fixture: create a job that references a non-existent ISO.
+# POST directly to /api/v1/jobs so it appears in the DB with the phantom asset
+# in its settings.  The job will be in 'scheduled' state but we don't need it
+# to run — clone-job only fetches its settings.
+MISSING_ASSET_JOB_ID=$(container_exec bash -c '
+	openqa-cli api --host http://localhost -X POST jobs \
+		DISTRI=example VERSION=0 FLAVOR=DVD ARCH=x86_64 \
+		TEST=phantom_asset_test BUILD=e2e-phantom \
+		ISO_1=phantom-nonexist-e2e.iso \
+		BACKEND=null \
+		CASEDIR=/var/lib/openqa/tests/example \
+		NEEDLES_DIR=%CASEDIR%/needles \
+		_GROUP_ID=1 2>/dev/null | jq -r ".id // empty"
+')
+
+if [[ -z "$MISSING_ASSET_JOB_ID" ]]; then
+	echo "FAIL: could not create fixture job with missing asset"
+	failed_tests=$((failed_tests + 1))
+else
+	echo "  [fixture] Created job $MISSING_ASSET_JOB_ID with phantom ISO"
+
+	# M80: Without --ignore-missing-assets, both should exit non-zero.
+	echo "--- Test M80: clone missing-asset job WITHOUT flag → exit non-zero ---"
+	ASSET_DIR_M80_PERL="/tmp/e2e-m80-perl-$$"
+	ASSET_DIR_M80_ZIG="/tmp/e2e-m80-zig-$$"
+	container_exec mkdir -p "$ASSET_DIR_M80_PERL" "$ASSET_DIR_M80_ZIG"
+
+	run_capture "m80" perl \
+		"$PERL_CLONE_EXE --from http://localhost --host http://localhost --skip-deps $MISSING_ASSET_JOB_ID --dir $ASSET_DIR_M80_PERL"
+	_PERL_EXIT=$_LAST_EXIT
+	run_capture "m80" zig \
+		"$ZIG_CLONE_EXE --from http://localhost --host http://localhost --skip-deps $MISSING_ASSET_JOB_ID --dir $ASSET_DIR_M80_ZIG"
+	_ZIG_EXIT=$_LAST_EXIT
+
+	if [[ "$_PERL_EXIT" -ne 0 ]]; then
+		echo "PASS: Perl exits non-zero without --ignore-missing-assets"
+	else
+		echo "FAIL: Perl exits non-zero without --ignore-missing-assets (got $_PERL_EXIT)"
+		failed_tests=$((failed_tests + 1))
+	fi
+	if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+		echo "PASS: Zig exits non-zero without --ignore-missing-assets"
+	else
+		echo "FAIL: Zig exits non-zero without --ignore-missing-assets (got $_ZIG_EXIT)"
+		failed_tests=$((failed_tests + 1))
+	fi
+
+	container_exec rm -rf "$ASSET_DIR_M80_PERL" "$ASSET_DIR_M80_ZIG"
+
+	# M81: WITH --ignore-missing-assets, Perl continues and creates the job.
+	echo "--- Test M81: clone missing-asset job WITH flag → exit 0 ---"
+	ASSET_DIR_M81_PERL="/tmp/e2e-m81-perl-$$"
+	ASSET_DIR_M81_ZIG="/tmp/e2e-m81-zig-$$"
+	container_exec mkdir -p "$ASSET_DIR_M81_PERL" "$ASSET_DIR_M81_ZIG"
+
+	run_capture_both "m81" \
+		"$PERL_CLONE_EXE --from http://localhost --host http://localhost --skip-deps --ignore-missing-assets $MISSING_ASSET_JOB_ID --dir $ASSET_DIR_M81_PERL" \
+		"$ZIG_CLONE_EXE --from http://localhost --host http://localhost --skip-deps --ignore-missing-assets $MISSING_ASSET_JOB_ID --dir $ASSET_DIR_M81_ZIG"
+
+	if [[ "$_PERL_EXIT" -eq 0 ]]; then
+		echo "PASS: Perl exits 0 with --ignore-missing-assets"
+	else
+		echo "FAIL: Perl exits 0 with --ignore-missing-assets (got $_PERL_EXIT)"
+		cat "$LOG_DIR/m81_perl_stderr.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+	if [[ "$_ZIG_EXIT" -eq 0 ]]; then
+		echo "PASS: Zig exits 0 with --ignore-missing-assets"
+	else
+		echo "FAIL: Zig exits 0 with --ignore-missing-assets (got $_ZIG_EXIT)"
+		cat "$LOG_DIR/m81_zig_stderr.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+
+	# M82: With the flag, stderr contains a warning about the missing asset.
+	echo "--- Test M82: stderr warns about missing asset ---"
+	if grep -qi "missing\|phantom-nonexist\|skipping\|unavailable" "$LOG_DIR/m81_perl_stderr.log" 2>/dev/null; then
+		echo "PASS: Perl stderr mentions missing asset"
+	else
+		echo "FAIL: Perl stderr mentions missing asset"
+		echo "  stderr was: $(cat "$LOG_DIR/m81_perl_stderr.log" 2>/dev/null)"
+		failed_tests=$((failed_tests + 1))
+	fi
+	if grep -qi "missing\|phantom-nonexist\|skipping\|unavailable" "$LOG_DIR/m81_zig_stderr.log" 2>/dev/null; then
+		echo "PASS: Zig stderr mentions missing asset"
+	else
+		echo "FAIL: Zig stderr mentions missing asset"
+		echo "  stderr was: $(cat "$LOG_DIR/m81_zig_stderr.log" 2>/dev/null)"
+		failed_tests=$((failed_tests + 1))
+	fi
+
+	# M83: With the flag, stdout shows job was created (POST succeeded).
+	echo "--- Test M83: stdout shows job created ---"
+	if grep -q "has been created" "$LOG_DIR/m81_perl_stdout.log" 2>/dev/null; then
+		echo "PASS: Perl stdout has 'has been created'"
+	else
+		echo "FAIL: Perl stdout has 'has been created'"
+		echo "  stdout was: $(cat "$LOG_DIR/m81_perl_stdout.log" 2>/dev/null)"
+		failed_tests=$((failed_tests + 1))
+	fi
+	if grep -q "has been created" "$LOG_DIR/m81_zig_stdout.log" 2>/dev/null; then
+		echo "PASS: Zig stdout has 'has been created'"
+	else
+		echo "FAIL: Zig stdout has 'has been created'"
+		echo "  stdout was: $(cat "$LOG_DIR/m81_zig_stdout.log" 2>/dev/null)"
+		failed_tests=$((failed_tests + 1))
+	fi
+
+	container_exec rm -rf "$ASSET_DIR_M81_PERL" "$ASSET_DIR_M81_ZIG"
+fi
+
