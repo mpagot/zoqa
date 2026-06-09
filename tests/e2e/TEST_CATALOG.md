@@ -5,17 +5,71 @@ of the harness and how to run it, see [README.md](README.md).
 
 ---
 
+| Script | Purpose |
+|---|---|
+| `tests_core.sh` | Section A — core protocol and CLI flag tests (tests 1–10). |
+| `tests_auth.sh` | Section B — authentication tests (tests 11–17). |
+| `tests_data.sh` | Section C — seeded data, pagination, parity tests (tests 18–24). |
+| `tests_output.sh` | Section D — `--verbose`, `--pretty`, `--name` (tests 25–28). |
+| `tests_robustness.sh` | Section E — broken pipe, non-2xx stderr, `--quiet` (tests 29–31). |
+| `tests_retry_knobs.sh` | Section F — retry/timeout env var smoke tests (tests 32–35). |
+| `tests_archive.sh` | Section H — archive subcommand tests (ARC-1–ARC-63). |
+| `tests_monitor.sh` | Section I — monitor subcommand tests (MON-1–MON-51). |
+| `tests_schedule.sh` | Section J — schedule subcommand tests (SCH-1–SCH-50). |
+| `tests_help.sh` | Help output structure tests (global, api, archive, monitor, schedule). |
+| `tests_perf.sh` | Section G — wall-clock timing and peak RSS comparisons (PERF-B1–B2, T1–T8, R1–R9). |
+| `tests_stress.sh` | Section L — large response stress and gzip negotiation tests. |
+
+
 ## Test Coverage
 
-### API & Protocol
+### Core Protocol & CLI Flags (`tests_core.sh`)
 | # | Test | Verification |
 |---|---|---|
-| 1 | GET `jobs/overview` | Basic endpoint connectivity and JSON array response. |
-| 2 | GET `workers` | Basic endpoint connectivity. |
-| 3 | Query Parameters | Appending filters (e.g., `distri=opensuse`) to the URL. |
-| 14 | Nested JSON Parsing | Correctly parsing and returning complex nested objects (e.g., `settings`). |
-| 19 | Resource Discovery | Retrieving seeded groups and verifying data persistence. |
-| 21 | Relative vs Absolute Path | `zoqa api jobs/1` and `zoqa api http://localhost/api/v1/jobs/1` produce identical output. |
+| COR-1 | GET `jobs/overview` | Basic endpoint connectivity and JSON array response. |
+| COR-2 | GET `workers` | Basic endpoint connectivity. |
+| COR-3 | GET with query params | Appending filters (e.g., `distri=opensuse`) to the URL. |
+| COR-4 | GET 404 | Standard API error propagation (`jobs/999999`). |
+| COR-5 | Missing PATH argument | Both Perl and Zig exit 255 with usage text when PATH is omitted. |
+| COR-6 | Invalid host | Connection refused on unreachable port (exit 1). |
+| COR-7 | `--host` before subcommand | Flags placed before `api` rejected (exit 255). |
+| COR-8 | `--` stop accepted | `-- jobs/overview` behaves same as without `--` (exit 0). |
+| COR-9 | `--` dash-prefixed path | `-- -X` used as literal path (404, not flag error). |
+| COR-10 | `--param-file` | Reading key/value pairs from external files. |
+| COR-10b | `--param-file` matching | `--param-file` with a value that matches seeded data returns results. |
+| COR-36 | `--data` / `-d` raw body POST | Raw body sent verbatim via `--data`. |
+| COR-36b | `--data-file` POST | `--data-file` with matching product schedules a job (`count:1`). |
+| COR-37 | `--form` JSON to form-encoded | `--form` converts JSON body to `application/x-www-form-urlencoded`. |
+| COR-38 | `-a` / `--header` | Custom request header injected without breaking the request. |
+| COR-39 | `--json` + `--data-file` + PUT | Content-Type set to `application/json`; raw JSON body via file. |
+| COR-40 | `--param-file` + positional KV | File value merged with inline `key=value` parameter. |
+| COR-41a | Bare hostname to `https://` | Bare `--host localhost` prepends `https://` (TLS error, exit 1). |
+| COR-41b | Unresolvable hostname | DNS failure on non-existent hostname (exit 1). |
+| COR-41c | Explicit URL wrong port | Fully-qualified URL with wrong port (ECONNREFUSED, exit 1). |
+| COR-42 | Combined short flags `-vp` | Flag bundling rejected (exit 255). |
+| COR-43 | Cross-subcommand flag rejection | Archive-only `--with-thumbnails` rejected for `api` (exit 255). |
+
+### Authentication (`tests_auth.sh`)
+| # | Test | Verification |
+|---|---|---|
+| AUT-1 | DELETE HMAC | Correct signature generation for `DELETE` requests (verified via 404). |
+| AUT-2 | POST HMAC | Correct signature generation for `POST` requests via config file credentials. |
+| AUT-3 | Wrong `--apisecret` (403) | Graceful handling of invalid secrets/signatures. |
+| AUT-4 | CLI flags override config | `--apikey`/`--apisecret` override wrong `client.conf` credentials. |
+| AUT-5 | Env var credentials | `OPENQA_API_KEY`+`OPENQA_API_SECRET` as sole credential source. |
+| AUT-6 | Wrong env var secret (403) | Invalid `OPENQA_API_SECRET` env var is rejected by server. |
+| AUT-7 | CLI flags override env vars | `--apikey`/`--apisecret` override wrong env var credentials. |
+
+### Seeded Data (`tests_data.sh`)
+| # | Test | Verification |
+|---|---|---|
+| 18 | GET `jobs/overview` (non-empty) | After seeding, response contains test name. |
+| 19 | Nested JSON Parsing | Correctly parsing and returning complex nested objects (e.g., `settings`). |
+| 20 | Pagination `--links` + follow | `--links` prints `next:` URL to stderr; following it returns expected data. |
+| 21 | Authenticated DELETE | Successful deletion of a real asset using full HMAC handshake (exit 0). |
+| 22 | Resource Discovery | Retrieving seeded job groups and verifying data persistence. |
+| 23 | Output Parity | Hard `diff` comparison between Perl and Zig output for a nested object. |
+| 24 | Relative vs Absolute Path | `zoqa api jobs/1` and `zoqa api http://localhost/api/v1/jobs/1` produce identical output. |
 
 ### Authentication (HMAC-SHA1)
 | # | Test | Verification |
@@ -97,7 +151,7 @@ of the harness and how to run it, see [README.md](README.md).
 | ARC-41 | Asset Size Parity | CirrOS image byte size identical between Perl and Zig. |
 | ARC-42 | Size Limit Skips CirrOS (Zig) | `--asset-size-limit 1` prints "exceeds maximum size limit" (Zig). |
 | ARC-43 | Size Limit Skips CirrOS (Perl) | `--asset-size-limit 1` prints "Maximum message size exceeded" (Perl). |
-| ARC-44 | Progress Percentage | stdout contains "Downloading…%" for rich job (Zig). |
+| ARC-44 | Progress Percentage | stdout contains "Downloading...%" for rich job (Zig). |
 | ARC-45 | Saved Details Message | stdout contains "Saved details for" (Zig). |
 | ARC-46 | Full Dir Structure Parity | `find -type d` full comparison on rich archive. |
 | ARC-47 | Full File Listing Parity | `find -type f` full comparison on rich archive. |
@@ -110,13 +164,15 @@ of the harness and how to run it, see [README.md](README.md).
 | ARC-62 | Wrong Env Secret (GET public) | Wrong `OPENQA_API_SECRET` env var does not fail read-only archive. |
 | ARC-63 | --osd Alias | `archive --osd` resolves to `openqa.suse.de` (connection fails as expected). |
 
-### Monitor Subcommand
+### Monitor Subcommand (`tests_monitor.sh`)
 | # | Test | Verification |
 |---|---|---|
-| MON-1,2 | Missing JOB_ID | `monitor` with no arguments exits 255. |
-| MON-3,4 | Non-numeric JOB_ID | `monitor abc` exits 255 in Zig. |
-| MON-5,6 | Completed Job | `monitor RICH_JOB_ID` exits based on final state (0 or 2). |
-| MON-7 | Stdout Format | Contains "Job state of job ID". |
+| MON-1 | PERL: No JOB_ID | Captures Perl behaviour (no validation, exits 0 — known divergence). |
+| MON-2 | ZIG: No JOB_ID | `monitor` with no arguments exits 255. |
+| MON-3 | PERL: Non-numeric JOB_ID | Captures Perl behaviour (no upfront validation). |
+| MON-4 | ZIG: Non-numeric JOB_ID | `monitor abc` exits 255 in Zig. |
+| MON-5,6 | Completed Job | `monitor RICH_JOB_ID` exits based on final state (Zig matches Perl). |
+| MON-7 | Stdout Format | Diff comparison of stdout output between Perl and Zig. |
 | MON-9,10 | Cancelled Job | `monitor JOB_ID` exits 2 when job is cancelled. |
 | MON-11,12 | Missing Job | `monitor 999999999` exits 1. |
 | MON-13,14 | --follow | Flag accepted (returns newest clone). |
@@ -125,12 +181,12 @@ of the harness and how to run it, see [README.md](README.md).
 | MON-19 | Already-terminal Fast Return | `monitor` on a completed job returns in < 5s (regression: off-by-one sleep bug). |
 | MON-50,51 | Invalid Flag | `monitor --extract` exits 255. |
 
-### Schedule Subcommand
+### Schedule Subcommand (`tests_schedule.sh`)
 | # | Test | Verification |
 |---|---|---|
 | SCH-1 | Sync Schedule (inline) | Both Perl and Zig schedule via `schedule` with inline `SCENARIO_DEFINITIONS_YAML`, exit 0, stdout contains `"has/have been created"` and job URLs. |
 | SCH-2 | Sync Schedule (--param-file) | Both schedule using `--param-file SCENARIO_DEFINITIONS_YAML=/tmp/scenario.yaml`, exit 0, stdout contains `"has/have been created"`. |
-| SCH-3 | Async Without --monitor | Both schedule with `async=1` (no `--monitor`), exit 0. No `"has been created"` line expected. |
+| SCH-3 | Async Without --monitor | Both schedule with `async=1` (no `--monitor`), exit 0. |
 | SCH-4 | Async With --monitor | Both schedule with `async=1 --monitor`, poll until jobs complete, exit 0. |
 | SCH-6 | --follow Without --monitor | Both schedule with `--follow` (no `--monitor`), exit 0 immediately after printing job URLs. `--follow` is a modifier, not a trigger. |
 | SCH-7 | --poll-interval + async --monitor | Both schedule with `--poll-interval 1 --monitor async=1`, poll and exit 0. |
@@ -139,9 +195,56 @@ of the harness and how to run it, see [README.md](README.md).
 | SCH-10 | Repeated --param-file | Two `--param-file` flags in one invocation; both Perl and Zig exit 0 and produce job URLs. |
 | SCH-50 | Invalid Flag (--extract) | `schedule --extract` exits 255 (cross-subcommand flag rejection). |
 
-### Stress Subcommand
+### Stress Tests (`tests_stress.sh`)
 | # | Test | Verification |
 |---|---|---|
-| STRESS-1 | Response Size Sanity | Large job details response is > 10 000 bytes (Zig). |
+| STRESS-1 | Response Size Sanity | Large job details response is >= 30 MB (Perl). |
 | STRESS-2 | Output Parity | Full JSON output identical between Perl and Zig for large response. |
 | STRESS-3 | Gzip Negotiation | `Accept-Encoding` header contains "gzip" (Zig sends compression request). |
+| (info) | Wall-clock timing | Informational: timing comparison for large response (no PASS/FAIL). |
+| (info) | Peak RSS | Informational: memory comparison for large response (no PASS/FAIL). |
+
+### Performance (`tests_perf.sh`)
+
+All performance tests are **informational only** (no PASS/FAIL threshold).
+
+| # | Test | Metric |
+|---|---|---|
+| PERF-B1 | Bare Perl startup (`perl -e '1'`) | Wall-clock + RSS baseline. |
+| PERF-B2 | Perl + Mojo::UserAgent load | Wall-clock + RSS baseline (framework overhead). |
+| PERF-T1 | Plain `jobs/overview` | Wall-clock timing (3 runs, min/avg/max). |
+| PERF-T2 | Plain `jobs/:id` | Wall-clock timing (3 runs). |
+| PERF-T3 | Config-file creds `jobs/overview` | Wall-clock with `OPENQA_CONFIG=/etc/openqa`. |
+| PERF-T4 | CLI-flag creds `jobs/overview` | Wall-clock with `--apikey`/`--apisecret`. |
+| PERF-T5 | `--pretty jobs/overview` | Wall-clock with JSON re-indentation. |
+| PERF-T6 | Archive baseline (dummy job) | Wall-clock for archive subcommand (3 runs). |
+| PERF-T7 | Archive `--asset-size-limit 1` | Wall-clock with assets skipped (3 runs). |
+| PERF-T8 | Archive rich job (~21 MB) | Wall-clock with real I/O throughput (3 runs). |
+| PERF-R1 | Plain `jobs/overview` | Peak RSS (Perl ~50-60 MB, Zig ~3-8 MB). |
+| PERF-R2 | Plain `jobs/:id` | Peak RSS. |
+| PERF-R3 | Config-file creds | Peak RSS with config-file code path. |
+| PERF-R4 | CLI-flag creds | Peak RSS with argument-parser credential path. |
+| PERF-R5 | `--pretty jobs/overview` | Peak RSS with formatting code path. |
+| PERF-R6 | Archive baseline (dummy job) | Peak RSS for archive subcommand. |
+| PERF-R7 | Archive `--asset-size-limit 1` | Peak RSS with assets skipped. |
+| PERF-R8 | Archive rich job (~21 MB) | Peak RSS with real I/O. |
+| PERF-R9 | Monitor 5 completed jobs | Peak RSS for monitor subcommand (5 simultaneous jobs). |
+
+---
+
+## Test File Index
+
+| File | Section | Description |
+|---|---|---|
+| `tests_core.sh` | A | Core protocol, CLI flags, cross-subcommand rejection |
+| `tests_auth.sh` | B | Authentication (HMAC-SHA1), credential priority chain |
+| `tests_data.sh` | C | Seeded data: pagination, DELETE, output parity, path handling |
+| `tests_output.sh` | D | Output formatting: --verbose, --pretty, --name, header count |
+| `tests_robustness.sh` | E | Broken pipe, non-2xx stderr, --quiet suppression |
+| `tests_retry_knobs.sh` | F | Retry/timeout env vars and CLI flags |
+| `tests_perf.sh` | G | Performance: timing, peak RSS, interpreter baseline |
+| `tests_archive.sh` | H | Archive subcommand (ARC-1 through ARC-63) |
+| `tests_help.sh` | I | Help output structure and stream routing |
+| `tests_monitor.sh` | I | Monitor subcommand (MON-1 through MON-51) |
+| `tests_schedule.sh` | J | Schedule subcommand (SCH-1 through SCH-RK-3) |
+| `tests_stress.sh` | L | Large response stress tests (STRESS-1 through STRESS-3) |

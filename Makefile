@@ -6,19 +6,23 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help build release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint manual-lint fuzz-lint lint fuzz-build
+.PHONY: help zig-build-debug zig-release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint zig-docstring lint fuzz-build
 
 # Default target
 help:
 	@echo "Usage: make <target>"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build       Build the zoqa executable and static library."
-	@echo "  release     Build with release optimizations."
-	@echo "  zig-test    Run all Zig unit tests."
+	@echo "  zig-build-debug     Build the zoqa executable and static library (debug)."
+	@echo "  zig-build-release   Build with release optimizations and strip symbols."
+	@echo "  zig-test            Run all Zig unit tests."
 	@echo "  zig-test-discovery  Verify every \`test\` block in src/ is actually run."
 	@echo "                      Catches Zig issue #10018 (lazy-analysis silently"
 	@echo "                      drops tests in unreferenced files). Runs the suite."
+	@echo "  zig-lint            Check Zig source formatting (zig fmt --check src/)."
+	@echo "  zig-docstring       Check /// docstring completeness for fn declarations in src/."
+	@echo "                      Optional: WITH_PRIVATE=1  — also check private functions."
+	@echo " "
 	@echo "  e2e         Run the full E2E suite (starts + tears down container)."
 	@echo "              Requires zig-out/bin/zoqa to exist."
 	@echo "              Optional: SUITES=core,auth  — run only the listed suite(s)."
@@ -26,32 +30,22 @@ help:
 	@echo "  e2e-keep    Run E2E keeping the container alive (--keep-container)."
 	@echo "              Optional: SUITES=           — deploy only, skip all tests."
 	@echo "  e2e-dryrun  Simulate E2E run without starting container (--dryrun)."
-	@echo "  zig-lint    Check Zig source formatting (zig fmt --check src/)."
 	@echo "  e2e-lint        Run bash -n, shellcheck, and suite registry check on E2E scripts."
+	@echo "  e2e-catalog-lint Run test prefix and catalog validation."
+	@echo " "
 	@echo "  manual-lint     Run bash -n and shellcheck on manual test scripts."
+	@echo " "
 	@echo "  fuzz-lint       Run bash -n and shellcheck on tests/fuzz/ scripts."
-	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint, fuzz-lint)."
 	@echo "  fuzz-build  Build the fuzzy app."
+	@echo "  lint        Run all linters (zig-lint, manual-lint, fuzz-lint)."
 
-# -----------------------------------------------------------------------------
-# Build
-# -----------------------------------------------------------------------------
-build:
+zig-build-debug:
 	zig build
 
-release:
-	zig build -Doptimize=ReleaseFast
+zig-build-release:
+	zig build -Doptimize=ReleaseFast -Dstrip=true
 
-# -----------------------------------------------------------------------------
-# Fuzz
-# -----------------------------------------------------------------------------
-fuzz-build:
-	./tests/fuzz/build.sh
-
-# -----------------------------------------------------------------------------
-# Unit Tests
-# -----------------------------------------------------------------------------
-zig-test:
+zig-test: zig-test-discovery
 	zig build test --summary all
 
 # Verify every `test` block declared in src/*.zig is actually executed by the
@@ -60,6 +54,29 @@ zig-test:
 # test` internally as part of the check.
 zig-test-discovery:
 	bash tools/check_test_count.sh .
+
+# -----------------------------------------------------------------------------
+# Linting — Zig source formatting check
+# -----------------------------------------------------------------------------
+zig-lint:
+	@echo "==> zig fmt --check src/"
+	@zig fmt --check src/
+	@echo "==> zig-lint passed"
+
+# -----------------------------------------------------------------------------
+# Docstring completeness check
+# -----------------------------------------------------------------------------
+# Check that every pub/export fn declaration in src/*.zig has a complete /// doc
+# comment (summary, Arguments:, Returns:, Errors: as appropriate).
+# Optional: pass WITH_PRIVATE=1 to also check private functions.
+#   make zig-docstring
+#   make zig-docstring WITH_PRIVATE=1
+DOCSTRING_FLAGS := $(if $(WITH_PRIVATE),--with-private,)
+
+zig-docstring:
+	@echo "==> docstring completeness check"
+	@python3 tools/check_docstrings.py $(DOCSTRING_FLAGS) .
+	@echo "==> zig-docstring passed"
 
 # -----------------------------------------------------------------------------
 # Near End-to-End Tests
@@ -110,7 +127,12 @@ E2E_SCRIPTS := \
 	tests/e2e/tests_stress.sh \
 	tests/e2e/check_suite_registry.sh
 
-e2e-lint:
+e2e-catalog-lint:
+	@echo "==> test prefix and catalog validation"
+	@bash tools/check_test_catalog.sh
+	@echo "==> e2e-catalog-lint passed"
+
+e2e-lint: e2e-catalog-lint
 	@echo "==> bash -n syntax check"
 	@for f in $(E2E_SCRIPTS); do \
 		bash -n "$$f" && echo "  OK  $$f" || echo "  FAIL $$f"; \
@@ -140,6 +162,12 @@ manual-lint:
 	@echo "==> manual-lint passed"
 
 # -----------------------------------------------------------------------------
+# Fuzz
+# -----------------------------------------------------------------------------
+fuzz-build:
+	./tests/fuzz/build.sh
+
+# -----------------------------------------------------------------------------
 # Linting — bash syntax check + shellcheck on fuzz harness scripts
 # -----------------------------------------------------------------------------
 FUZZ_SCRIPTS := \
@@ -159,15 +187,7 @@ fuzz-lint:
 	@echo "==> fuzz-lint passed"
 
 # -----------------------------------------------------------------------------
-# Linting — Zig source formatting check
-# -----------------------------------------------------------------------------
-zig-lint:
-	@echo "==> zig fmt --check src/"
-	@zig fmt --check src/
-	@echo "==> zig-lint passed"
-
-# -----------------------------------------------------------------------------
 # Aggregate lint target
 # -----------------------------------------------------------------------------
-lint: zig-lint e2e-lint manual-lint fuzz-lint
+lint: zig-lint manual-lint fuzz-lint
 	@echo "==> all linters passed"

@@ -5,7 +5,7 @@
 #
 #   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 #
-# Provides:
+# Provides (directly):
 #   CONTAINER_NAME  — default container name (overridable before sourcing)
 #   COLLECT_LOGS    — default false (overridable before sourcing)
 #   DRY_RUN         — default false (set before sourcing or via --dryrun parsing)
@@ -17,7 +17,7 @@
 #   die()           — print a prefixed error to stderr and exit 1
 #   cd_to_project_root() — cd to the project root; pass "${BASH_SOURCE[0]}" of the caller
 #
-# Job management (host-side only — use container_exec internally):
+# Auto-sourced from lib_fixtures.sh (job management):
 #   schedule_job()  — POST /api/v1/isos, prints job ID
 #   wait_for_job()  — poll until terminal state, prints state
 #   cancel_job()    — POST cancel for a job
@@ -49,6 +49,17 @@ _OPENQA_E2E_LIB_LOADED=1
 : "${DRY_RUN:=false}"
 : "${ENV_FILE:=/tmp/openqa_e2e_env.sh}"
 : "${LOG_PREFIX:=e2e}"
+
+# ---------------------------------------------------------------------------
+# CirrOS test image settings (single source of truth)
+# ---------------------------------------------------------------------------
+CIRROS_VERSION="0.6.3"
+CIRROS_ARCH="x86_64"
+CIRROS_ORIG="cirros-${CIRROS_VERSION}-${CIRROS_ARCH}-disk.img"
+CIRROS_IMG="cirros-${CIRROS_VERSION}-${CIRROS_ARCH}-disk.qcow2"
+CIRROS_URL="https://download.cirros-cloud.net/${CIRROS_VERSION}/${CIRROS_ORIG}"
+CIRROS_TESTDIR="/var/lib/openqa/share/tests/cirros"
+export CIRROS_VERSION CIRROS_ARCH CIRROS_ORIG CIRROS_IMG CIRROS_URL CIRROS_TESTDIR
 
 # ---------------------------------------------------------------------------
 # log() — print a prefixed informational message to stdout
@@ -96,6 +107,21 @@ die() {
 }
 
 # ---------------------------------------------------------------------------
+# e2e_sleep SECONDS — sleep unless in dry-run mode
+#
+# Wrapper around `sleep` that skips the actual delay when DRY_RUN is true.
+# Use this instead of bare `sleep` in test scripts so that dry-run completes
+# instantly.
+# ---------------------------------------------------------------------------
+e2e_sleep() {
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] sleep $1 (skipped)"
+		return 0
+	fi
+	sleep "$1"
+}
+
+# ---------------------------------------------------------------------------
 # cd_to_project_root() — cd to the repository root from a caller's location
 #
 # Must be called with the caller's BASH_SOURCE[0]:
@@ -112,310 +138,14 @@ cd_to_project_root() {
 }
 
 # ===========================================================================
-# Job Management Functions (host-side — use container_exec internally)
+# Job Management Functions — extracted to lib_fixtures.sh
 #
-# These functions call openqa-cli inside the container via container_exec.
-# They are intended for use by test suites (tests_*.sh), NOT by scripts
-# that already run inside the container (e.g. seed_fixtures.sh).
+# Sourced automatically below.  Provides: schedule_job, wait_for_job,
+# cancel_job, get_job_state, _ensure_job, ensure_basic_job, ensure_rich_job,
+# ensure_stress_job, dump_job_logs, register_deletable_asset,
+# _E2E_JOB_COMMON_ARGS.
 # ===========================================================================
-
-# Path to the cached scenario YAML inside the container.
-# Written by seed_fixtures.sh during infrastructure setup.
-_SCENARIO_YAML_PATH="/tmp/scenario.yaml"
-
-# ---------------------------------------------------------------------------
-# schedule_job KEY=VALUE... — schedule an openQA job via POST /api/v1/isos
-#
-# Automatically includes SCENARIO_DEFINITIONS_YAML from the cached file.
-# Prints the new job ID to stdout.
-#
-# Usage:
-#   this_job_id=$(schedule_job DISTRI=example VERSION=0 FLAVOR=DVD ARCH=x86_64 \
-#                         BUILD=my-build HDD_1=cirros.qcow2 "_GROUP_ID=1")
-# ---------------------------------------------------------------------------
-schedule_job() {
-	if [[ "$DRY_RUN" == "true" ]]; then
-		echo "1"
-		return 0
-	fi
-	local response
-	# Run everything inside a single bash -c to avoid shell escaping issues
-	# with the multi-line SCENARIO_YAML value. The caller's KEY=VALUE args
-	# are passed as positional parameters via the trailing "$@".
-	#
-	# When E2E_STORAGE_KEEP_FREE_RATIO is set, inject it as the
-	# STORAGE_KEEP_FREE_RATIO job variable to tune (or disable, with 0)
-	# isotovideo's disk-space check.  When unset, the parameter is omitted
-	# entirely and isotovideo uses its built-in default (20% keep-free).
-	local storage_args=()
-	if [[ -n "${E2E_STORAGE_KEEP_FREE_RATIO+set}" ]]; then
-		storage_args+=("STORAGE_KEEP_FREE_RATIO=${E2E_STORAGE_KEEP_FREE_RATIO}")
-	fi
-	# shellcheck disable=SC2016
-	response=$(container_exec bash -c '
-		SCENARIO_YAML=$(cat "$1")
-		shift
-		openqa-cli api --host http://localhost -X POST isos \
-			"SCENARIO_DEFINITIONS_YAML=$SCENARIO_YAML" \
-			"$@" 2>/dev/null
-	' _ "$_SCENARIO_YAML_PATH" "${storage_args[@]}" "$@") || die "schedule_job: POST /api/v1/isos failed"
-
-	local this_job_id
-	this_job_id=$(echo "$response" | jq -r '.ids[0] // empty')
-	[[ -n "$this_job_id" ]] || die "schedule_job: no job ID in response: $response"
-	echo "$this_job_id"
-}
-
-# ---------------------------------------------------------------------------
-# wait_for_job JOB_ID [TIMEOUT_SECONDS] — poll until the job reaches a
-# terminal state (done, cancelled, failed).
-#
-# Prints the terminal state to stdout. Returns 0 on success, 1 on timeout.
-#
-# Usage:
-#   state=$(wait_for_job "$JOB_ID" 300)
-# ---------------------------------------------------------------------------
-wait_for_job() {
-	local this_job_id="$1"
-	local timeout="${2:-300}"
-
-	if [[ "$DRY_RUN" == "true" ]]; then
-		echo "done"
-		return 0
-	fi
-
-	local elapsed=0
-	while [[ "$elapsed" -lt "$timeout" ]]; do
-		local state
-		state=$(container_exec openqa-cli api --host http://localhost \
-			"jobs/$this_job_id" 2>/dev/null | jq -r '.job.state // empty')
-		echo "  [wait] Job $this_job_id: state=$state (${elapsed}s/${timeout}s)" >&2
-		if [[ "$state" == "done" || "$state" == "cancelled" || "$state" == "failed" ]]; then
-			echo "$state"
-			return 0
-		fi
-		sleep 2
-		elapsed=$((elapsed + 2))
-	done
-	echo "timeout"
-	return 1
-}
-
-# ---------------------------------------------------------------------------
-# cancel_job JOB_ID — cancel a running job
-# ---------------------------------------------------------------------------
-cancel_job() {
-	local this_job_id="$1"
-	if [[ "$DRY_RUN" == "true" ]]; then
-		echo "[DRY-RUN] cancel_job $this_job_id"
-		return 0
-	fi
-	container_exec openqa-cli api --host http://localhost \
-		-X POST "jobs/$this_job_id/cancel" >/dev/null 2>&1
-}
-
-# ---------------------------------------------------------------------------
-# get_job_state JOB_ID — query and print the current state of a job
-# ---------------------------------------------------------------------------
-get_job_state() {
-	local this_job_id="$1"
-	if [[ "$DRY_RUN" == "true" ]]; then
-		echo "done"
-		return 0
-	fi
-	container_exec openqa-cli api --host http://localhost \
-		"jobs/$this_job_id" 2>/dev/null | jq -r '.job.state // empty'
-}
-
-# ---------------------------------------------------------------------------
-# dump_job_logs JOB_ID [LABEL] — fetch and print per-job diagnostics.
-#
-# Queries the openQA API for the job's result/reason and fetches the tail
-# of autoinst-log.txt (the isotovideo log that explains *why* a job died).
-# All output goes to stderr, prefixed with [diag].
-#
-# Call this before die() when a job's result is unexpected — it makes the
-# failure reason visible in CI output without manual container inspection.
-# ---------------------------------------------------------------------------
-dump_job_logs() {
-	local this_job_id="$1"
-	local label="${2:-Job $this_job_id}"
-	[[ "$DRY_RUN" == "true" ]] && return 0
-
-	# 1. Fetch job result/reason from the API
-	local job_json result reason
-	job_json=$(container_exec openqa-cli api --host http://localhost \
-		"jobs/$this_job_id" 2>/dev/null) || true
-	result=$(echo "$job_json" | jq -r '.job.result // "unknown"')
-	reason=$(echo "$job_json" | jq -r '.job.reason // "none"')
-	echo "  [diag] $label (job $this_job_id): result=$result reason=$reason" >&2
-
-	# 2. Fetch tail of autoinst-log.txt (isotovideo log — shows why the job died)
-	local autoinst_log
-	autoinst_log=$(container_exec bash -c \
-		"curl -sSf http://localhost/tests/$this_job_id/file/autoinst-log.txt 2>/dev/null | tail -30" \
-	) || true
-	if [[ -n "$autoinst_log" ]]; then
-		echo "  [diag] autoinst-log.txt (last 30 lines):" >&2
-		while IFS= read -r _line; do
-			printf '  [diag]   %s\n' "$_line" >&2
-		done <<<"$autoinst_log"
-	else
-		echo "  [diag] autoinst-log.txt: not available" >&2
-	fi
-}
-
-# ---------------------------------------------------------------------------
-# _E2E_JOB_COMMON_ARGS — shared schedule_job args for all standard jobs.
-#
-# These are the DISTRI/VERSION/FLAVOR/ARCH/HDD_1/ISO_1/CASEDIR/NEEDLES_DIR
-# values used by every ensure_* call.  BUILD and _GROUP_ID are job-specific
-# and must be supplied at each call site.
-# ---------------------------------------------------------------------------
-_E2E_JOB_COMMON_ARGS=(
-	DISTRI=example
-	VERSION=0
-	FLAVOR=DVD
-	ARCH=x86_64
-	HDD_1="cirros-0.6.3-x86_64-disk.qcow2"
-	ISO_1="seed-nocloud.iso"
-	CASEDIR="/var/lib/openqa/share/tests/cirros"
-	NEEDLES_DIR="%CASEDIR%/needles"
-)
-
-# ---------------------------------------------------------------------------
-# _ensure_job VAR_NAME LABEL SCHEDULE_ARGS...
-#
-# Generic lazy-init for any named job variable.
-#
-# If VAR_NAME is already set (non-empty) in the environment, this is a no-op.
-# Otherwise, schedules a job using the provided SCHEDULE_ARGS (passed directly
-# to schedule_job), waits for it to complete, verifies it passed, and exports
-# the variable.
-#
-# Arguments:
-#   $1  VAR_NAME       — name of the variable to set (e.g. "JOB_ID")
-#   $2  LABEL          — human-readable label for log messages (e.g. "basic job")
-#   $3… SCHEDULE_ARGS  — key=value pairs forwarded to schedule_job()
-#
-# Sets and exports VAR_NAME in the caller's scope.
-# ---------------------------------------------------------------------------
-_ensure_job() {
-	local var_name="$1"
-	local label="$2"
-	shift 2
-
-	# No-op if already set.
-	if [[ -n "${!var_name:-}" ]]; then
-		return 0
-	fi
-
-	echo "  [ensure] Scheduling $label..." >&2
-	local this_job_id
-	this_job_id=$(schedule_job "$@")
-	echo "  [ensure] ${var_name}=${this_job_id} — waiting for completion..." >&2
-	wait_for_job "$this_job_id" 300 >/dev/null ||
-		die "_ensure_job: timeout waiting for ${var_name}=${this_job_id} ($label)"
-
-	if [[ "$DRY_RUN" != "true" ]]; then
-		local _result
-		_result=$(container_exec openqa-cli api --host http://localhost \
-			"jobs/$this_job_id" 2>/dev/null | jq -r '.job.result // empty')
-		if [[ "$_result" != "passed" ]]; then
-			dump_job_logs "$this_job_id" "$label"
-			die "_ensure_job: job $this_job_id result=$_result (expected passed) ($label)"
-		fi
-		echo "  [ensure] ${var_name}=${this_job_id} ready (result=$_result)." >&2
-	else
-		echo "  [ensure] ${var_name}=${this_job_id} ready." >&2
-	fi
-
-	printf -v "$var_name" '%s' "$this_job_id"
-	export "${var_name?}"
-}
-
-# ---------------------------------------------------------------------------
-# ensure_basic_job — lazy-init JOB_ID (basic CirrOS job).
-# ensure_rich_job  — lazy-init RICH_JOB_ID (waits for basic first).
-# ensure_stress_job STRESS_STEPS STRESS_TEXT_SIZE — lazy-init STRESS_JOB_ID.
-#
-# Thin wrappers around _ensure_job kept for call-site compatibility.
-# ---------------------------------------------------------------------------
-ensure_basic_job() {
-	_ensure_job JOB_ID "basic job" \
-		"${_E2E_JOB_COMMON_ARGS[@]}" \
-		BUILD=e2e-test \
-		"_GROUP_ID=${GROUP_ID:-1}"
-}
-
-ensure_rich_job() {
-	# The single worker must be free before we schedule another job.
-	ensure_basic_job
-	_ensure_job RICH_JOB_ID "rich job" \
-		"${_E2E_JOB_COMMON_ARGS[@]}" \
-		BUILD=e2e-test-rich \
-		"_GROUP_ID=${GROUP_ID:-1}"
-}
-
-ensure_stress_job() {
-	[[ $# -ge 2 ]] || die "ensure_stress_job: requires 2 arguments (STRESS_STEPS STRESS_TEXT_SIZE), got $#"
-	local stress_steps="$1"
-	local stress_text_size="$2"
-	# The single worker must be free before we schedule another job.
-	ensure_basic_job
-	# stress.pm only calls record_info() — it never interacts with a VM.
-	# Use BACKEND=null to skip QEMU entirely, avoiding the isotovideo
-	# HDDSIZEGB storage check that fails on hosts with low free space.
-	_ensure_job STRESS_JOB_ID "stress job" \
-		DISTRI=example \
-		VERSION=0 \
-		FLAVOR=DVD \
-		ARCH=x86_64 \
-		BUILD=e2e-stress \
-		BACKEND=null \
-		CASEDIR="/var/lib/openqa/share/tests/cirros" \
-		NEEDLES_DIR="%CASEDIR%/needles" \
-		STRESSTEST=1 \
-		STRESS_STEPS="$stress_steps" \
-		STRESS_TEXT_SIZE="$stress_text_size" \
-		"_GROUP_ID=${GROUP_ID:-1}"
-}
-
-# ---------------------------------------------------------------------------
-# register_deletable_asset NAME — create a file-backed asset for DELETE tests.
-#
-# Creates a dummy file in the container's factory/other directory, triggers
-# openQA asset registration, and prints the asset ID to stdout.
-#
-# Usage:
-#   ASSET_ID=$(register_deletable_asset "delete-me-perl.tar.gz")
-# ---------------------------------------------------------------------------
-register_deletable_asset() {
-	local name="$1"
-
-	if [[ "$DRY_RUN" == "true" ]]; then
-		echo "1"
-		return 0
-	fi
-
-	local other_dir="/var/lib/openqa/share/factory/other"
-	container_exec bash -c "mkdir -p $other_dir && touch $other_dir/$name"
-	# Trigger asset registration
-	container_exec openqa-cli api --host http://localhost \
-		-X POST assets type=other name="$name" >/dev/null 2>&1 || true
-	sleep 2
-
-	local asset_id
-	asset_id=$(container_exec openqa-cli api --host http://localhost \
-		assets 2>/dev/null | jq --arg name "$name" \
-		'.assets[] | select(.name == $name) | .id // empty' | head -1)
-
-	if [[ -z "$asset_id" ]]; then
-		echo "SKIP"
-	else
-		echo "$asset_id"
-	fi
-}
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_fixtures.sh"
 
 # ===========================================================================
 # Performance Helpers
@@ -604,4 +334,319 @@ run_sigpipe_test() {
 		2>"$LOG_DIR/${tag}_${impl}_stderr.log"
 	_LAST_EXIT=$?
 	set -e
+}
+
+# ---------------------------------------------------------------------------
+# run_capture_both TAG PERL_CMD ZIG_CMD
+#
+# Runs PERL_CMD and ZIG_CMD via run_capture (IMPL=perl, then IMPL=zig).
+# Stores exit codes in _PERL_EXIT and _ZIG_EXIT respectively.
+#
+# Analogous to run_perl_and_zig but accepts explicit full command strings
+# instead of building them from the global PERL_EXE/ZIG_EXE with shared args.
+# Use this when the two implementations differ in binary path or flag spelling.
+#
+# Usage:
+#   run_capture_both "clone12" \
+#       "$PERL_CLONE_EXE --within-instance http://localhost $JOB_ID" \
+#       "$ZIG_CLONE_EXE --within-instance http://localhost $JOB_ID"
+#   # exits now in _PERL_EXIT and _ZIG_EXIT
+# ---------------------------------------------------------------------------
+run_capture_both() {
+	local tag=$1
+	local perl_cmd=$2
+	local zig_cmd=$3
+	run_capture "$tag" perl "$perl_cmd"
+	_PERL_EXIT=$_LAST_EXIT
+	run_capture "$tag" zig "$zig_cmd"
+	_ZIG_EXIT=$_LAST_EXIT
+}
+
+# ---------------------------------------------------------------------------
+# assert_capture_exits TAG [EXPECTED_EXIT]
+#
+# Asserts that _PERL_EXIT and _ZIG_EXIT (set by run_capture_both, or set
+# manually after individual run_capture calls) both equal EXPECTED_EXIT
+# (default: 0).
+#
+# On failure: prints the failing impl's stderr log and increments failed_tests.
+# On success: prints "PASS".
+#
+# When the two captures are interleaved with waits (e.g. single-worker jobs),
+# set _PERL_EXIT and _ZIG_EXIT directly after each run_capture call and then
+# call this function once at the end.
+#
+# Usage:
+#   run_capture_both "clone12" "$PERL_CMD" "$ZIG_CMD"
+#   assert_capture_exits "clone12" 0
+# ---------------------------------------------------------------------------
+assert_capture_exits() {
+	local tag=$1
+	local expected_exit=${2:-0}
+	local pass=true
+	if [[ "$_PERL_EXIT" -ne "$expected_exit" ]]; then
+		echo "  FAIL: Perl exited $_PERL_EXIT (expected $expected_exit)"
+		cat "$LOG_DIR/${tag}_perl_stderr.log"
+		pass=false
+	fi
+	if [[ "$_ZIG_EXIT" -ne "$expected_exit" ]]; then
+		echo "  FAIL: Zig exited $_ZIG_EXIT (expected $expected_exit)"
+		cat "$LOG_DIR/${tag}_zig_stderr.log"
+		pass=false
+	fi
+	if [[ "$pass" == "true" ]]; then
+		echo "PASS"
+	else
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# assert_stdout_pattern TAG PATTERN
+#
+# Checks that the stdout log for both perl and zig (written by a prior
+# run_capture or run_capture_both call with the same TAG) match PATTERN via
+# grep -qE.  Prints "PASS" if both match; on failure, prints the failing
+# impl's stdout log and increments failed_tests.
+#
+# Usage:
+#   assert_stdout_pattern "clone12" "has been created"
+#   assert_stdout_pattern "clone12" 'http://localhost/tests/[0-9]+'
+# ---------------------------------------------------------------------------
+assert_stdout_pattern() {
+	local tag=$1
+	local pattern=$2
+	local pass=true
+	local _impl
+	for _impl in perl zig; do
+		if ! grep -qE "$pattern" "$LOG_DIR/${tag}_${_impl}_stdout.log" 2>/dev/null; then
+			echo "  FAIL: $_impl stdout missing pattern '$pattern'"
+			cat "$LOG_DIR/${tag}_${_impl}_stdout.log"
+			pass=false
+		fi
+	done
+	if [[ "$pass" == "true" ]]; then
+		echo "PASS"
+	else
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ===========================================================================
+# Test Runner Functions
+#
+# These were previously defined inline in tests.sh.  They live here so that
+# lib.sh is the single, authoritative home for all shared test helpers.
+# tests.sh sources lib.sh and then sources the per-domain suite files.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# run_test LABEL CMD [EXPECTED_EXIT [GREP_PATTERN]]
+#
+# Runs CMD inside the container, checks the exit code, and optionally greps
+# the combined stdout+stderr output for GREP_PATTERN.
+#
+# Parameters:
+#   LABEL         — human-readable test name printed in the --- Test: --- line
+#   CMD           — command string passed to container_exec (eval'd)
+#   EXPECTED_EXIT — expected exit code (default: 0)
+#   GREP_PATTERN  — optional grep pattern; FAIL if not found in output
+#
+# Side effects: increments failed_tests on failure.
+# ---------------------------------------------------------------------------
+run_test() {
+	local label=$1
+	local cmd=$2
+	local expected_exit=${3:-0}
+	local grep_pattern=$4
+
+	echo "--- Test: $label ---"
+	echo "Command: $cmd"
+
+	set +e
+	eval "container_exec $cmd" >"$LOG_DIR/test_output.log" 2>&1
+	local exit_code=$?
+	set -e
+
+	echo "Exit code: $exit_code"
+
+	if [[ "$exit_code" -ne "$expected_exit" ]]; then
+		echo "FAIL: Expected exit code $expected_exit, got $exit_code"
+		cat "$LOG_DIR/test_output.log"
+		failed_tests=$((failed_tests + 1))
+		return
+	fi
+
+	if [[ -n "$grep_pattern" ]]; then
+		if ! grep -q "$grep_pattern" "$LOG_DIR/test_output.log"; then
+			echo "FAIL: Output did not match pattern '$grep_pattern'"
+			cat "$LOG_DIR/test_output.log"
+			failed_tests=$((failed_tests + 1))
+			return
+		fi
+	fi
+
+	echo "PASS"
+}
+
+# ---------------------------------------------------------------------------
+# run_comparison_api LABEL ENV_VARS API_ARGS [EXPECTED_EXIT [GREP_PATTERN]]
+#
+# Runs the same API call against both the Perl reference implementation and
+# the Zig implementation, checking each one independently.  A test PASSES
+# when both implementations satisfy the exit-code and grep-pattern criteria;
+# each can fail independently, producing a separate FAIL line.
+#
+# This is the right helper when you care about whether each implementation
+# behaves correctly in isolation (correct exit code, correct output pattern),
+# but do NOT require the two outputs to be identical.  Use run_diff_test when
+# you want to assert byte-for-byte output parity (modulo trailing newlines).
+#
+# Parameters:
+#   LABEL         — human-readable test name (prefixed with PERL:/ZIG: automatically)
+#   ENV_VARS      — space-separated env-var assignments prepended to the command
+#                   (e.g. "OPENQA_CONFIG=/tmp"); pass "" for none
+#   API_ARGS      — arguments passed after `api --host http://localhost`
+#   EXPECTED_EXIT — expected exit code for both impls (default: 0)
+#   GREP_PATTERN  — optional grep pattern checked against combined stdout+stderr
+#
+# Side effects: increments failed_tests once per implementation that fails.
+# ---------------------------------------------------------------------------
+run_comparison_api() {
+	local label=$1
+	local env_vars=$2
+	local api_args=$3
+	local expected_exit=${4:-0}
+	local grep_pattern=$5
+
+	run_test "PERL: $label" \
+		"bash -c \"$env_vars $PERL_EXE api --host http://localhost $api_args\"" \
+		"$expected_exit" "$grep_pattern"
+	run_test "ZIG : $label" \
+		"bash -c \"$env_vars $ZIG_EXE api --host http://localhost $api_args\"" \
+		"$expected_exit" "$grep_pattern"
+}
+
+# ---------------------------------------------------------------------------
+# run_diff_test LABEL API_ARGS
+#
+# Runs the same API call against both implementations and asserts that their
+# stdout output is identical (after trailing-newline normalisation).  stderr is
+# discarded from both sides to avoid noise from ANSI colour codes, Mojo
+# warnings, and the BoltDB deprecation warning emitted by podman on some hosts.
+#
+# Use this helper when you want to detect regressions in the Zig output format
+# relative to the Perl reference — i.e., "both must produce the same body".
+# For exit-code or pattern checks use run_comparison_api instead.
+#
+# Parameters:
+#   LABEL    — human-readable test name printed in the --- Test: DIFF --- line
+#   API_ARGS — arguments passed after `api --host http://localhost`
+#
+# Side effects: increments failed_tests on mismatch.
+# ---------------------------------------------------------------------------
+run_diff_test() {
+	local label=$1
+	local api_args=$2
+
+	echo "--- Test: DIFF $label ---"
+
+	set +e
+	container_exec bash -c "$PERL_EXE api --host http://localhost $api_args" \
+		>"$LOG_DIR/test_output_perl.log" 2>/dev/null
+	container_exec bash -c "$ZIG_EXE api --host http://localhost $api_args" \
+		>"$LOG_DIR/test_output_zig.log" 2>/dev/null
+	set -e
+
+	# Normalise: strip all trailing newlines then add exactly one.
+	{ printf '%s\n' "$(cat "$LOG_DIR/test_output_perl.log")"; } >"$LOG_DIR/test_output_perl_norm.log"
+	{ printf '%s\n' "$(cat "$LOG_DIR/test_output_zig.log")"; } >"$LOG_DIR/test_output_zig_norm.log"
+
+	if diff -u "$LOG_DIR/test_output_perl_norm.log" "$LOG_DIR/test_output_zig_norm.log" \
+		>"$LOG_DIR/test_output_diff.log" 2>&1; then
+		echo "PASS (outputs identical)"
+	else
+		echo "FAIL: Perl and Zig outputs differ:"
+		cat "$LOG_DIR/test_output_diff.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ===========================================================================
+# Audit Log Helpers
+#
+# Query the openQA admin audit log from the host side.  All helpers require
+# an active session cookie inside the container; call audit_login once at
+# the start of the test suite.
+# ===========================================================================
+
+# Container-side cookie jar used by audit helpers.
+_AUDIT_COOKIE_JAR="/tmp/e2e_audit_cookies.txt"
+
+# ---------------------------------------------------------------------------
+# audit_login — Authenticate as the Demo user inside the container.
+#
+# Creates a session cookie at $_AUDIT_COOKIE_JAR that subsequent audit_*
+# helpers reuse.  Safe to call multiple times (overwrites the cookie).
+# ---------------------------------------------------------------------------
+audit_login() {
+	container_exec bash -c \
+		"curl -s -c $_AUDIT_COOKIE_JAR -b $_AUDIT_COOKIE_JAR 'http://localhost/login?user=Demo' >/dev/null"
+}
+
+# ---------------------------------------------------------------------------
+# audit_max_id — Print the highest audit event ID currently in the log.
+#
+# Returns "0" if the log is empty.
+# ---------------------------------------------------------------------------
+audit_max_id() {
+	container_exec bash -c \
+		"curl -s -g -b $_AUDIT_COOKIE_JAR 'http://localhost/admin/auditlog/ajax?order%5B0%5D%5Bcolumn%5D=0&order%5B0%5D%5Bdir%5D=desc&length=1' | jq -r '.data[0].id // 0'"
+}
+
+# ---------------------------------------------------------------------------
+# audit_events_since SINCE_ID [EVENT_FILTER]
+#
+# Print audit events with id > SINCE_ID.  Each line is JSON with keys:
+# id, event, event_data, event_time, user.
+#
+# EVENT_FILTER (optional): when provided, only events whose .event field
+# equals this string are returned (e.g. "iso_create").
+#
+# Output: one JSON object per line, or empty if no matching events.
+# ---------------------------------------------------------------------------
+audit_events_since() {
+	local since_id="$1"
+	local event_filter="${2:-}"
+	local jq_filter
+
+	if [[ -n "$event_filter" ]]; then
+		jq_filter=".data[] | select(.id > $since_id and .event == \"$event_filter\")"
+	else
+		jq_filter=".data[] | select(.id > $since_id)"
+	fi
+
+	container_exec bash -c \
+		"curl -s -g -b $_AUDIT_COOKIE_JAR 'http://localhost/admin/auditlog/ajax?order%5B0%5D%5Bcolumn%5D=0&order%5B0%5D%5Bdir%5D=asc&length=100' | jq -c '$jq_filter'"
+}
+
+# ---------------------------------------------------------------------------
+# audit_count_since SINCE_ID [EVENT_FILTER]
+#
+# Print the count of audit events with id > SINCE_ID.  Accepts the same
+# optional EVENT_FILTER as audit_events_since.
+# ---------------------------------------------------------------------------
+audit_count_since() {
+	local since_id="$1"
+	local event_filter="${2:-}"
+	local jq_filter
+
+	if [[ -n "$event_filter" ]]; then
+		jq_filter="[.data[] | select(.id > $since_id and .event == \"$event_filter\")] | length"
+	else
+		jq_filter="[.data[] | select(.id > $since_id)] | length"
+	fi
+
+	container_exec bash -c \
+		"curl -s -g -b $_AUDIT_COOKIE_JAR 'http://localhost/admin/auditlog/ajax?order%5B0%5D%5Bcolumn%5D=0&order%5B0%5D%5Bdir%5D=asc&length=100' | jq -r '$jq_filter'"
 }

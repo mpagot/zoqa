@@ -469,7 +469,7 @@ perf_rss "config-file creds jobs/overview" "OPENQA_CONFIG=/etc/openqa" "jobs/ove
 # flags.  This exercises the argument-parser credential path: no config file
 # is read; the key/secret come directly from the process's argument vector.
 #
-# run_comparison is not used here because we need to capture raw timings rather
+# run_comparison_api is not used here because we need to capture raw timings rather
 # than checking exit codes.
 
 # Test PERF-T4: Wall-clock timing — CLI-flag credential passing.
@@ -532,9 +532,9 @@ for i in $(seq 1 5); do
 		FLAVOR=DVD \
 		ARCH=x86_64 \
 		BUILD="perf-mon-$i" \
-		HDD_1="cirros-0.6.3-x86_64-disk.qcow2" \
+		HDD_1="$CIRROS_IMG" \
 		ISO_1="seed-nocloud.iso" \
-		CASEDIR="/var/lib/openqa/share/tests/cirros" \
+		CASEDIR="$CIRROS_TESTDIR" \
 		NEEDLES_DIR="%CASEDIR%/needles" \
 		"_GROUP_ID=${GROUP_ID:-1}")
 	echo "    Scheduled job $i: $_id" >&2

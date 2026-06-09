@@ -110,45 +110,54 @@ TEARDOWN_ARGS=()
 # -----------------------------------------------------------------------------
 # Preflight Check
 # -----------------------------------------------------------------------------
-if [[ ! -f "zig-out/bin/zoqa" && "$DRY_RUN" == "false" ]]; then
-	echo "Error: zig-out/bin/zoqa not found. Please run 'zig build' first." >&2
-	exit 1
-fi
+for _bin in "zig-out/bin/zoqa" ; do
+	if [[ ! -f "$_bin" ]]; then
+		echo "Error: $_bin not found. Please run 'zig build' first." >&2
+		exit 1
+	fi
+done
+unset _bin
 
-# Print MD5 and last-modified date of the zoqa binary if the required tools
-# are available.  Both checks are optional — missing tools are silently skipped.
-if [[ -f "zig-out/bin/zoqa" ]]; then
-	_zoqa_bin="zig-out/bin/zoqa"
-	echo "    zoqa path  : $(realpath "$_zoqa_bin")"
+# _print_bin_info LABEL PATH
+#
+# Prints path, MD5, mtime, build type, and size for a single binary.
+# All checks are optional — missing tools are silently skipped.
+# GNU stat (Linux) and BSD stat (macOS) use different flags; both are handled.
+_print_bin_info() {
+	local label="$1"
+	local bin="$2"
+	[[ -f "$bin" ]] || return 0
+	echo "    $label path  : $(realpath "$bin")"
 	if command -v md5sum >/dev/null 2>&1; then
-		echo "    zoqa md5   : $(md5sum "$_zoqa_bin" | awk '{print $1}')"
+		echo "    $label md5   : $(md5sum "$bin" | awk '{print $1}')"
 	elif command -v md5 >/dev/null 2>&1; then
-		echo "    zoqa md5   : $(md5 -q "$_zoqa_bin")"
+		echo "    $label md5   : $(md5 -q "$bin")"
 	fi
 	if command -v stat >/dev/null 2>&1; then
-		# GNU stat (Linux) and BSD stat (macOS) use different -f/-c flags.
 		if stat --version >/dev/null 2>&1; then
-			echo "    zoqa mtime : $(stat -c '%y' "$_zoqa_bin")"
+			echo "    $label mtime : $(stat -c '%y' "$bin")"
 		else
-			echo "    zoqa mtime : $(stat -f '%Sm' "$_zoqa_bin")"
+			echo "    $label mtime : $(stat -f '%Sm' "$bin")"
 		fi
 	fi
 	if command -v readelf >/dev/null 2>&1; then
-		if readelf -S "$_zoqa_bin" 2>/dev/null | grep -q "debug_aranges"; then
-			echo "    zoqa build : Debug"
+		if readelf -S "$bin" 2>/dev/null | grep -q "debug_aranges"; then
+			echo "    $label build : Debug"
 		else
-			echo "    zoqa build : Release"
+			echo "    $label build : Release"
 		fi
 	fi
 	if command -v stat >/dev/null 2>&1; then
 		if stat --version >/dev/null 2>&1; then
-			echo "    zoqa size  : $(stat -c '%s' "$_zoqa_bin") bytes"
+			echo "    $label size  : $(stat -c '%s' "$bin") bytes"
 		else
-			echo "    zoqa size  : $(stat -f '%z' "$_zoqa_bin") bytes"
+			echo "    $label size  : $(stat -f '%z' "$bin") bytes"
 		fi
 	fi
-	unset _zoqa_bin
-fi
+}
+
+_print_bin_info "zoqa          " "zig-out/bin/zoqa"
+unset -f _print_bin_info
 
 # Podman sanity check — verify podman is usable before spending time on the
 # openQA container setup.

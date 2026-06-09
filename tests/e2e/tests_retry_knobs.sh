@@ -44,14 +44,14 @@ run_test "ZIG : OPENQA_CLI_RETRY_SLEEP_TIME_S=bad OPENQA_CLI_RETRY_FACTOR=bad fa
 # Perl (api.pm:36): $options{retries} passed to retry_tx.
 # Zig (main.zig:304): --retries N parsed from argv.
 # Both must accept --retries 0 on a healthy endpoint and exit 0.
-run_comparison "--retries 0 CLI flag accepted" "" \
+run_comparison_api "--retries 0 CLI flag accepted" "" \
 	"--retries 0 jobs/overview" \
 	0
 
 # Test 47: Valid OPENQA_CLI_CONNECT_TIMEOUT (Zig) + MOJO_CONNECT_TIMEOUT (Perl).
 # Each implementation reads the env var it understands; both set on the same
-# command so run_comparison can be used. Valid numeric value → exit 0.
-run_comparison "connect timeout env var: valid value (exit 0)" \
+# command so run_comparison_api can be used. Valid numeric value → exit 0.
+run_comparison_api "connect timeout env var: valid value (exit 0)" \
 	"OPENQA_CLI_CONNECT_TIMEOUT=10 MOJO_CONNECT_TIMEOUT=10" \
 	"jobs/overview" \
 	0
@@ -62,7 +62,7 @@ run_comparison "connect timeout env var: valid value (exit 0)" \
 # $client->connect_timeout("bad") — Mojo::UserAgent accepts non-numeric values
 # without raising an exception (verified locally).
 # Both exit 0 on a healthy endpoint.
-run_comparison "connect timeout env var: invalid value is rejected (exit 1)" \
+run_comparison_api "connect timeout env var: invalid value is rejected (exit 1)" \
 	"OPENQA_CLI_CONNECT_TIMEOUT=bad MOJO_CONNECT_TIMEOUT=bad" \
 	"jobs/overview" \
 	1

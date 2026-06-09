@@ -26,8 +26,8 @@ ensure_basic_job
 # Common scheduling parameters (minus SCENARIO_DEFINITIONS_YAML).
 _SCHED_PARAMS="DISTRI=example VERSION=0 FLAVOR=DVD ARCH=x86_64"
 _SCHED_BUILD="BUILD=e2e-test-sch"
-_SCHED_ASSETS='HDD_1=cirros-0.6.3-x86_64-disk.qcow2 ISO_1=seed-nocloud.iso'
-_SCHED_DIRS='CASEDIR=/var/lib/openqa/share/tests/cirros NEEDLES_DIR=%CASEDIR%/needles'
+_SCHED_ASSETS="HDD_1=$CIRROS_IMG ISO_1=seed-nocloud.iso"
+_SCHED_DIRS="CASEDIR=$CIRROS_TESTDIR NEEDLES_DIR=%CASEDIR%/needles"
 _SCHED_GROUP="_GROUP_ID=${GROUP_ID:-1}"
 
 # =============================================================================
@@ -207,7 +207,7 @@ else
 fi
 
 # Give the async job time to be created by the server before next test.
-sleep 5
+e2e_sleep 5
 
 # Wait for any async-created jobs to finish (free the worker).
 # Query the scheduled product to find the job IDs.

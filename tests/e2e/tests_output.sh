@@ -8,20 +8,20 @@
 #
 # Assumes from the calling scope:
 #   ZIG_EXE, PERL_EXE, LOG_DIR, failed_tests, warned_tests
-#   run_test(), run_comparison()
+#   run_test(), run_comparison_api()
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 echo "==> [output] Running output formatting tests..."
 
 # Test 25: --verbose on a real endpoint shows HTTP status line and Content-Type header.
-run_comparison "--verbose shows HTTP status line" "" "--verbose jobs/overview" 0 "HTTP/"
-run_comparison "--verbose includes Content-Type" "" "--verbose jobs/overview" 0 "Content-Type:"
+run_comparison_api "--verbose shows HTTP status line" "" "--verbose jobs/overview" 0 "HTTP/"
+run_comparison_api "--verbose includes Content-Type" "" "--verbose jobs/overview" 0 "Content-Type:"
 
 # Test 26: --pretty on a non-empty response produces indented JSON.
 # The pattern "^  " matches any line with a 2-space indent — present in all
 # pretty-printed JSON but never in the compact single-line output.
-run_comparison "--pretty (non-empty)" "" "--pretty jobs/overview" 0 "^  "
+run_comparison_api "--pretty (non-empty)" "" "--pretty jobs/overview" 0 "^  "
 
 # Test 27: --name flag sets the User-Agent header.
 #
@@ -30,7 +30,7 @@ run_comparison "--pretty (non-empty)" "" "--pretty jobs/overview" 0 "^  "
 # the openQA single-instance image does not expose the Mojolicious or Apache
 # access log at a predictable path, so those checks would produce unreliable
 # WARNs.
-run_comparison "--name flag accepted (exit 0)" "" \
+run_comparison_api "--name flag accepted (exit 0)" "" \
 	"--name zoqa-e2e-test jobs/overview" 0
 
 # Test 28: Verbose mode — Perl vs Zig header count comparison.
@@ -69,7 +69,7 @@ fi
 
 # Test 42: --pretty on an empty result (just verifies no crash, exit 0).
 # Output format differs: Perl → "[\n]\n"; Zig → "[]\n". No pattern asserted.
-run_comparison "--pretty on empty result (no crash)" "" \
+run_comparison_api "--pretty on empty result (no crash)" "" \
 	"--pretty jobs distri=doesnotexist999" \
 	0
 
@@ -79,7 +79,7 @@ run_comparison "--pretty on empty result (no crash)" "" \
 # writes plain text. Both contain "next:" — grep matches regardless of ANSI.
 # Stream separation (next: on stderr, not stdout) is asserted in Test 20
 # (_run_pagination_test in tests_data.sh), which also strips ANSI for both impls.
-run_comparison "--links outputs next: for paginated response" "" \
+run_comparison_api "--links outputs next: for paginated response" "" \
 	"--links 'machines?limit=2'" \
 	0 "next:"
 
@@ -88,9 +88,9 @@ run_comparison "--links outputs next: for paginated response" "" \
 # line; stderr is empty (error branch not taken).
 # Zig (main.zig:1550-1566): two independent if blocks → stdout gets status line
 # AND stderr gets "404 Not Found".
-# run_comparison combines stdout+stderr, so "HTTP/1.1 404" is found in either
+# run_comparison_api combines stdout+stderr, so "HTTP/1.1 404" is found in either
 # stream for both implementations.
-run_comparison "--verbose on 404 shows HTTP status line" "" \
+run_comparison_api "--verbose on 404 shows HTTP status line" "" \
 	"--verbose jobs/999999" \
 	1 "HTTP/1.1 404"
 
@@ -98,6 +98,6 @@ run_comparison "--verbose on 404 shows HTTP status line" "" \
 # --quiet suppresses the non-2xx error line on stderr in both implementations.
 # --verbose still prints the HTTP status line to stdout in both.
 # Both exit 1; stdout has the "HTTP/" status line; stderr is empty.
-run_comparison "--quiet --verbose on 404: headers on stdout, quiet stderr" "" \
+run_comparison_api "--quiet --verbose on 404: headers on stdout, quiet stderr" "" \
 	"--quiet --verbose jobs/999999" \
 	1 "HTTP/"
