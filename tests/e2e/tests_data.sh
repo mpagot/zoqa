@@ -10,7 +10,7 @@
 #
 # Assumes from the calling scope:
 #   ZIG_EXE, PERL_EXE, LOG_DIR, failed_tests, warned_tests, GROUP_ID
-#   run_test(), run_comparison(), run_diff_test()
+#   run_test(), run_comparison_api(), run_diff_test()
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -24,14 +24,14 @@ echo "  [data] Registering deletable assets..."
 ASSET_ID=$(register_deletable_asset "delete-me-perl.tar.gz")
 ZIG_ASSET_ID=$(register_deletable_asset "delete-me-zig.tar.gz")
 
-# Test 18: GET jobs/overview returns non-empty list after seeding.
-run_comparison "GET jobs/overview (non-empty after seeding)" "" "jobs/overview" 0 "simple_boot"
+# Test DAT-18: GET jobs/overview returns non-empty list after seeding.
+run_comparison_api "GET jobs/overview (non-empty after seeding)" "" "jobs/overview" 0 "simple_boot"
 
-# Test 19: GET jobs/:id returns a real nested job object.
-run_comparison "GET jobs/$JOB_ID (nested object)" "" \
+# Test DAT-19: GET jobs/:id returns a real nested job object.
+run_comparison_api "GET jobs/$JOB_ID (nested object)" "" \
 	"jobs/$JOB_ID" 0 '"settings"'
 
-# Test 20: GET machines?limit=2 with --links triggers the Link pagination header.
+# Test DAT-20: GET machines?limit=2 with --links triggers the Link pagination header.
 # We seeded 3 machines; requesting limit=2 should yield a Link: rel="next" header.
 # Both implementations parse the Link header and emit "next: <url>" to stderr.
 #
@@ -98,8 +98,8 @@ else
 		"$ZIG_EXE api --host http://localhost -X DELETE assets/$ZIG_ASSET_ID" 0
 fi
 
-# Test 22: GET job_groups returns the seeded group.
-run_comparison "GET job_groups (seeded group present)" "" "job_groups" 0 '"example"'
+# Test DAT-22: GET job_groups returns the seeded group.
+run_comparison_api "GET job_groups (seeded group present)" "" "job_groups" 0 '"example"'
 
 # Test 23: Perl vs Zig output parity on a real nested object (hard FAIL on mismatch).
 run_diff_test "GET jobs/$JOB_ID output parity" "jobs/$JOB_ID"

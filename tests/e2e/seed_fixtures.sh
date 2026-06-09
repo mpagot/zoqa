@@ -113,27 +113,20 @@ run_cmd "mkdir -p $ISO_DIR"
 run_cmd "touch $ISO_DIR/$ISO_NAME"
 
 # ---------------------------------------------------------------------------
-# 5. Download CirrOS image for Rich Job
+# 5. Verify CirrOS image for Rich Job
+#
+# The actual download happens on the host (in setup.sh) and is injected via
+# podman cp before this script runs.  We just verify it arrived.
 # ---------------------------------------------------------------------------
 HDD_DIR="/var/lib/openqa/share/factory/hdd"
-CIRROS_ORIG="cirros-0.6.3-x86_64-disk.img"
-CIRROS_IMG="cirros-0.6.3-x86_64-disk.qcow2"
-CIRROS_URL="https://download.cirros-cloud.net/0.6.3/${CIRROS_ORIG}"
 
-log "Downloading CirrOS image to $HDD_DIR/$CIRROS_IMG..."
-run_cmd "mkdir -p $HDD_DIR"
 if [[ "$DRY_RUN" == "false" ]]; then
 	if [[ ! -f "$HDD_DIR/$CIRROS_IMG" ]]; then
-		run_cmd "curl -sS -L -o $HDD_DIR/$CIRROS_ORIG $CIRROS_URL"
-		# Rename to .qcow2 so os-autoinst's deduce_driver detects the
-		# backing format correctly (it keys on file extension, not content).
-		run_cmd "mv $HDD_DIR/$CIRROS_ORIG $HDD_DIR/$CIRROS_IMG"
-	else
-		log "CirrOS image already exists, skipping download."
+		die "CirrOS image not found at $HDD_DIR/$CIRROS_IMG — setup.sh should have injected it"
 	fi
+	log "CirrOS image present at $HDD_DIR/$CIRROS_IMG"
 else
-	echo "[DRY-RUN] curl -sS -L -o $HDD_DIR/$CIRROS_ORIG $CIRROS_URL"
-	echo "[DRY-RUN] mv $HDD_DIR/$CIRROS_ORIG $HDD_DIR/$CIRROS_IMG"
+	echo "[DRY-RUN] test -f $HDD_DIR/$CIRROS_IMG"
 fi
 
 # ---------------------------------------------------------------------------
@@ -160,11 +153,11 @@ fi
 # ---------------------------------------------------------------------------
 log "Installing custom CirrOS test distribution..."
 if [[ "$DRY_RUN" == "false" ]]; then
-	run_cmd "mkdir -p /var/lib/openqa/share/tests/cirros"
-	run_cmd "cp -a $FIXTURE_DIR/cirros-distri/* /var/lib/openqa/share/tests/cirros/"
-	run_cmd "chown -R geekotest:geekotest /var/lib/openqa/share/tests/cirros"
+	run_cmd "mkdir -p $CIRROS_TESTDIR"
+	run_cmd "cp -a $FIXTURE_DIR/cirros-distri/* $CIRROS_TESTDIR/"
+	run_cmd "chown -R geekotest:geekotest $CIRROS_TESTDIR"
 else
-	echo "[DRY-RUN] cp -a $FIXTURE_DIR/cirros-distri/* /var/lib/openqa/share/tests/cirros/"
+	echo "[DRY-RUN] cp -a $FIXTURE_DIR/cirros-distri/* $CIRROS_TESTDIR/"
 fi
 
 # ---------------------------------------------------------------------------
