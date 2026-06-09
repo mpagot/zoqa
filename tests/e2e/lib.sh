@@ -51,7 +51,7 @@
 #
 # Test runner functions (the canonical home of these; tests.sh sources lib.sh):
 #   run_test()           — run one command, check exit + optional grep, PASS/FAIL
-#   run_comparison()     — run the same api args against PERL_EXE and ZIG_EXE
+#   run_comparison_api()     — run the same api args against PERL_EXE and ZIG_EXE
 #   run_diff_test()      — diff stdout of both impls, PASS/FAIL
 
 # Guard against double-sourcing
