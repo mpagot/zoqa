@@ -76,15 +76,15 @@ pub const Args = struct {
     subcmd: ?Subcommand = null,
     // Positional arguments collected after the subcommand token, stored in order
     // of appearance on the command line. The layout is fixed by convention:
-    //   [0]   — the API path (relative, e.g. "jobs/1234", or an absolute URL).
+    //   [0]   : the API path (relative, e.g. "jobs/1234", or an absolute URL).
     //           Mandatory; buildRequest returns error.MissingPath when absent.
-    //   [1..] — zero or more KEY=VALUE request-parameter strings
+    //   [1..] : zero or more KEY=VALUE request-parameter strings
     //           (e.g. "DISTRI=sle", "state=running"). buildRequest
     //           percent-encodes these and places the result in
     //           RequestConfig.params_encoded, which openQAReq then routes
     //           as a URL query string (GET/DELETE) or request body
     //           (POST/PUT/PATCH) depending on the HTTP method.
-    // All slices borrow directly from argv — no copies are made during parsing.
+    // All slices borrow directly from argv, no copies are made during parsing.
     kv_params: std.ArrayList([]const u8),
     // help requested
     help: bool = false,
@@ -104,6 +104,10 @@ pub const Args = struct {
 
     /// Release the three owned ArrayLists.  Call this (via `defer`) immediately
     /// after a successful `parseArgs` return.
+    ///
+    /// Arguments:
+    /// - `allocator`: The same allocator that was passed to `parseArgs`; used to
+    ///   release the backing storage of `headers`, `param_files`, and `kv_params`.
     pub fn deinit(self: *Args, allocator: std.mem.Allocator) void {
         self.headers.deinit(allocator);
         self.param_files.deinit(allocator);
@@ -162,7 +166,7 @@ fn matchValue(
 }
 
 // ---------------------------------------------------------------------------
-// Scoped flag dispatchers — one function per scope
+// Scoped flag dispatchers: one function per scope
 // ---------------------------------------------------------------------------
 
 /// Try to match `token` against a global flag (accepted by all subcommands).
@@ -679,7 +683,7 @@ test "parseArgs: short flags and aliases" {
 // ---------------------------------------------------------------------------
 // Cross-subcommand flag rejection: api-specific flags must be rejected
 // when used with the archive subcommand.  The subcommand-dispatched parser
-// handles this structurally — tryApiFlag is only called for .api.
+// handles this structurally : tryApiFlag is only called for .api.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: api-specific flags rejected for archive" {
@@ -769,7 +773,7 @@ test "parseArgs: -L alias for --links" {
 // ---------------------------------------------------------------------------
 // Regression guards: confirm that combined short flags and archive-specific
 // flags used with the api subcommand are correctly rejected.  These tests
-// should PASS with the current code — they lock in existing correct behaviour.
+// should PASS with the current code : they lock in existing correct behaviour.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: combined short flags -vp rejected" {
@@ -811,7 +815,7 @@ test "parseArgs: archive flag --asset-size-limit rejected for api" {
 // ---------------------------------------------------------------------------
 // --pretty and --links are "accepted but have no
 // observable effect" for the archive subcommand.  These tests should PASS
-// with the current code — they confirm the spec-mandated behaviour.
+// with the current code : they confirm the spec-mandated behaviour.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: --pretty accepted for archive no effects" {
@@ -854,6 +858,11 @@ test "parseArgs: --links accepted for archive no effects" {
 ///
 /// Returns: A newly-allocated, form-encoded string (e.g., "foo=bar&baz=123").
 /// The caller owns the returned slice and must free it.
+///
+/// Errors:
+///   - `error.FormRequiresJsonObject` : input is not a JSON object.
+///   - `error.FormUnsupportedValueType` : a value is an array or nested object.
+///   - JSON parse errors or `OutOfMemory` from the allocator.
 fn jsonToFormEncoded(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
     defer parsed.deinit();
@@ -1020,7 +1029,7 @@ test "formEncodeAppend: all special bytes percent-encoded" {
 /// the library's public API (openQAReq / CallOptions).
 ///
 /// `buildRequest` extracts and validates CLI arguments into the fields needed
-/// by the library's public API. URL construction is **not** performed here —
+/// by the library's public API. URL construction is **not** performed here:
 /// that responsibility belongs to `openQAReq`.
 ///
 /// All slices are either borrowed from `Args` / `data_file_content` or owned
@@ -1050,6 +1059,8 @@ const RequestConfig = struct {
 
     arena: std.heap.ArenaAllocator,
 
+    /// Release all memory owned by this configuration via the internal arena allocator.
+    /// After this call, all string slices inside the struct become invalid.
     pub fn deinit(self: *RequestConfig) void {
         self.arena.deinit();
     }
@@ -1096,7 +1107,7 @@ const ArchiveConfig = struct {
 /// there are no parameters.
 ///
 /// Errors:
-///   - `error.PathContainsNullByte` — a file path contains `\x00`.
+///   - `error.PathContainsNullByte` : a file path contains `\x00`.
 ///   - Any error from `std.fs.cwd().readFileAlloc` or allocator OOM.
 fn buildFormParams(
     allocator: std.mem.Allocator,
@@ -1175,13 +1186,13 @@ fn buildFormParams(
 /// `deinit(allocator)` to release internally-allocated buffers.
 ///
 /// Errors:
-///   - `error.MissingPath` — `args.kv_params` is empty (no API path provided).
-///   - `error.FormRequiresData` — `--form` was set but no body source
+///   - `error.MissingPath` : `args.kv_params` is empty (no API path provided).
+///   - `error.FormRequiresData` : `--form` was set but no body source
 ///     (`--data` or `--data-file`) was provided.
-///   - `error.FormRequiresJsonObject` — `--form` body is not a JSON object.
-///   - `error.FormUnsupportedValueType` — `--form` JSON contains nested
+///   - `error.FormRequiresJsonObject` : `--form` body is not a JSON object.
+///   - `error.FormUnsupportedValueType` : `--form` JSON contains nested
 ///     arrays or objects.
-///   - `error.PathContainsNullByte` — a `--param-file` path contains `\x00`.
+///   - `error.PathContainsNullByte` : a `--param-file` path contains `\x00`.
 ///   - Any error from `std.fs.cwd().readFileAlloc` (param-file I/O),
 ///     `std.Uri.parse` (absolute URL), `config.resolveHost`, or allocator OOM.
 pub fn buildRequest(
@@ -1217,12 +1228,28 @@ pub fn buildRequest(
     //   1. Relative path (e.g. "jobs") → resolve host from flags, path = api_path.
     //   2. Absolute URL (e.g. "https://host/api/v1/jobs") → split into host + path.
 
-    // SAFETY: both variables are unconditionally assigned in every branch of the
-    // if/else below before any subsequent read. The `if (isAbsoluteUrl(...))` /
-    // `else` pair is exhaustive, so no branch can reach the code after the block
-    // without having written a valid slice into each variable.
+    // These two variables use `= undefined` (uninitialized memory) intentionally.
+    //
+    // WHY NOT a safe default like `= ""`?
+    //   Using `undefined` makes any missed-assignment bug crash immediately in
+    //   Debug builds (Zig fills undefined memory with 0xAA, so dereferencing it
+    //   segfaults).  A dummy default like "" would silently produce wrong URLs.
+    //
+    // WHY NOT `?[]const u8 = null` (optional)?
+    //   Both values are unconditionally needed after this block.  Wrapping them
+    //   in optionals would force pointless `.?` unwraps at every use site for a
+    //   null state that can never actually occur.
+    //
+    // PROOF OF SOUNDNESS:
+    //   Assigned in the `if (isAbsoluteUrl(api_path)) { ... } else { ... }` block
+    //   immediately below (~50 lines).  That if/else is exhaustive: exactly one
+    //   branch always executes.  Within each branch, every path that doesn't
+    //   propagate an error assigns BOTH variables before the branch ends.
+    //
+    // MAINTAINER NOTE: if you add an early `return` or new branch inside the
+    // if/else below, you MUST assign both variables on that path, or convert
+    // them to optionals.
     var resolved_host: []const u8 = undefined;
-    // SAFETY: Unconditionally assigned alongside resolved_host in all branches.
     var relative_path: []const u8 = undefined;
 
     if (isAbsoluteUrl(api_path)) {
@@ -1254,7 +1281,7 @@ pub fn buildRequest(
             // Exact "/api/v1" without trailing slash
             relative_path = "";
         } else {
-            // No /api/v1/ prefix — pass entire path (strip leading slash).
+            // No /api/v1/ prefix : pass entire path (strip leading slash).
             // openQAReq will still prepend /api/v1/, so this means the
             // absolute URL didn't follow the openQA convention. We
             // preserve the path as-is for maximum flexibility.
@@ -1278,10 +1305,11 @@ pub fn buildRequest(
 
         // Strip leading slash from relative path to avoid double-slash in URL.
         relative_path = if (std.mem.startsWith(u8, api_path, "/")) api_path[1..] else api_path;
-    }
+    } // ← end of exhaustive if/else: resolved_host and relative_path are
+    //   now both guaranteed to hold valid slices.
 
     // Build request body
-    // Note: KV params are NOT placed in the body here — that routing is
+    // Note: KV params are NOT placed in the body here : that routing is
     // done by openQAReq based on the HTTP method. Only explicit --data,
     // --data-file, and --form bodies are set here.
     var req_body: ?[]const u8 = null;
@@ -1595,7 +1623,7 @@ test "buildRequest: absolute URL with port preserves port in host" {
     var req_cfg = try buildRequest(allocator, &parsed, null);
     defer req_cfg.deinit();
 
-    // Port must be preserved — without the fix this returns "http://172.19.203.185"
+    // Port must be preserved. Without the fix this returns "http://172.19.203.185"
     try std.testing.expectEqualStrings("http://172.19.203.185:8080", req_cfg.host);
     try std.testing.expectEqualStrings("jobs/1", req_cfg.path);
 }
@@ -2176,14 +2204,14 @@ test "mergeCredentials: partial secret only returns null (no key anywhere)" {
 }
 
 // ---------------------------------------------------------------------------
-// printResponse — format and write HTTP response to stdout/stderr
+// printResponse : format and write HTTP response to stdout/stderr
 // ---------------------------------------------------------------------------
 
 /// Write the HTTP response to stdout (and optionally stderr), implementing
 /// verbose headers, link header parsing and body
 /// output with optional JSON pretty-printing.
 ///
-/// This is a pure output helper with no control-flow side effects — it never
+/// This is a pure output helper with no control-flow side effects: it never
 /// calls `std.process.exit`. The caller (`main()`) is responsible for the exit
 /// code.
 ///
@@ -2282,6 +2310,23 @@ fn printResponse(
 // main
 // ---------------------------------------------------------------------------
 
+/// Entry point for the `zoqa` CLI: parse arguments, resolve credentials, and
+/// dispatch to the appropriate subcommand handler (`api`, `archive`, `monitor`,
+/// or `schedule`).
+///
+/// Most argument and runtime errors are handled internally: invalid subcommands
+/// and missing required positionals print help to stderr and call
+/// `std.process.exit(255)`; request/network failures call `std.process.exit(1)`.
+/// Only a small set of errors propagate to the OS as a non-zero exit from the
+/// error-union return:
+///
+/// Errors:
+///   - `error.PathContainsNullByte` : `--data-file` path contains `\x00`.
+///   - `error.InvalidConnectTimeout` : `OPENQA_CLI_CONNECT_TIMEOUT` env var
+///     is present but cannot be parsed as a floating-point number.
+///   - Any I/O error from reading `--data-file` / stdin or from loading
+///     `~/.config/openqa/client.conf` via `config.findCredentials`.
+///   - `error.OutOfMemory` from any internal allocation.
 pub fn main() !void {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();
@@ -2625,6 +2670,10 @@ const help_schedule_options =
     \\
 ;
 
+/// Print the top-level zoqa usage block.
+///
+/// Arguments:
+///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
@@ -2643,6 +2692,9 @@ fn printHelp(is_error: bool) void {
 
 /// Print the `api` subcommand usage block.
 /// Called when PATH is missing (exit 255, per Perl reference behavior).
+///
+/// Arguments:
+///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printApiHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
@@ -2657,6 +2709,9 @@ fn printApiHelp(is_error: bool) void {
 }
 
 /// Print the `archive` subcommand usage block.
+///
+/// Arguments:
+///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printArchiveHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
@@ -2671,6 +2726,9 @@ fn printArchiveHelp(is_error: bool) void {
 }
 
 /// Print the `monitor` subcommand usage block.
+///
+/// Arguments:
+///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printMonitorHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);
@@ -2685,6 +2743,9 @@ fn printMonitorHelp(is_error: bool) void {
 }
 
 /// Print the `schedule` subcommand usage block.
+///
+/// Arguments:
+///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printScheduleHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error) std.fs.File.stderr().writer(&buf) else std.fs.File.stdout().writer(&buf);

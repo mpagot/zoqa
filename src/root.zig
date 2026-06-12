@@ -1,11 +1,11 @@
-//! zoqa — public library API
+//! zoqa : public library API
 //!
 //! This file is the single point of contact for any consumer of the zoqa
 //! library: CLIs, GUIs, embedded test harnesses, etc. Every public symbol
 //! is exposed here.
 //!
 //! Internal modules (http_client, monitor, schedule, archive, config, auth)
-//! do NOT import this file — they depend only on each other and on stdlib.
+//! do NOT import this file: they depend only on each other and on stdlib.
 //! The library tree is acyclic.
 //!
 //! Test discovery note: acyclicity is necessary but NOT sufficient.
@@ -18,23 +18,23 @@
 //! https://github.com/ziglang/zig/issues/10018.
 //!
 //! API tiers (in dependency order):
-//!   1. Config & auth        — zoqa.config, zoqa.auth
-//!   2. HTTP request layer   — zoqa.openQAReq, zoqa.CallOptions, ...
-//!   3. Response parsers     — zoqa.parseLinkHeader, zoqa.LinkIterator
-//!   4. High-level workflows — zoqa.runArchive, zoqa.runMonitor, zoqa.runSchedule
+//!   1. Config & auth        : zoqa.config, zoqa.auth
+//!   2. HTTP request layer   : zoqa.openQAReq, zoqa.CallOptions, ...
+//!   3. Response parsers     : zoqa.parseLinkHeader, zoqa.LinkIterator
+//!   4. High-level workflows : zoqa.runArchive, zoqa.runMonitor, zoqa.runSchedule
 
 const std = @import("std");
 const testing = std.testing;
 
 // ---------------------------------------------------------------------------
-// Tier 1 — Configuration & auth
+// Tier 1 : Configuration & auth
 // ---------------------------------------------------------------------------
 
 pub const config = @import("config.zig");
 pub const auth = @import("auth.zig");
 
 // ---------------------------------------------------------------------------
-// Tier 2 — HTTP request layer (definitions live in http_client.zig)
+// Tier 2 : HTTP request layer (definitions live in http_client.zig)
 // ---------------------------------------------------------------------------
 
 const http_client = @import("http_client.zig");
@@ -47,7 +47,7 @@ pub const openQAReq = http_client.openQAReq;
 pub const openQARawGet = http_client.openQARawGet;
 
 // ---------------------------------------------------------------------------
-// Tier 3 — Response parsers (defined here; pure stdlib, no zoqa-internal deps)
+// Tier 3 : Response parsers (defined here; pure stdlib, no zoqa-internal deps)
 // ---------------------------------------------------------------------------
 
 /// Zero-allocation iterator over `(rel, url)` pairs in an RFC 5988
@@ -55,7 +55,7 @@ pub const openQARawGet = http_client.openQARawGet;
 ///
 /// Lazily parses comma-separated link entries, yielding one `Relation`
 /// per valid entry. Malformed entries (missing `<>` delimiters, missing
-/// `rel=` parameter, empty rel value) are silently skipped — never an
+/// `rel=` parameter, empty rel value) are silently skipped; never an
 /// error.
 ///
 /// All returned slices **borrow** from the original header string.
@@ -70,6 +70,9 @@ pub const LinkIterator = struct {
     pub const Relation = struct { rel: []const u8, url: []const u8 };
 
     /// Return the next valid `(rel, url)` pair, or `null` when exhausted.
+    ///
+    /// Returns: A `Relation` with borrowed `rel` and `url` slices, or `null`
+    ///   when no more valid link entries remain.
     pub fn next(self: *LinkIterator) ?Relation {
         while (self.inner.next()) |entry| {
             const trimmed = std.mem.trim(u8, entry, " \t");
@@ -100,8 +103,13 @@ pub const LinkIterator = struct {
 /// `(rel, url)` pairs.
 ///
 /// The returned `LinkIterator` yields one `Relation` per valid
-/// comma-separated entry in the header. Zero allocation — all
+/// comma-separated entry in the header. Zero allocation, all
 /// returned slices borrow from `header`.
+///
+/// Arguments:
+/// - `header`: The raw `Link` header string (e.g. `<url>; rel="next", <url>; rel="last"`).
+///
+/// Returns: A `LinkIterator` that lazily yields `Relation` pairs from the header.
 ///
 /// ```zig
 /// var it = zoqa.parseLinkHeader(resp.link.?);
@@ -114,7 +122,7 @@ pub fn parseLinkHeader(header: []const u8) LinkIterator {
 }
 
 // ---------------------------------------------------------------------------
-// Tier 4 — High-level workflows
+// Tier 4 : High-level workflows
 // ---------------------------------------------------------------------------
 
 const archive = @import("archive.zig");
@@ -213,7 +221,7 @@ test "re-exports: APIResponse accessible via zoqa" {
 //
 // Zig's lazy semantic analysis only registers `test` blocks from files that
 // get fully analyzed. A top-level `const x = @import("foo.zig");` is NOT
-// enough — without a reference from inside a `test` block, `foo.zig`'s
+// enough: without a reference from inside a `test` block, `foo.zig`'s
 // tests are silently dropped from `zig build test`. This anonymous test
 // forces analysis of every library source file so their tests run.
 //

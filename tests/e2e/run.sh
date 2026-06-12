@@ -110,6 +110,7 @@ TEARDOWN_ARGS=()
 # -----------------------------------------------------------------------------
 # Preflight Check
 # -----------------------------------------------------------------------------
+# shellcheck disable=SC2043
 for _bin in "zig-out/bin/zoqa" ; do
 	if [[ ! -f "$_bin" ]]; then
 		echo "Error: $_bin not found. Please run 'zig build' first." >&2

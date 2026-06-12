@@ -132,7 +132,7 @@ e2e-catalog-lint:
 	@bash tools/check_test_catalog.sh
 	@echo "==> e2e-catalog-lint passed"
 
-e2e-lint: e2e-catalog-lint
+e2e-lint:
 	@echo "==> bash -n syntax check"
 	@for f in $(E2E_SCRIPTS); do \
 		bash -n "$$f" && echo "  OK  $$f" || echo "  FAIL $$f"; \

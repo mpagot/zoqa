@@ -139,14 +139,26 @@ pub fn runSchedule(
         },
     };
 
-    // Check for `failed` entries
+    // Check for `failed` entries (partial job creation failures).
     if (checkFailedEntries(root)) {
         return 1;
     }
 
+    // Check for top-level `error` string (server-side scheduling error).
+    // NOTE: In practice, `error` and non-empty `failed` are mutually exclusive
+    // in the openQA server (Iso.pm returns `failed => {}` when `error` is set,
+    // and omits `error` entirely on partial success). Both are checked here for
+    // robustness against non-standard or future server versions.
+    if (root.get("error")) |error_val| {
+        if (error_val == .string and error_val.string.len > 0) {
+            if (!options.quiet) std.debug.print("{s}\n", .{error_val.string});
+            return 1;
+        }
+    }
+
     // Extract `ids` array (sync response) or `scheduled_product_id` (async).
-    // Distinguish sync-empty-ids (key present, array empty → exit 1) from
-    // async (key absent entirely → scheduled_product_id only → exit 0).
+    // Distinguish sync-empty-ids (key present, array empty → exit 0 per
+    // Perl parity) from async (key absent → scheduled_product_id only).
     const ids_val = root.get("ids");
     const ids_present = ids_val != null;
     const has_ids = if (ids_val) |iv| iv == .array and iv.array.items.len > 0 else false;
@@ -179,9 +191,13 @@ pub fn runSchedule(
             .poll_interval = options.poll_interval,
         });
     } else if (ids_present) {
-        // Sync response with empty ids array — zero products matched
+        // Sync response with empty ids array — zero products matched.
+        // Matches Perl's _create_jobs which returns 0 when there is neither
+        // a top-level `error` nor a non-empty `failed` array (see §15.4
+        // step 6). Print the empty-set note for visibility but do NOT
+        // override the exit code.
         if (!options.quiet) std.debug.print("schedule: no jobs scheduled\n", .{});
-        return 1;
+        return 0;
     } else if (scheduled_product_id != null and options.monitor_jobs) {
         // Async response with --monitor: poll for completion
         stdout.flush() catch {};

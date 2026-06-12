@@ -18,9 +18,21 @@ pub const HostResult = struct {
     allocated: bool,
 };
 
-/// Resolves the effective base URL string. Returned slice is either a
-/// compile-time literal or a newly allocated string; caller owns it when
-/// allocated is true in the result.
+/// Resolves the effective base URL string from alias flags and host argument.
+///
+/// Arguments:
+///   - `allocator`: Used to allocate the `https://` prefix when a bare hostname is given.
+///   - `flag_osd`: `true` if `--osd` was passed (maps to `http://openqa.suse.de`).
+///   - `flag_o3`: `true` if `--o3` was passed (maps to `https://openqa.opensuse.org`).
+///   - `flag_odn`: `true` if `--odn` was passed (maps to `https://openqa.debian.net`).
+///   - `host_arg`: Explicit `--host` value, or `null`.
+///
+/// Returns: A `HostResult` whose `.url` is either a compile-time literal
+///   (`.allocated = false`) or a newly allocated string (`.allocated = true`).
+///   Caller must free `.url` when `.allocated` is true.
+///
+/// Errors:
+///   - `OutOfMemory` — allocator failure when prefixing bare hostname with `https://`.
 pub fn resolveHost(
     allocator: std.mem.Allocator,
     flag_osd: bool,
@@ -50,8 +62,19 @@ pub fn resolveHost(
     return .{ .url = "http://localhost", .allocated = false };
 }
 
-/// Parses the INI file content to find credentials for a specific hostname.
-/// Returns allocated struct fields on success, null if not found.
+/// Parses INI file content to find credentials for a specific hostname.
+///
+/// Arguments:
+///   - `allocator`: Used to allocate owned copies of the key and secret strings.
+///   - `content`: The raw INI file content to parse.
+///   - `hostname`: The section name to search for (e.g. `"openqa.suse.de"`).
+///
+/// Returns: A `Credentials` struct with owned key/secret on success (caller
+///   must call `.deinit()`), or `null` if no matching section with both
+///   `key` and `secret` is found.
+///
+/// Errors:
+///   - `OutOfMemory` — allocator failure when duplicating the key/secret strings.
 pub fn parseIni(allocator: std.mem.Allocator, content: []const u8, hostname: []const u8) !?Credentials {
     var it = std.mem.splitScalar(u8, content, '\n');
     var in_target_section = false;
@@ -99,7 +122,21 @@ pub fn parseIni(allocator: std.mem.Allocator, content: []const u8, hostname: []c
     return null;
 }
 
-/// Finds credentials in the filesystem based on priority.
+/// Finds credentials by searching config files in priority order.
+///
+/// Search order: `$OPENQA_CONFIG/client.conf` > `~/.config/openqa/client.conf`
+/// > `/etc/openqa/client.conf` > `/usr/etc/openqa/client.conf`.
+///
+/// Arguments:
+///   - `allocator`: Used for path construction, file I/O, and result allocation.
+///   - `hostname`: The INI section name to look up (e.g. `"openqa.opensuse.org"`).
+///
+/// Returns: A `Credentials` struct with owned key/secret (caller must call
+///   `.deinit()`), or `null` if no config file contains a matching section.
+///
+/// Errors:
+///   - `OutOfMemory` — allocator failure.
+///   - Any OS error from `std.process.getEnvVarOwned` (other than `EnvironmentVariableNotFound`).
 pub fn findCredentials(allocator: std.mem.Allocator, hostname: []const u8) !?Credentials {
     // OPENQA_CONFIG overrides the default config directory.
     const openqa_config_dir = std.process.getEnvVarOwned(allocator, "OPENQA_CONFIG") catch |err| switch (err) {
