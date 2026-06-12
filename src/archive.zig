@@ -21,6 +21,15 @@ const ProgressWriter = struct {
     stdout_buf: [256]u8 = undefined,
     writer: std.Io.Writer,
 
+    /// Create a new progress writer that displays download percentage on stdout.
+    ///
+    /// Arguments:
+    /// - `out`: The underlying stdout writer for regular output.
+    /// - `name`: Display name for the asset being downloaded.
+    /// - `cl`: Pointer to the optional content-length (updated by the HTTP layer).
+    /// - `buffer`: Scratch buffer for the writer interface.
+    ///
+    /// Returns: A configured `ProgressWriter` ready to receive streamed data.
     pub fn init(out: *std.Io.Writer, name: []const u8, cl: *?u64, buffer: []u8) ProgressWriter {
         return .{
             .out = out,
@@ -258,6 +267,22 @@ fn downloadTestResultDetail(
     }
 }
 
+/// Download job assets from an openQA instance and archive them locally.
+///
+/// Fetches the asset list for the given job, then downloads each asset
+/// (respecting include/exclude filters) into the specified output directory.
+///
+/// Arguments:
+/// - `allocator`: General-purpose allocator for HTTP buffers and path construction.
+/// - `client`: HTTP client (injected; supports `anytype` for testability).
+/// - `host`: Base URL of the openQA instance (e.g. "https://openqa.opensuse.org").
+/// - `job_id`: Numeric job ID whose assets to download.
+/// - `output_path`: Local directory to write archived assets into.
+/// - `options`: Archive options (credentials, retry config, filters, verbosity).
+///
+/// Returns: void on success.
+///
+/// Errors: HTTP failures, file I/O errors, JSON parse errors, or allocation failures.
 pub fn runArchive(
     allocator: std.mem.Allocator,
     client: anytype,

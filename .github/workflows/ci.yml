@@ -25,7 +25,7 @@ jobs:
       # It will continue to work via the runner compatibility shim until Sep 2026.
       - uses: mlugg/setup-zig@v2
       - name: Check formatting
-        run: zig fmt --check src/
+        run: make zig-lint
 
   build-and-test:
     name: Build & Test (${{ matrix.os }})
@@ -60,8 +60,19 @@ jobs:
         with:
           # Reads minimum_zig_version from build.zig.zon automatically.
           cache-size-limit: 2048
+      # `zig build` is called directly instead of `make zig-build-debug` for
+      # two reasons:
+      #   1. `make` is not pre-installed on the windows-latest runner, and
+      #      installing it (e.g. via Chocolatey) would add overhead and a
+      #      dependency for a single-command wrapper.
+      #   2. `--summary all` is intentionally absent from the Makefile target
+      #      to keep incremental local rebuilds quiet (the flag prints every
+      #      step even on cache hits). In CI the cache is always cold, so the
+      #      flag is added here where it matters.
       - name: Build
         run: zig build --summary all
+      # Same rationale as above applies to `zig build test` vs `make zig-test`.
+      # zig-test-discovery is executed on linux only (and it is enough)
       - name: Test
         run: zig build test --summary all
 
@@ -106,6 +117,9 @@ jobs:
         run: make manual-lint
       - name: Run Fuzz Lint
         run: make fuzz-lint
+      # Also e2e in dryrun mode fails if executable is not there
+      - name: Build
+        run: make zig-build-debug
       - name: Run E2E Dry-run
         run: make e2e-dryrun
       - name: Run Zig Test Discovery
