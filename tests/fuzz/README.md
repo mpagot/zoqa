@@ -163,6 +163,10 @@ AFL_IGNORE_PROBLEMS=1 ./zig-out/zoqa-fuzz-config \
 The Zig panic handler prints a stack trace with the exact source location
 and panic message to stderr. Note the file and line number.
 
+Tip: For a deeper analysis of memory corruption or difficult bugs,
+you can also manually feed the renamed crash file into a debugger like gdb or lldb
+to inspect the backtrace and registers.
+
 #### Step 2 — Minimise the crash input with `afl-tmin`
 
 Raw AFL crash files are often large and contain irrelevant bytes.
@@ -184,6 +188,12 @@ xxd /tmp/tmin_work/crash_min.bin
 # or, for text-like inputs:
 cat /tmp/tmin_work/crash_min.bin
 ```
+
+Advanced Triage (Optional): If the exploitability of the crash is ambiguous,
+you can use AFL++'s crash exploration mode by running `afl-fuzz -C`.
+In this mode, the fuzzer uses the crashing test case to quickly enumerate
+all code paths that can be reached while keeping the program in the crashing state,
+helping you see what degree of control an attacker might have.
 
 #### Step 3 — Read the panic and locate the root cause
 
@@ -227,8 +237,10 @@ Apply the fix, then:
      < tests/fuzz/out_<target>/main-node/crashes/id:000000,...
    ```
 2. Run unit tests: `zig build test`
-3. Optionally, resume the fuzzing campaign with `--continue` to confirm the
-   fuzzer no longer re-discovers the same crash.
+3. Optionally, resume the fuzzing campaign. To restart an afl-fuzz run,
+   reuse the same command line but replace your -i directory flag with -i -,
+   or set the AFL_AUTORESUME=1 environment variable.
+   This confirms the fuzzer no longer re-discovers the same crash.
 
 #### Step 6 — Promote minimised inputs to the seed corpus
 

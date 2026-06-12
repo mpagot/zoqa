@@ -6,7 +6,7 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help zig-build-debug zig-release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint zig-docstring lint fuzz-build
+.PHONY: help zig-build-debug zig-release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize zig-docstring lint fuzz-build
 
 # Default target
 help:
@@ -36,7 +36,8 @@ help:
 	@echo "  manual-lint     Run bash -n and shellcheck on manual test scripts."
 	@echo " "
 	@echo "  fuzz-lint       Run bash -n and shellcheck on tests/fuzz/ scripts."
-	@echo "  fuzz-build  Build the fuzzy app."
+	@echo "  fuzz-build      Build the fuzzy app."
+	@echo "  fuzz-sanitize   Check that corpus filenames are Windows-safe (no colons)."
 	@echo "  lint        Run all linters (zig-lint, manual-lint, fuzz-lint)."
 
 zig-build-debug:
@@ -53,7 +54,7 @@ zig-test: zig-test-discovery
 # that are imported but never fully analyzed (issue #10018). Runs `zig build
 # test` internally as part of the check.
 zig-test-discovery:
-	bash tools/check_test_count.sh .
+	./tools/check_test_count.sh .
 
 # -----------------------------------------------------------------------------
 # Linting — Zig source formatting check
@@ -95,13 +96,13 @@ export E2E_STORAGE_KEEP_FREE_RATIO
 endif
 
 e2e:
-	bash tests/e2e/run.sh $(E2E_SUITES_ARG)
+	./tests/e2e/run.sh $(E2E_SUITES_ARG)
 
 e2e-keep:
-	bash tests/e2e/run.sh --keep-container $(E2E_SUITES_ARG)
+	./tests/e2e/run.sh --keep-container $(E2E_SUITES_ARG)
 
 e2e-dryrun:
-	bash tests/e2e/run.sh --dryrun $(E2E_SUITES_ARG)
+	./tests/e2e/run.sh --dryrun $(E2E_SUITES_ARG)
 
 # -----------------------------------------------------------------------------
 # Linting — bash syntax check + shellcheck on all E2E scripts
@@ -167,6 +168,9 @@ manual-lint:
 fuzz-build:
 	./tests/fuzz/build.sh
 
+fuzz-sanitize:
+	./tests/fuzz/sanitize_corpus.sh
+
 # -----------------------------------------------------------------------------
 # Linting — bash syntax check + shellcheck on fuzz harness scripts
 # -----------------------------------------------------------------------------
@@ -175,7 +179,8 @@ FUZZ_SCRIPTS := \
 	tests/fuzz/cmin.sh \
 	tests/fuzz/coverage.sh \
 	tests/fuzz/distill.sh \
-	tests/fuzz/run.sh
+	tests/fuzz/run.sh \
+	tests/fuzz/sanitize_corpus.sh
 
 fuzz-lint:
 	@echo "==> bash -n syntax check"

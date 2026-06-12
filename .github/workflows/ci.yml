@@ -117,7 +117,9 @@ jobs:
         run: make manual-lint
       - name: Run Fuzz Lint
         run: make fuzz-lint
-      # Also e2e in dryrun mode fails if executable is not there
+      - name: Check corpus filenames (Windows-safe)
+        run: make fuzz-sanitize
+      # e2e dryrun needs the binary built first
       - name: Build
         run: make zig-build-debug
       - name: Run E2E Dry-run
