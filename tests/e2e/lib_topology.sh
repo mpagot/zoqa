@@ -279,6 +279,55 @@ ensure_parallel_jobs() {
 }
 
 # ---------------------------------------------------------------------------
+# start_worker2 — start worker instance 2 for parallel-topology tests
+# stop_worker2  — gracefully stop worker instance 2
+#
+# Parallel jobs require two simultaneous workers. The standard test environment
+# runs only worker instance 1. Call start_worker2 before ensure_parallel_jobs
+# and stop_worker2 after the last parallel test to keep the extra worker
+# scoped to the minimum necessary window.
+# ---------------------------------------------------------------------------
+start_worker2() {
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "  [worker2] [DRY-RUN] start worker instance 2" >&2
+		return 0
+	fi
+	echo "  [worker2] Starting worker instance 2..." >&2
+	# Kill any stale worker 2 from a previous run. Run pkill directly (not inside
+	# bash -c) so "worker --instance 2" doesn't appear in the bash process argv
+	# and cause pkill to self-match via the parent's cmdline. pkill excludes its
+	# own PID via getpid(), so direct invocation is safe.
+	container_exec pkill -f 'worker --instance 2' 2>/dev/null || true
+	sleep 1  # host-side: let the OS release the pool/2 flock before re-locking
+	# Pre-create pool/2 with correct ownership; bootstrap only provisions pool/1
+	# and _openqa-worker can't mkdir under the root-owned pool/ directory.
+	container_exec mkdir -p /var/lib/openqa/pool/2
+	container_exec chown _openqa-worker:_openqa-worker /var/lib/openqa/pool/2
+	podman exec -d "$CONTAINER_NAME" \
+		su _openqa-worker -c '/usr/share/openqa/script/worker --instance 2'
+	local i count
+	for i in {1..15}; do
+		count=$(container_exec curl -sf http://localhost/admin/workers.json 2>/dev/null \
+			| jq '[.workers[] | select(.alive == 1)] | length' 2>/dev/null || echo 0)
+		if [[ "${count:-0}" -ge 2 ]]; then
+			echo "  [worker2] Worker 2 registered after ${i}s." >&2
+			return 0
+		fi
+		sleep 1
+	done
+	echo "  [worker2] WARNING: Worker 2 did not register within 15s — parallel tests may hang" >&2
+}
+
+stop_worker2() {
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "  [worker2] [DRY-RUN] stop worker instance 2" >&2
+		return 0
+	fi
+	echo "  [worker2] Stopping worker instance 2..." >&2
+	container_exec pkill -f 'worker --instance 2' 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
 # assert_job_has_chained_parent JOB_ID EXPECTED_PARENT_ID
 # ---------------------------------------------------------------------------
 assert_job_has_chained_parent() {

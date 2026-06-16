@@ -129,13 +129,8 @@ e2e:
 e2e-keep:
 	./tests/e2e/run.sh --keep-container $(E2E_SUITES_ARG)
 
-<<<<<<< HEAD
 e2e-dryrun:
 	./tests/e2e/run.sh --dryrun $(E2E_SUITES_ARG)
-=======
-e2e-dryrun: zig-build-debug
-	bash tests/e2e/run.sh --dryrun $(E2E_SUITES_ARG)
->>>>>>> 723ad16 (Implement missing clone_job features and optimize large response performance)
 
 # -----------------------------------------------------------------------------
 # Linting  bash syntax check + shellcheck on all E2E scripts

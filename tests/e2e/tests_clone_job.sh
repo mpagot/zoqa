@@ -713,7 +713,11 @@ done
 
 # =============================================================================
 # Section M-Parallel: Parallel Topology Tests (M41-M42)
+#
+# Parallel clusters require two simultaneous workers. Start worker instance 2
+# here and stop it after M42 so the extra process exists only for this section.
 # =============================================================================
+start_worker2
 ensure_parallel_jobs
 
 echo "--- Test M41: clone-job parallel_child clones parallel_parent ---"
@@ -743,6 +747,7 @@ _m42_zig_ids=$(grep -oP '(?<=tests/)\d+' "$LOG_DIR/clone42_zig_stdout.log" || tr
 for id in $_m42_perl_ids $_m42_zig_ids; do
 	if [[ -n "$id" ]]; then wait_for_job "$id" 300 >/dev/null || true; fi
 done
+stop_worker2
 
 # =============================================================================
 # Section M-Host: Host Resolution Tests (M43–M44)

@@ -8,6 +8,12 @@ const zoqa = @import("zoqa");
 // ---------------------------------------------------------------------------
 
 /// Returns true when every byte of `s` is an ASCII digit and `s` is non-empty.
+///
+/// Arguments:
+/// - `s`: The byte slice to check.
+///
+/// Returns: `true` if `s` is non-empty and consists entirely of ASCII digits,
+///   `false` otherwise.
 fn isNumericId(s: []const u8) bool {
     if (s.len == 0) return false;
     for (s) |c| {
@@ -25,6 +31,11 @@ test "isNumericId: digits only" {
 }
 
 /// Returns true when `s` starts with "http://" or "https://".
+///
+/// Arguments:
+/// - `s`: The byte slice to inspect for an HTTP scheme prefix.
+///
+/// Returns: `true` if `s` begins with either "http://" or "https://".
 fn hasHttpScheme(s: []const u8) bool {
     return std.mem.startsWith(u8, s, "http://") or
         std.mem.startsWith(u8, s, "https://");
@@ -44,7 +55,10 @@ test "hasHttpScheme: detection" {
 ///   /t{digits}              — shortcut form (e.g. /t42)
 ///   /tests/{digits}[/...]   — canonical form (e.g. /tests/42)
 ///
-/// Returns the ID or null if the path does not match either pattern.
+/// Arguments:
+/// - `path`: The URL path component to parse (e.g. "/tests/42/details").
+///
+/// Returns: The extracted job ID, or `null` if the path does not match either pattern.
 fn extractJobIdFromPath(path: []const u8) ?u64 {
     // /tests/{id}[/...] — check longer prefix first (avoids false match on /t)
     const tests_pfx = "/tests/";
@@ -239,6 +253,15 @@ test "splitJobRef: URL with port" {
 ///   - Otherwise use "https://".
 ///
 /// The returned slice is always a new allocation; the caller must free it.
+///
+/// Arguments:
+/// - `allocator`: Used to allocate the returned URL string.
+/// - `host`: The raw hostname or URL from the `--host` flag.
+///
+/// Returns: A newly allocated URL string with a guaranteed scheme prefix.
+///
+/// Errors:
+///   error.OutOfMemory — allocation failed.
 fn normalizeHostUrl(allocator: std.mem.Allocator, host: []const u8) ![]u8 {
     if (hasHttpScheme(host)) return try allocator.dupe(u8, host);
     const scheme: []const u8 = if (std.mem.indexOf(u8, host, "localhost") != null)
@@ -624,6 +647,9 @@ fn parseCloneArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Clone
 // ---------------------------------------------------------------------------
 
 /// Write the help text to stdout (is_error=false) or stderr (is_error=true).
+///
+/// Arguments:
+/// - `is_error`: When `true`, writes to stderr; when `false`, writes to stdout.
 fn printHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
     var out_writer = if (is_error)
@@ -635,6 +661,11 @@ fn printHelp(is_error: bool) void {
     w.flush() catch {};
 }
 
+/// Print a formatted message to stderr using a stack-allocated buffer.
+///
+/// Arguments:
+/// - `fmt`: Compile-time format string.
+/// - `args_fmt`: Format arguments matching the placeholders in `fmt`.
 fn printStderr(comptime fmt: []const u8, args_fmt: anytype) void {
     var buf: [2048]u8 = undefined;
     var w = std.fs.File.stderr().writer(&buf);
@@ -651,6 +682,31 @@ fn printStderr(comptime fmt: []const u8, args_fmt: anytype) void {
 ///
 /// Returns the walker with collected entries (owned by `arena_alloc`).
 /// Calls `std.process.exit(1)` on any fatal error (this is an exe-layer helper).
+const WalkResult = struct {
+    walker: zoqa.clone_job.DependencyWalker,
+    assets: std.ArrayList(zoqa.clone_job.AssetEntry),
+    missing_asset_filenames: std.ArrayList([]const u8),
+};
+
+/// Perform a BFS walk of the job dependency graph from the origin job.
+///
+/// Fetches each reachable job from the source instance, records settings and
+/// dependency information, extracts asset references, and collects any
+/// server-reported missing asset filenames (when `check_assets=1` is sent).
+///
+/// Arguments:
+/// - `gpa`: General-purpose allocator for transient allocations (freed per-iteration).
+/// - `arena_alloc`: Arena allocator for long-lived data (walker entries, assets).
+/// - `resolved`: Resolved job reference containing `from_url` and `job_id`.
+/// - `from_creds`: Optional API credentials for the source instance.
+/// - `retry_cfg`: Retry/timeout configuration for HTTP requests.
+/// - `clone_opts`: Clone behaviour flags (skip_deps, clone_children, etc.).
+/// - `verbose`: When `true`, enables verbose HTTP request output.
+/// - `ignore_missing_assets`: When `true`, suppresses the `?check_assets=1` query.
+/// - `client`: HTTP client instance (shared across requests).
+///
+/// Returns: A `WalkResult` containing the walker state, collected assets, and
+///   any missing asset filenames reported by the server.
 fn walkDependencyGraph(
     gpa: std.mem.Allocator,
     arena_alloc: std.mem.Allocator,
@@ -659,17 +715,21 @@ fn walkDependencyGraph(
     retry_cfg: cli_credentials.RetryConfig,
     clone_opts: zoqa.clone_job.CloneOptions,
     verbose: bool,
+    ignore_missing_assets: bool,
     client: *std.http.Client,
-) struct { walker: zoqa.clone_job.DependencyWalker, assets: std.ArrayList(zoqa.clone_job.AssetEntry) } {
+) WalkResult {
     var walker = zoqa.clone_job.DependencyWalker.init(arena_alloc, resolved.job_id, clone_opts) catch |err| {
         printStderr("Error: walker init failed: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
     var all_assets: std.ArrayList(zoqa.clone_job.AssetEntry) = .empty;
+    var all_missing_assets: std.ArrayList([]const u8) = .empty;
+
+    // Fetch job from source instance; add check_assets=1 unless suppressed
+    const check_assets_qs: []const u8 = if (!ignore_missing_assets) "?check_assets=1" else "";
 
     while (walker.next()) |item| {
-        // Fetch job from source instance
-        const job_path = std.fmt.allocPrint(gpa, "jobs/{d}", .{item.job_id}) catch |err| {
+        const job_path = std.fmt.allocPrint(gpa, "jobs/{d}{s}", .{ item.job_id, check_assets_qs }) catch |err| {
             printStderr("Error: allocPrint failed: {s}\n", .{@errorName(err)});
             std.process.exit(1);
         };
@@ -733,9 +793,33 @@ fn walkDependencyGraph(
                 std.process.exit(1);
             };
         }
+
+        // Collect server-reported missing_assets (populated when check_assets=1 was sent)
+        if (job_obj.get("missing_assets")) |ma_val| {
+            switch (ma_val) {
+                .array => |arr| {
+                    for (arr.items) |entry| {
+                        switch (entry) {
+                            .string => |s| {
+                                const duped = arena_alloc.dupe(u8, s) catch |err| {
+                                    printStderr("Error: dupe failed: {s}\n", .{@errorName(err)});
+                                    std.process.exit(1);
+                                };
+                                all_missing_assets.append(arena_alloc, duped) catch |err| {
+                                    printStderr("Error: missing_assets append failed: {s}\n", .{@errorName(err)});
+                                    std.process.exit(1);
+                                };
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
     }
 
-    return .{ .walker = walker, .assets = all_assets };
+    return .{ .walker = walker, .assets = all_assets, .missing_asset_filenames = all_missing_assets };
 }
 
 // ---------------------------------------------------------------------------
@@ -747,6 +831,16 @@ fn walkDependencyGraph(
 /// encoded POST body.
 ///
 /// Calls `std.process.exit(1)` on fatal errors (exe-layer helper).
+///
+/// Arguments:
+/// - `gpa`: General-purpose allocator for building the POST body string.
+/// - `arena_alloc`: Arena allocator for job entry storage.
+/// - `collected`: Slice of collected BFS entries from the dependency walker.
+/// - `overrides`: Parsed KEY=[VALUE] overrides from the command line.
+/// - `clone_opts`: Clone behaviour flags (parental_inheritance, etc.).
+///
+/// Returns: An anonymous struct with `final_jobs` (the post-override job list)
+///   and `post_body` (the encoded form body for the POST request).
 fn encodeDepsAndApplyOverrides(
     gpa: std.mem.Allocator,
     arena_alloc: std.mem.Allocator,
@@ -850,6 +944,21 @@ const OutputMode = enum {
 /// response, and write formatted output to stdout.
 ///
 /// Calls `std.process.exit(1)` on fatal errors (exe-layer helper).
+///
+/// Arguments:
+/// - `gpa`: General-purpose allocator for request/response processing.
+/// - `resolved`: Resolved job reference containing `host_url`.
+/// - `host_creds`: Optional API credentials for the destination instance.
+/// - `retry_cfg`: Retry/timeout configuration for the POST request.
+/// - `verbose`: When `true`, enables verbose HTTP request output.
+/// - `client`: HTTP client instance (shared across requests).
+/// - `post_body`: The URL-encoded form body to send.
+/// - `final_jobs`: The final job list for output formatting.
+/// - `output_mode`: Selects between default, badge, or JSON output format.
+///
+/// Errors:
+///   Returns `error` only for fatal I/O failures writing to stdout; all HTTP
+///   and parsing errors are handled internally via `std.process.exit(1)`.
 fn postAndFormatOutput(
     gpa: std.mem.Allocator,
     resolved: anytype,
@@ -932,6 +1041,18 @@ fn postAndFormatOutput(
 /// For each asset extracted during BFS, skips assets that are generated by
 /// cloned jobs (PUBLISH_HDD_* / PUBLISH_PFLASH_VARS), then downloads the
 /// remainder via GET /tests/{id}/asset/{type}/{filename}.
+///
+/// Arguments:
+/// - `gpa`: General-purpose allocator for path construction and HTTP I/O.
+/// - `client`: HTTP client instance (shared across requests).
+/// - `assets`: Slice of asset entries collected during the dependency walk.
+/// - `final_jobs`: Final job list used to identify self-generated assets.
+/// - `from_url`: Source instance base URL.
+/// - `from_creds`: Optional API credentials for the source instance.
+/// - `asset_dir`: Local directory root for storing downloaded assets.
+/// - `retry_cfg`: Retry/timeout configuration (currently unused/reserved).
+/// - `verbose`: When `true`, logs skipped assets to stderr.
+/// - `ignore_missing_assets`: When `true`, skips 404 responses instead of aborting.
 fn downloadAssets(
     gpa: std.mem.Allocator,
     client: *std.http.Client,
@@ -942,6 +1063,7 @@ fn downloadAssets(
     asset_dir: []const u8,
     retry_cfg: cli_credentials.RetryConfig,
     verbose: bool,
+    ignore_missing_assets: bool,
 ) void {
     _ = retry_cfg;
     for (assets) |asset| {
@@ -1013,6 +1135,11 @@ fn downloadAssets(
         };
 
         if (stream_result.status != .ok) {
+            if (ignore_missing_assets and stream_result.status == .not_found) {
+                std.fs.cwd().deleteFile(dest_path) catch {};
+                printStderr("Warning: skipping missing asset '{s}' (status 404)\n", .{asset.filename});
+                continue;
+            }
             printStderr("Error: asset download returned status {d} for '{s}'\n", .{
                 @intFromEnum(stream_result.status), asset.filename,
             });
@@ -1167,6 +1294,7 @@ pub fn main() !void {
         retry_cfg,
         clone_opts,
         args.verbose,
+        args.ignore_missing_assets,
         &client,
     );
 
@@ -1250,6 +1378,28 @@ pub fn main() !void {
 
     // Asset download phase: download assets from source to --dir.
     if (!resolved.skip_download) {
+        // Pre-check: abort on server-reported missing assets (unless suppressed).
+        if (!args.ignore_missing_assets and walk_result.missing_asset_filenames.items.len > 0) {
+            var truly_missing: std.ArrayList([]const u8) = .empty;
+            for (walk_result.missing_asset_filenames.items) |path_str| {
+                const basename = if (std.mem.lastIndexOfScalar(u8, path_str, '/')) |i|
+                    path_str[i + 1 ..]
+                else
+                    path_str;
+                if (!zoqa.clone_job.isAssetGeneratedByClonedJobs(basename, phase2.final_jobs.items)) {
+                    truly_missing.append(arena_alloc, path_str) catch |err| {
+                        printStderr("Error: truly_missing append failed: {s}\n", .{@errorName(err)});
+                        std.process.exit(1);
+                    };
+                }
+            }
+            if (truly_missing.items.len > 0) {
+                printStderr("The following assets are missing:\n", .{});
+                for (truly_missing.items) |m| printStderr(" - {s}\n", .{m});
+                printStderr("Use --ignore-missing-assets or --skip-download to proceed regardless.\n", .{});
+                std.process.exit(1);
+            }
+        }
         const asset_dir = args.dir orelse "/var/lib/openqa/share/factory";
         downloadAssets(
             gpa,
@@ -1261,6 +1411,7 @@ pub fn main() !void {
             asset_dir,
             retry_cfg,
             args.verbose,
+            args.ignore_missing_assets,
         );
     }
 
