@@ -64,11 +64,11 @@ run_test "ZIG : --help writes to stdout, exits 0" "bash -c \"$ZIG_EXE --help > /
 run_test "PERL: bare invocation writes to stdout, exits 0" "bash -c \"$PERL_EXE > /tmp/out 2> /tmp/err; test -s /tmp/out && ! test -s /tmp/err\"" 0
 run_test "ZIG : bare invocation writes to stdout, exits 0" "bash -c \"$ZIG_EXE > /tmp/out 2> /tmp/err; test -s /tmp/out && ! test -s /tmp/err\"" 0
 
-run_test "PERL: unknown subcmd writes to stderr, exits non-zero" "bash -c \"$PERL_EXE fake > /tmp/out 2> /tmp/err; exit_code=\\\$?; test \\\$exit_code -ne 0 && test -s /tmp/err && ! test -s /tmp/out\"" 0
-run_test "ZIG : unknown subcmd writes to stderr, exits non-zero" "bash -c \"$ZIG_EXE fake > /tmp/out 2> /tmp/err; exit_code=\\\$?; test \\\$exit_code -ne 0 && test -s /tmp/err && ! test -s /tmp/out\"" 0
+run_test "PERL: unknown subcmd writes to stderr, exits non-zero" "bash -c \"! $PERL_EXE fake > /tmp/out 2> /tmp/err && test -s /tmp/err && ! test -s /tmp/out\"" 0
+run_test "ZIG : unknown subcmd writes to stderr, exits non-zero" "bash -c \"! $ZIG_EXE fake > /tmp/out 2> /tmp/err && test -s /tmp/err && ! test -s /tmp/out\"" 0
 
-run_test "PERL: missing PATH writes to stderr, exits non-zero" "bash -c \"$PERL_EXE api > /tmp/out 2> /tmp/err; exit_code=\\\$?; test \\\$exit_code -ne 0 && test -s /tmp/err && ! test -s /tmp/out\"" 0
-run_test "ZIG : missing PATH writes to stderr, exits non-zero" "bash -c \"$ZIG_EXE api > /tmp/out 2> /tmp/err; exit_code=\\\$?; test \\\$exit_code -ne 0 && test -s /tmp/err && ! test -s /tmp/out\"" 0
+run_test "PERL: missing PATH writes to stderr, exits non-zero" "bash -c \"! $PERL_EXE api > /tmp/out 2> /tmp/err && test -s /tmp/err && ! test -s /tmp/out\"" 0
+run_test "ZIG : missing PATH writes to stderr, exits non-zero" "bash -c \"! $ZIG_EXE api > /tmp/out 2> /tmp/err && test -s /tmp/err && ! test -s /tmp/out\"" 0
 
-run_test "PERL: archive missing args writes to stderr, exits non-zero" "bash -c \"$PERL_EXE archive > /tmp/out 2> /tmp/err; exit_code=\\\$?; test \\\$exit_code -ne 0 && test -s /tmp/err && ! test -s /tmp/out\"" 0
-run_test "ZIG : archive missing args writes to stderr, exits non-zero" "bash -c \"$ZIG_EXE archive > /tmp/out 2> /tmp/err; exit_code=\\\$?; test \\\$exit_code -ne 0 && test -s /tmp/err && ! test -s /tmp/out\"" 0
+run_test "PERL: archive missing args writes to stderr, exits non-zero" "bash -c \"! $PERL_EXE archive > /tmp/out 2> /tmp/err && test -s /tmp/err && ! test -s /tmp/out\"" 0
+run_test "ZIG : archive missing args writes to stderr, exits non-zero" "bash -c \"! $ZIG_EXE archive > /tmp/out 2> /tmp/err && test -s /tmp/err && ! test -s /tmp/out\"" 0

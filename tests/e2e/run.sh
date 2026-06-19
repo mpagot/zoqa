@@ -45,8 +45,9 @@ OPTIONS:
   --suites NAMES      Comma-separated list of suite names to run (no .sh
                       extension). Valid names: core, auth, data, output,
                       robustness, retry_knobs, archive, monitor, schedule,
-                      help, stress, perf. Omit or use 'all' to run all suites.
-                      Pass an empty string to skip all tests (e.g. --suites "").
+                      help, clone_smoke, clone_single, clone_topology,
+                      clone_maxdepth, stress, perf. Omit or use 'all' to run
+                      all suites. Pass an empty string to skip all tests.
 
 ENVIRONMENT VARIABLES:
   E2E_STORAGE_KEEP_FREE_RATIO   isotovideo disk-space check threshold.

@@ -162,29 +162,45 @@ fi
 
 # ---------------------------------------------------------------------------
 # 6. Cache scenario-definitions.yaml for use by lib.sh schedule_job()
+#
+# In openQA, scheduling a set of tests isn't just about scheduling single standalone jobs;
+# it involves orchestrating complex multi-job   dependencies (topologies) such as:
+#   * Chained Jobs: Job B starts only after Job A finishes successfully (_START_AFTER).
+#   * Fan-out: A parent job triggers multiple parallel sibling child jobs.
+#   * Multi-layer (Ancestral): Multi-depth dependency chains (Grandparent → Parent → Child).
+#   * Diamond / Merge Topologies: Two independent branch jobs (Left and Right)
+#     merging back into a single terminal synchronization point (Merge).
+#   * Parallel clusters: Simultaneous multi-worker execution.
+#
+#  To schedule these configurations via openQA’s ISO-triggering endpoint (POST /api/v1/isos),
+#  you must feed the API a YAML payload containing the
+#  Scenario Definitions (representing your test templates and structures).
+#
+#  Copied scenarios will be used to trigger groups of jobs by schedule_topology_jobs
 # ---------------------------------------------------------------------------
-log "Caching scenario-definitions.yaml to $_SCENARIO_YAML_PATH..."
-if [[ "$DRY_RUN" == "false" ]]; then
-	[[ -f "$FIXTURE_DIR/scenario-definitions.yaml" ]] ||
-		die "scenario-definitions.yaml not found at $FIXTURE_DIR"
-	cp "$FIXTURE_DIR/scenario-definitions.yaml" "$_SCENARIO_YAML_PATH"
-	cp "$FIXTURE_DIR/chained-scenario-definitions.yaml" "/tmp/chained-scenario.yaml"
-	cp "$FIXTURE_DIR/fanout-scenario-definitions.yaml" "/tmp/fanout-scenario.yaml"
-	cp "$FIXTURE_DIR/multilayer-scenario-definitions.yaml" "/tmp/multilayer-scenario.yaml"
-	cp "$FIXTURE_DIR/diamond-scenario-definitions.yaml" "/tmp/diamond-scenario.yaml"
-	cp "$FIXTURE_DIR/parallel-scenario-definitions.yaml" "/tmp/parallel-scenario.yaml"
-	cp "$FIXTURE_DIR/all-failed-scenario-definitions.yaml" "/tmp/all-failed-scenario.yaml"
-	cp "$FIXTURE_DIR/partial-scenario-definitions.yaml" "/tmp/partial-scenario.yaml"
-	cp "$FIXTURE_DIR/exp-bogus-product-ref-scenario-definitions.yaml" "/tmp/exp-bogus-product-ref-scenario.yaml"
-	cp "$FIXTURE_DIR/exp-partial-bogus-product-scenario-definitions.yaml" "/tmp/exp-partial-bogus-product-scenario.yaml"
-	cp "$FIXTURE_DIR/exp-empty-job-templates-scenario-definitions.yaml" "/tmp/exp-empty-job-templates-scenario.yaml"
-else
-	echo "[DRY-RUN] cp $FIXTURE_DIR/scenario-definitions.yaml $_SCENARIO_YAML_PATH"
-	echo "[DRY-RUN] cp $FIXTURE_DIR/chained-scenario-definitions.yaml /tmp/chained-scenario.yaml"
-	echo "[DRY-RUN] cp $FIXTURE_DIR/all-failed-scenario-definitions.yaml /tmp/all-failed-scenario.yaml"
-	echo "[DRY-RUN] cp $FIXTURE_DIR/partial-scenario-definitions.yaml /tmp/partial-scenario.yaml"
-	echo "[DRY-RUN] cp exp-* fixtures to /tmp/"
-fi
+log "Caching scenario-definitions to container storage..."
+[[ "$DRY_RUN" == "true" ]] || [[ -f "$FIXTURE_DIR/scenario-definitions.yaml" ]] || \
+	die "scenario-definitions.yaml not found at $FIXTURE_DIR"
+
+for src_path in "$FIXTURE_DIR"/*scenario-definitions.yaml; do
+	[[ -f "$src_path" ]] || continue
+	filename=$(basename "$src_path")
+
+	# Determine destination path
+	if [[ "$filename" == "scenario-definitions.yaml" ]]; then
+		dest_path="$_SCENARIO_YAML_PATH"
+	else
+		# Map e.g. chained-scenario-definitions.yaml -> /tmp/chained-scenario.yaml
+		base_name="${filename%-definitions.yaml}"
+		dest_path="/tmp/${base_name}.yaml"
+	fi
+
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] cp $src_path $dest_path"
+	else
+		cp "$src_path" "$dest_path"
+	fi
+done
 
 # ---------------------------------------------------------------------------
 # 7. Write seeded IDs to env file
