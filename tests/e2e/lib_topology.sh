@@ -14,6 +14,7 @@
 #   ensure_chained_jobs()        — lazy-init CHAIN_PARENT_ID / CHAIN_CHILD_ID
 #   ensure_fanout_jobs()         — lazy-init FANOUT_*_ID variables
 #   ensure_multilayer_jobs()     — lazy-init LAYER_*_ID variables
+#   ensure_deeplayer_jobs()      — lazy-init DEEPLAY_LAYER_*_ID variables
 #   ensure_diamond_jobs()        — lazy-init DIAMOND_*_ID variables
 #   ensure_parallel_jobs()       — lazy-init PARALLEL_*_ID variables
 #   assert_job_has_chained_parent() — verify chained dependency assertion
@@ -189,15 +190,66 @@ ensure_multilayer_jobs() {
 	done
 
 	[[ -n "${LAYER_CHILD_ID:-}" ]] || die "ensure_multilayer_jobs: child ID not found"
-	
+
 	echo "  [ensure] Multilayer child: $LAYER_CHILD_ID — waiting..." >&2
 	wait_for_job "$LAYER_CHILD_ID" 600 >/dev/null || die "ensure_multilayer_jobs: timeout waiting for child"
 
 	export LAYER_GRANDPARENT_ID LAYER_PARENT_ID LAYER_CHILD_ID
-}
+	}
 
 # ---------------------------------------------------------------------------
-# ensure_diamond_jobs — lazy-init DIAMOND_*_ID variables
+# ensure_deeplayer_jobs — lazy-init DEEPLAY_LAYER_*_ID variables
+#
+# Schedules the 17-layer linear chain (layer_a → layer_b → … → layer_s;
+# letters j and k are absent from the fixture YAML).
+# Sets and exports DEEPLAY_LAYER_A_ID … DEEPLAY_LAYER_S_ID.
+# Waits for the terminal node (layer_s) to reach a completed state so that
+# --max-depth clone tests can immediately use all 17 jobs as source jobs.
+# ---------------------------------------------------------------------------
+ensure_deeplayer_jobs() {
+	if [[ -n "${DEEPLAY_LAYER_A_ID:-}" && -n "${DEEPLAY_LAYER_S_ID:-}" ]]; then
+		return 0
+	fi
+
+	local suffix suffix_upper
+	if [[ "$DRY_RUN" == "true" ]]; then
+		for suffix in a b c d e f g h i l m n o p q r s; do
+			suffix_upper="${suffix^^}"
+			eval "DEEPLAY_LAYER_${suffix_upper}_ID=1"
+			export "DEEPLAY_LAYER_${suffix_upper}_ID"
+		done
+		echo "  [ensure] [DRY-RUN] DEEPLAY_LAYER_A_ID to DEEPLAY_LAYER_S_ID initialized" >&2
+		return 0
+	fi
+
+	echo "  [ensure] Scheduling deeplayer jobs..." >&2
+	local ids
+	ids=$(schedule_topology_jobs "deeplayer" "deeplayer-seed")
+
+	for id in $ids; do
+		local test_name
+		test_name=$(container_exec openqa-cli api --host http://localhost \
+			"jobs/$id" 2>/dev/null | jq -r '.job.settings.TEST')
+		if [[ "$test_name" =~ ^layer_([a-s])$ ]]; then
+			suffix="${BASH_REMATCH[1]}"
+			suffix_upper="${suffix^^}"
+			eval "DEEPLAY_LAYER_${suffix_upper}_ID=\$id"
+		fi
+	done
+
+	[[ -n "${DEEPLAY_LAYER_S_ID:-}" ]] || die "ensure_deeplayer_jobs: terminal child (layer_s) ID not found"
+
+	echo "  [ensure] Deeplayer terminal child: $DEEPLAY_LAYER_S_ID — waiting..." >&2
+	wait_for_job "$DEEPLAY_LAYER_S_ID" 600 >/dev/null || die "ensure_deeplayer_jobs: timeout waiting for terminal child"
+
+	for suffix in a b c d e f g h i l m n o p q r s; do
+		suffix_upper="${suffix^^}"
+		export "DEEPLAY_LAYER_${suffix_upper}_ID"
+	done
+}
+
+	# ---------------------------------------------------------------------------
+	# ensure_diamond_jobs — lazy-init DIAMOND_*_ID variables
 # ---------------------------------------------------------------------------
 ensure_diamond_jobs() {
 	if [[ -n "${DIAMOND_ROOT_ID:-}" && -n "${DIAMOND_MERGE_ID:-}" ]]; then

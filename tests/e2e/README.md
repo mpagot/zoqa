@@ -455,7 +455,10 @@ tests/e2e/
   tests_archive.sh            — Section H: archive subcommand
   tests_monitor.sh            — Section I: monitor subcommand
   tests_schedule.sh           — Section J: schedule subcommand
-  tests_clone_job.sh          — Section K: clone-job subcommand
+  tests_clone_smoke.sh        — Section K1: clone-job smoke tests (CLO-1–CLO-11)
+  tests_clone_single.sh       — Section K2: single-job clone flags (CLO-12–CLO-83)
+  tests_clone_topology.sh     — Section K3: graph topology tests (CLO-20–M42)
+  tests_clone_maxdepth.sh     — Section K4: --max-depth traversal limits (CLO-90–CLO-97)
   tests_help.sh               — help output structure tests
   tests_perf.sh               — Section G: wall-clock timing and peak RSS
   tests_stress.sh             — Section L: large response stress tests

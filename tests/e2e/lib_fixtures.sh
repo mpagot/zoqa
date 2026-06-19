@@ -221,6 +221,7 @@ _ensure_job() {
 
 	# No-op if already set.
 	if [[ -n "${!var_name:-}" ]]; then
+		echo "_ensure_job var_name:${var_name} already defined ${!var_name}"
 		return 0
 	fi
 
@@ -256,10 +257,10 @@ _ensure_job() {
 # Thin wrappers around _ensure_job kept for call-site compatibility.
 # ---------------------------------------------------------------------------
 ensure_basic_job() {
-	_ensure_job JOB_ID "basic job" \
-		"${_E2E_JOB_COMMON_ARGS[@]}" \
-		BUILD=e2e-test \
-		"_GROUP_ID=${GROUP_ID:-1}"
+        _ensure_job JOB_ID "basic job" \
+                "${_E2E_JOB_COMMON_ARGS[@]}" \
+                BUILD=e2e-test \
+                "_GROUP_ID=${GROUP_ID:-1}"
 }
 
 ensure_rich_job() {

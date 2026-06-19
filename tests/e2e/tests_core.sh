@@ -9,7 +9,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 #
 # Assumes from the calling scope:
 #   ZIG_EXE, PERL_EXE, LOG_DIR, failed_tests, warned_tests, GROUP_ID
-#   run_test(), run_comparison_api(), run_diff_test()
+#   run_test(), run_comparison_api()
 
 # Ensure a basic job exists (creates JOB_ID if not already set).
 ensure_basic_job

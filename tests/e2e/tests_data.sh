@@ -102,10 +102,10 @@ fi
 # Test DAT-22: GET job_groups returns the seeded group.
 run_comparison_api "GET job_groups (seeded group present)" "" "job_groups" 0 '"example"'
 
-# Test 23: Perl vs Zig output parity on a real nested object (hard FAIL on mismatch).
+# Test DAT-23: Perl vs Zig output parity on a real nested object (hard FAIL on mismatch).
 run_diff_test "GET jobs/$JOB_ID output parity" "jobs/$JOB_ID"
 
-# Test 24: Relative and absolute path produce identical output.
+# Test DAT-24: Relative and absolute path produce identical output.
 # Verifies that `zoqa api jobs/$JOB_ID` and
 # `zoqa api http://localhost/api/v1/jobs/$JOB_ID` return the same body.
 #

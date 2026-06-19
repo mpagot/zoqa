@@ -151,7 +151,10 @@ E2E_SCRIPTS := \
 	tests/e2e/tests_robustness.sh \
 	tests/e2e/tests_monitor.sh \
 	tests/e2e/tests_schedule.sh \
-	tests/e2e/tests_clone_job.sh \
+	tests/e2e/tests_clone_smoke.sh \
+	tests/e2e/tests_clone_single.sh \
+	tests/e2e/tests_clone_topology.sh \
+	tests/e2e/tests_clone_maxdepth.sh \
 	tests/e2e/tests_help.sh \
 	tests/e2e/tests_perf.sh \
 	tests/e2e/tests_stress.sh \
