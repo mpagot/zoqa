@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// Returns `true` when `token` matches `long` or `short`.
+/// Match a boolean (no-value) CLI flag against its long and/or short form.
 ///
 /// Both `long` and `short` are comptime-known and optional; use `null` to
 /// indicate absence.  At least one must be non-null and non-empty — violations

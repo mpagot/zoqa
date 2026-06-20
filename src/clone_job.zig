@@ -2088,6 +2088,65 @@ test "DependencyWalker: max_depth limits child traversal" {
     try std.testing.expectEqual(@as(usize, 2), walker.collected.items.len);
 }
 
+test "DependencyWalker: null max_depth means unlimited" {
+    // When CloneOptions.max_depth is null, children are traversed without
+    // depth limit. The executable layer is responsible for defaulting to 1 —
+    // this test documents the library contract.
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var walker = try DependencyWalker.init(a, 1, .{
+        .from_url = "http://src",
+        .max_depth = null,
+    });
+
+    // Origin (depth=1) has child 2
+    const item1 = walker.next().?;
+    const obj1 = try makeTestJobObj(a, "job1", &.{}, &.{2});
+    try walker.feed(a, item1, obj1);
+
+    // Child 2 (depth=2) has child 3
+    const item2 = walker.next().?;
+    try std.testing.expectEqual(@as(u64, 2), item2.job_id);
+    const obj2 = try makeTestJobObj(a, "job2", &.{}, &.{3});
+    try walker.feed(a, item2, obj2);
+
+    // Child 3 (depth=3) IS enqueued — null means unlimited
+    const item3 = walker.next().?;
+    try std.testing.expectEqual(@as(u64, 3), item3.job_id);
+    try std.testing.expectEqual(@as(u32, 3), item3.depth);
+}
+
+test "DependencyWalker: max_depth 0 means unlimited" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var walker = try DependencyWalker.init(a, 1, .{
+        .from_url = "http://src",
+        .max_depth = 0,
+    });
+
+    // Origin (depth=1) has child 2
+    const item1 = walker.next().?;
+    const obj1 = try makeTestJobObj(a, "job1", &.{}, &.{2});
+    try walker.feed(a, item1, obj1);
+
+    // Child 2 (depth=2) has child 3
+    const item2 = walker.next().?;
+    try std.testing.expectEqual(@as(u64, 2), item2.job_id);
+    const obj2 = try makeTestJobObj(a, "job2", &.{}, &.{3});
+    try walker.feed(a, item2, obj2);
+
+    // Child 3 IS enqueued — 0 means unlimited
+    const item3 = walker.next().?;
+    try std.testing.expectEqual(@as(u64, 3), item3.job_id);
+    try std.testing.expectEqual(@as(u32, 3), item3.depth);
+}
+
 test "DependencyWalker: clone_children enables chained child traversal" {
     const allocator = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);

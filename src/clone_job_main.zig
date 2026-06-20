@@ -1280,7 +1280,7 @@ pub fn main() !void {
         .skip_deps = args.skip_deps,
         .skip_chained_deps = args.skip_chained_deps,
         .clone_children = args.clone_children,
-        .max_depth = args.max_depth,
+        .max_depth = args.max_depth orelse 1,
         .parental_inheritance = args.parental_inheritance,
         .from_url = resolved.from_url,
     };
@@ -1573,6 +1573,26 @@ test "parseCloneArgs: no args produces empty positionals" {
     defer parsed.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), parsed.positionals.items.len);
     try std.testing.expect(!parsed.help);
+}
+
+test "parseCloneArgs: max_depth defaults to null when not specified" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa-clone-job", "--from", "openqa.example.com", "42",
+    };
+    var parsed = try parseCloneArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+    try std.testing.expect(parsed.max_depth == null);
+}
+
+test "parseCloneArgs: --max-depth 0 parses as zero" {
+    const allocator = std.testing.allocator;
+    const argv: []const []const u8 = &.{
+        "zoqa-clone-job", "--from", "openqa.example.com", "--max-depth", "0", "42",
+    };
+    var parsed = try parseCloneArgs(allocator, argv);
+    defer parsed.deinit(allocator);
+    try std.testing.expectEqual(@as(?u32, 0), parsed.max_depth);
 }
 
 // ---------------------------------------------------------------------------
