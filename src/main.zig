@@ -1,7 +1,7 @@
 const std = @import("std");
 const zoqa = @import("zoqa");
 const arg_match = @import("arg_match");
-const cli_credentials = @import("cli_credentials");
+const cli_env = @import("cli_env");
 const config = zoqa.config;
 
 /// Check if the given API path is an absolute URL.
@@ -2714,11 +2714,11 @@ pub fn main() !void {
         break :blk args.host orelse "localhost";
     };
 
-    const creds = try cli_credentials.resolveCredentials(gpa, host_for_creds, args.apikey, args.apisecret);
+    const creds = try cli_env.resolveCredentials(gpa, host_for_creds, args.apikey, args.apisecret);
     defer if (creds) |c| c.deinit();
 
     // Retry/timeout knobs: --retries > OPENQA_CLI_* env vars > defaults (0).
-    const retry_cfg = try cli_credentials.resolveRetryConfig(gpa, args.retries, 0);
+    const retry_cfg = try cli_env.resolveRetryConfig(gpa, args.retries, 0);
     const retries = retry_cfg.retries;
     const connect_timeout_s = retry_cfg.connect_timeout_s;
     const retry_sleep_s = retry_cfg.retry_sleep_s;

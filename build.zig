@@ -22,11 +22,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Shared CLI credential/retry resolution module — orchestrates the
+    // Shared CLI runtime-input resolution module — orchestrates the
     // credential priority chain (CLI > env > config) and env-var parsing for
     // retry/timeout knobs. Uses std.process; NOT part of the library.
-    const cli_creds_mod = b.createModule(.{
-        .root_source_file = b.path("src/cli_credentials.zig"),
+    const cli_env_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli_env.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -47,7 +47,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "zoqa", .module = lib_mod },
                 .{ .name = "arg_match", .module = arg_match_mod },
-                .{ .name = "cli_credentials", .module = cli_creds_mod },
+                .{ .name = "cli_env", .module = cli_env_mod },
             },
         }),
     });
@@ -65,7 +65,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "zoqa", .module = lib_mod },
                 .{ .name = "arg_match", .module = arg_match_mod },
-                .{ .name = "cli_credentials", .module = cli_creds_mod },
+                .{ .name = "cli_env", .module = cli_env_mod },
             },
         }),
     });
@@ -101,17 +101,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_arg_match_tests = b.addRunArtifact(arg_match_tests);
 
-    const cli_creds_tests = b.addTest(.{
-        .root_module = cli_creds_mod,
+    const cli_env_tests = b.addTest(.{
+        .root_module = cli_env_mod,
     });
-    const run_cli_creds_tests = b.addRunArtifact(cli_creds_tests);
+    const run_cli_env_tests = b.addRunArtifact(cli_env_tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_clone_exe_tests.step);
     test_step.dependOn(&run_arg_match_tests.step);
-    test_step.dependOn(&run_cli_creds_tests.step);
+    test_step.dependOn(&run_cli_env_tests.step);
 
     // Documentation generation step (on-demand: `zig build docs`)
     const docs_mod = b.createModule(.{
@@ -185,8 +185,8 @@ fn setupFuzzing(
         .target = b.resolveTargetQuery(.{}),
         .optimize = .Debug,
     });
-    const cli_creds_mod = b.createModule(.{
-        .root_source_file = b.path("src/cli_credentials.zig"),
+    const cli_env_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli_env.zig"),
         .target = b.resolveTargetQuery(.{}),
         .optimize = .Debug,
         .imports = &.{
@@ -200,7 +200,7 @@ fn setupFuzzing(
         .imports = &.{
             .{ .name = "zoqa", .module = lib_mod },
             .{ .name = "arg_match", .module = arg_match_mod },
-            .{ .name = "cli_credentials", .module = cli_creds_mod },
+            .{ .name = "cli_env", .module = cli_env_mod },
         },
     });
 

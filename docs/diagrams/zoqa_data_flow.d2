@@ -12,7 +12,7 @@ inputs: "Inputs (user + environment)" {
 
 exe: "Executable (CLI layer)" {
   style.fill: "#ede7f6"
-  parse:    "parseArgs\narg_match + cli_credentials"         { style.fill: "#d1c4e9" }
+  parse:    "parseArgs\narg_match + cli_env"         { style.fill: "#d1c4e9" }
   build:    "buildRequest / buildScheduleRequest /\nbuildArchiveRequest" { style.fill: "#d1c4e9" }
   dispatch: "dispatch:\nrunSchedule / runArchive /\nrunMonitor / openQAReq" { style.fill: "#d1c4e9" }
 }

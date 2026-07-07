@@ -46,14 +46,14 @@ process-level concerns that do not belong in a reusable library.
 | Module | Purpose | May use `std.process` |
 |--------|---------|----------------------|
 | `arg_match` | Flag matching primitives (`matchBool`, `matchValue`, `tryCommonFlag`) | No |
-| `cli_credentials` | Credential resolution (env + config + CLI merge), retry/timeout env-var parsing | Yes |
+| `cli_env` | Runtime-input resolution: credentials (env + config + CLI merge) and retry/timeout env-var parsing | Yes |
 
 **`arg_match`** is purely generic — it knows nothing about openQA. Any CLI tool
 can use it. `tryCommonFlag` is a comptime-generic dispatch for the five flags
 shared between all openQA executables (`--host`, `--apikey`, `--apisecret`,
 `--verbose`, `--help`), duck-typed against the caller's args struct.
 
-**`cli_credentials`** orchestrates the credential priority chain
+**`cli_env`** orchestrates the credential priority chain
 (CLI flags > environment variables > config file) and env-var resolution for
 retry/timeout knobs. It imports the `zoqa` library for `config.findCredentials`,
 `config.mergeCredentials`, and `url.hostnameFromUrl`.
@@ -69,7 +69,7 @@ Each executable owns:
 
 **Rules:**
 
-- Executables import `zoqa` (library), `arg_match`, and `cli_credentials`.
+- Executables import `zoqa` (library), `arg_match`, and `cli_env`.
 - Business logic lives in the library; executables are thin orchestration shells.
 - Each executable may define its own named helper functions for multi-phase
   workflows (e.g., `walkDependencyGraph` drives the library's `DependencyWalker`
@@ -114,9 +114,9 @@ Each executable owns:
 build.zig:
   lib_mod (zoqa)        -> src/root.zig              [library: UX-agnostic]
   arg_match_mod         -> src/arg_match.zig         [CLI parsing primitives]
-  cli_creds_mod         -> src/cli_credentials.zig   [CLI env/credential resolution]
-  exe (zoqa)            -> src/main.zig              [imports: zoqa, arg_match, cli_credentials]
-  clone_exe             -> src/clone_job_main.zig    [imports: zoqa, arg_match, cli_credentials]
+  cli_env_mod           -> src/cli_env.zig           [CLI env/credential resolution]
+  exe (zoqa)            -> src/main.zig              [imports: zoqa, arg_match, cli_env]
+  clone_exe             -> src/clone_job_main.zig    [imports: zoqa, arg_match, cli_env]
 ```
 
 ---
@@ -125,7 +125,7 @@ build.zig:
 
 ```
 arg_match.zig        <- (no deps, only std)
-cli_credentials.zig  <- imports zoqa (for config + url)
+cli_env.zig          <- imports zoqa (for config + url)
       |
       | imported by both executables
       v
@@ -133,7 +133,7 @@ main.zig ----------> zoqa (root.zig)
 clone_job_main.zig -> zoqa (root.zig)
 ```
 
-The library (`root.zig`) has no knowledge of `arg_match` or `cli_credentials`.
+The library (`root.zig`) has no knowledge of `arg_match` or `cli_env`.
 Those modules depend downward on `zoqa` — never the reverse.
 
 ---

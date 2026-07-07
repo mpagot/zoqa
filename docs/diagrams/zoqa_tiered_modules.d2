@@ -12,7 +12,7 @@ exes: "Executables (process lifecycle, std.process.exit)" {
 cli_shared: "Shared CLI modules (NOT part of library)" {
   style.fill: "#ede7f6"
   arg_match:       "arg_match.zig\nmatchBool / matchValue / tryCommonFlag"   { style.fill: "#d1c4e9" }
-  cli_credentials: "cli_credentials.zig\nresolveCredentials / resolveRetryConfig\nuses std.process" { style.fill: "#d1c4e9" }
+  cli_env: "cli_env.zig\nresolveCredentials / resolveRetryConfig\nuses std.process" { style.fill: "#d1c4e9" }
 }
 
 facade: "Library facade — public API re-export shim" {
@@ -47,13 +47,13 @@ tier0: "Tier 0 — Pure utilities (no I/O, stdlib only)" {
 # Executables -> facade + CLI-shared
 exes.main       -> facade.root: "@import(\"zoqa\")" { style.stroke: "#7b1fa2" ; style.stroke-width: 2 }
 exes.main       -> cli_shared.arg_match
-exes.main       -> cli_shared.cli_credentials
+exes.main       -> cli_shared.cli_env
 exes.clone_main -> facade.root: "@import(\"zoqa\")" { style.stroke: "#7b1fa2" ; style.stroke-width: 2 }
 exes.clone_main -> cli_shared.arg_match
-exes.clone_main -> cli_shared.cli_credentials
+exes.clone_main -> cli_shared.cli_env
 
 # CLI-shared depends downward on library
-cli_shared.cli_credentials -> facade.root: "zoqa.config / zoqa.url"
+cli_shared.cli_env -> facade.root: "zoqa.config / zoqa.url"
 
 # Facade re-exports every internal module
 facade.root -> tier3.archive:     "re-export" { style.stroke-dash: 3 }
