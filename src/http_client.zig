@@ -444,9 +444,18 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
 
 /// Perform an HTTP request and stream the response body directly to `writer`.
 ///
-/// Unlike `execute()`, this function does not buffer the body in memory:
-/// it is intended for large file downloads (e.g. the `archive` subcommand and
-/// clone-job asset downloads) where buffering would be expencive.
+/// Unlike `execute()`, this function does not buffer the body in memory — it is
+/// intended for large file downloads (e.g. the `archive` subcommand and
+/// clone-job asset downloads) where buffering would be prohibitive.
+///
+/// Retries (up to `req.retries`) are attempted only for failures that occur
+/// BEFORE the body stream begins: connection errors, send errors,
+/// response-header errors, and 502/503 status codes. Because the status is
+/// known before any byte is written to `writer`, these retries never corrupt
+/// the caller's sink. A failure DURING body streaming is NOT retried and is
+/// returned to the caller, because the generic `writer` cannot be rewound to
+/// discard partially-written bytes — the caller, which owns the sink (e.g. a
+/// file it can re-create/truncate), must handle that case if it wants to retry.
 ///
 /// If `req.size_limit` is set and the `Content-Length` response header is
 /// present and exceeds the limit, `error.FileTooLarge` is returned before
@@ -472,46 +481,84 @@ pub fn executeStream(
     _ = req.connect_timeout_s;
 
     const uri = try std.Uri.parse(req.url);
-    var hash_buf: [40]u8 = undefined;
-    var timestamp_buf: [32]u8 = undefined;
-    var headers = try buildHeaders(req.allocator, req.headers, req.credentials, uri, &hash_buf, &timestamp_buf, false);
-    defer headers.deinit(req.allocator);
 
-    if (req.verbose) {
-        std.debug.print("> {s} {s}\n", .{ @tagName(req.method), uri.path.percent_encoded });
-        for (headers.items) |h| {
-            std.debug.print("> {s}: {s}\n", .{ h.name, h.value });
+    var attempt: u32 = 0;
+    while (true) : (attempt += 1) {
+        // Rebuild headers on each attempt so the HMAC timestamp stays current.
+        // hash_buf and timestamp_buf must outlive the headers list (the auth
+        // headers borrow from them).
+        var hash_buf: [40]u8 = undefined;
+        var timestamp_buf: [32]u8 = undefined;
+        var headers = try buildHeaders(req.allocator, req.headers, req.credentials, uri, &hash_buf, &timestamp_buf, false);
+        defer headers.deinit(req.allocator);
+
+        if (req.verbose) {
+            std.debug.print("> {s} {s}\n", .{ @tagName(req.method), uri.path.percent_encoded });
+            for (headers.items) |h| {
+                std.debug.print("> {s}: {s}\n", .{ h.name, h.value });
+            }
+            std.debug.print(">\n", .{});
         }
-        std.debug.print(">\n", .{});
-    }
 
-    var http_req = try client.request(req.method, uri, .{
-        .extra_headers = headers.items,
-    });
-    defer http_req.deinit();
+        var http_req = client.request(req.method, uri, .{
+            .extra_headers = headers.items,
+        }) catch |err| {
+            if (attempt < req.retries) {
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                continue;
+            }
+            if (!req.quiet) std.debug.print("Connection error: {s}\n", .{@errorName(err)});
+            return err;
+        };
+        defer http_req.deinit();
 
-    try http_req.sendBodiless();
+        http_req.sendBodiless() catch |err| {
+            if (attempt < req.retries) {
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                continue;
+            }
+            if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
+            return err;
+        };
 
-    var redirect_buf: [8 * 1024]u8 = undefined;
-    var response = try http_req.receiveHead(&redirect_buf);
+        var redirect_buf: [8 * 1024]u8 = undefined;
+        var response = http_req.receiveHead(&redirect_buf) catch |err| {
+            if (attempt < req.retries) {
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                continue;
+            }
+            if (!req.quiet) std.debug.print("Response error: {s}\n", .{@errorName(err)});
+            return err;
+        };
 
-    const content_length = response.head.content_length;
-    if (content_length_out) |out| out.* = content_length;
-
-    if (req.size_limit) |limit| {
-        if (content_length) |cl| {
-            if (cl > limit) return error.FileTooLarge;
+        // Retry transient gateway errors. This happens before the body is
+        // streamed, so `writer` is still untouched — safe to retry.
+        const status_uint = @intFromEnum(response.head.status);
+        if ((status_uint == 502 or status_uint == 503) and attempt < req.retries) {
+            try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+            continue;
         }
+
+        const content_length = response.head.content_length;
+        if (content_length_out) |out| out.* = content_length;
+
+        if (req.size_limit) |limit| {
+            if (content_length) |cl| {
+                if (cl > limit) return error.FileTooLarge;
+            }
+        }
+
+        // Past this point bytes may reach `writer`; a mid-stream failure is
+        // returned rather than retried (see the doc comment above).
+        var transfer_buf: [65536]u8 = undefined;
+        const body_reader = response.reader(&transfer_buf);
+        _ = try body_reader.streamRemaining(writer);
+
+        return StreamResult{
+            .status = response.head.status,
+            .content_length = content_length,
+        };
     }
-
-    var transfer_buf: [65536]u8 = undefined;
-    const body_reader = response.reader(&transfer_buf);
-    _ = try body_reader.streamRemaining(writer);
-
-    return StreamResult{
-        .status = response.head.status,
-        .content_length = content_length,
-    };
 }
 
 // ---------------------------------------------------------------------------
@@ -523,10 +570,6 @@ fn sleepForRetry(attempt: u32, sleep_s: f64, factor: f64) !void {
     const delay_ns: u64 = @intFromFloat(delay_s * 1_000_000_000.0);
     std.Thread.sleep(delay_ns);
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 test "normalizePathQuery: %20 becomes plus, tilde becomes %7E" {
     const testing = std.testing;
@@ -689,6 +732,18 @@ pub const RawGetOptions = struct {
     size_limit: ?u64 = null,
     quiet: bool = false,
     verbose: bool = false,
+
+    /// Number of automatic retries on transient pre-stream failures
+    /// (connection errors and HTTP 502/503). Defaults to 0. See
+    /// `executeStream` for exactly which failures are retried.
+    retries: u32 = 0,
+
+    /// Base sleep duration in seconds between retry attempts.
+    /// Actual sleep = `retry_sleep_s * retry_factor^attempt`.
+    retry_sleep_s: f64 = 3.0,
+
+    /// Exponential backoff multiplier applied per retry attempt.
+    retry_factor: f64 = 1.0,
 };
 
 /// Perform an authenticated GET request to an arbitrary path (no /api/v1/ prefix).
@@ -696,7 +751,7 @@ pub const RawGetOptions = struct {
 /// Streams the response body into `writer`. Before streaming starts, deposits
 /// the Content-Length header value into `content_length_out` (if non-null),
 /// allowing callers to set up progress tracking.
-/// No retry — intended for large file downloads.
+/// No retry, intended for large file downloads.
 ///
 /// Parameters:
 ///   - host: bare hostname or full base URL of the openQA instance.
@@ -733,13 +788,129 @@ pub fn openQARawGet(
         .headers = &.{},
         .body = null,
         .credentials = opts.credentials,
+        .retries = opts.retries,
+        .quiet = opts.quiet,
+        .verbose = opts.verbose,
+        .retry_sleep_s = opts.retry_sleep_s,
+        .retry_factor = opts.retry_factor,
+        .size_limit = opts.size_limit,
+    };
+
+    return executeStream(req, client, writer, content_length_out);
+}
+
+// ---------------------------------------------------------------------------
+// openQADownloadToFile — authenticated GET streamed to a local file, with retry
+// ---------------------------------------------------------------------------
+
+/// Download the resource at `absolute_path` on `host` into the local file
+/// `dest_path`, streaming the body directly to disk with retry.
+///
+/// DESIGN — why the retry loop (and the file lifecycle) live HERE:
+///
+/// `executeStream` streams into a generic `*std.Io.Writer`, which has no way to
+/// rewind or truncate what was already written. That is fine for retrying
+/// failures that happen BEFORE the body stream starts (connection errors,
+/// 502/503) — and `executeStream` does exactly that — but it CANNOT retry a
+/// failure that happens mid-stream (e.g. a TCP reset after N body bytes),
+/// because the partial bytes are already committed to the sink and re-streaming
+/// would concatenate a second copy onto the first (see e2e CLO-98/99).
+///
+/// Retrying a mid-transfer failure therefore requires re-creating (truncating)
+/// the sink between attempts, which only the owner of the sink can do. This
+/// function owns the file, so the retry loop belongs here. Keeping it in this
+/// module (rather than in the CLI) lets `sleepForRetry` stay a private
+/// implementation detail shared with `execute`/`executeStream` instead of
+/// being exported. This is the one place in `http_client` that touches
+/// `std.fs`, by design.
+///
+/// Behaviour:
+///   - Each attempt re-creates `dest_path` (truncating), so a failed transfer
+///     never leaves partial bytes behind.
+///   - Retries connection/stream errors and 5xx status up to `opts.retries`
+///     times, sleeping with exponential backoff between attempts.
+///   - 404 (and any other non-5xx status) is terminal — never retried — and
+///     the caller decides how to treat it via the returned `StreamResult`.
+///   - On success the file is flushed and kept; on ANY failure (terminal or
+///     retry-exhausted) the partial file is deleted before returning.
+pub fn openQADownloadToFile(
+    host: []const u8,
+    absolute_path: []const u8, // must start with "/"
+    dest_path: []const u8,
+    opts: RawGetOptions,
+    client: anytype,
+) !StreamResult {
+    const host_res = try config.resolveHost(opts.allocator, false, false, false, host);
+    defer if (host_res.allocated) opts.allocator.free(host_res.url);
+
+    const url = try std.fmt.allocPrint(opts.allocator, "{s}{s}", .{ host_res.url, absolute_path });
+    defer opts.allocator.free(url);
+
+    // A single streaming attempt: retries are disabled on the inner request so
+    // that THIS loop is the sole retry authority (avoids double-retrying).
+    const req = Request{
+        .allocator = opts.allocator,
+        .method = .GET,
+        .url = url,
+        .headers = &.{},
+        .body = null,
+        .credentials = opts.credentials,
         .retries = 0,
         .quiet = opts.quiet,
         .verbose = opts.verbose,
         .size_limit = opts.size_limit,
     };
 
-    return executeStream(req, client, writer, content_length_out);
+    const Outcome = union(enum) {
+        done: StreamResult, // success — keep the file
+        terminal: StreamResult, // non-retryable status — delete + return status
+        retry, // retryable failure — delete + backoff + try again
+        failed: anyerror, // retry-exhausted error — delete + return error
+    };
+
+    var attempt: u32 = 0;
+    while (true) : (attempt += 1) {
+        const outcome: Outcome = blk: {
+            const file = std.fs.cwd().createFile(dest_path, .{}) catch |err| break :blk .{ .failed = err };
+            defer file.close();
+
+            var file_buf: [65536]u8 = undefined;
+            var file_writer = file.writer(&file_buf);
+
+            const result = executeStream(req, client, &file_writer.interface, null) catch |err| {
+                // Connection error or mid-stream reset — retry if budget remains.
+                break :blk if (attempt < opts.retries) .retry else .{ .failed = err };
+            };
+
+            if (result.status == .ok) {
+                // Flush before the deferred close so the file is complete on disk.
+                file_writer.interface.flush() catch |err| break :blk .{ .failed = err };
+                break :blk .{ .done = result };
+            }
+
+            // Non-2xx: the body just written is an error page, not the asset.
+            const code = @intFromEnum(result.status);
+            if (code >= 500 and attempt < opts.retries) break :blk .retry;
+            break :blk .{ .terminal = result };
+        };
+
+        // The file is now closed (deferred inside the block). Act on the outcome.
+        switch (outcome) {
+            .done => |result| return result,
+            .terminal => |result| {
+                std.fs.cwd().deleteFile(dest_path) catch {};
+                return result;
+            },
+            .failed => |err| {
+                std.fs.cwd().deleteFile(dest_path) catch {};
+                return err;
+            },
+            .retry => {
+                std.fs.cwd().deleteFile(dest_path) catch {};
+                try sleepForRetry(attempt, opts.retry_sleep_s, opts.retry_factor);
+            },
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1130,7 +1301,7 @@ test "execute: hop-by-hop headers are excluded from response_headers" {
             content_length: ?u64 = null,
 
             // Emits: Content-Type, Connection, Keep-Alive, Transfer-Encoding,
-            // Server, Upgrade.  The hop-by-hop ones (Connection, Keep-Alive,
+            // Server, Upgrade. The hop-by-hop ones (Connection, Keep-Alive,
             // Transfer-Encoding, Upgrade) must be stripped; Content-Type and
             // Server must survive.
             const HeaderIterator = struct {

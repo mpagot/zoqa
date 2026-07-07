@@ -2718,8 +2718,8 @@ pub fn main() !void {
     const creds = try cli_credentials.resolveCredentials(gpa, host_for_creds, args.apikey, args.apisecret);
     defer if (creds) |c| c.deinit();
 
-    // Retry/timeout knobs: --retries > OPENQA_CLI_* env vars > defaults.
-    const retry_cfg = try cli_credentials.resolveRetryConfig(gpa, args.retries);
+    // Retry/timeout knobs: --retries > OPENQA_CLI_* env vars > defaults (0).
+    const retry_cfg = try cli_credentials.resolveRetryConfig(gpa, args.retries, 0);
     const retries = retry_cfg.retries;
     const connect_timeout_s = retry_cfg.connect_timeout_s;
     const retry_sleep_s = retry_cfg.retry_sleep_s;

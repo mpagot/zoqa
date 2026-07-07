@@ -68,12 +68,15 @@ pub fn resolveCredentials(
 
 /// Resolve retry/timeout configuration from environment variables.
 ///
-/// Priority: `cli_retries` (from --retries flag) > `OPENQA_CLI_RETRIES` env > 0.
-/// Timeout and backoff knobs are env-only (no CLI flags).
+/// Priority: `cli_retries` (from --retries flag) > `OPENQA_CLI_RETRIES` env >
+/// `default_retries`. Timeout and backoff knobs are env-only (no CLI flags).
 ///
 /// Arguments:
 ///   - `allocator`: Used only for temporary env-var string ownership.
-///   - `cli_retries`: Retry count from CLI `--retries` flag, or `null` to fall through to env/default.
+///   - `cli_retries`: Retry count from CLI `--retries`/`--retry` flag, or `null` to fall through to env/default.
+///   - `default_retries`: Value used when neither the CLI flag nor the env var
+///     is set. Most tools pass `0`; `clone-job` passes `5` to match the Perl
+///     reference's default. A user-set `OPENQA_CLI_RETRIES` still overrides it.
 ///
 /// Returns: A `RetryConfig` struct with all four knobs resolved.
 ///
@@ -83,14 +86,15 @@ pub fn resolveCredentials(
 pub fn resolveRetryConfig(
     allocator: std.mem.Allocator,
     cli_retries: ?u32,
+    default_retries: u32,
 ) !RetryConfig {
     const retries: u32 = cli_retries orelse blk: {
         const env_s = std.process.getEnvVarOwned(allocator, "OPENQA_CLI_RETRIES") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => break :blk 0,
+            error.EnvironmentVariableNotFound => break :blk default_retries,
             else => return err,
         };
         defer allocator.free(env_s);
-        break :blk std.fmt.parseInt(u32, env_s, 10) catch 0;
+        break :blk std.fmt.parseInt(u32, env_s, 10) catch default_retries;
     };
 
     const connect_timeout_s: f64 = blk: {
@@ -137,7 +141,7 @@ pub fn resolveRetryConfig(
 
 test "resolveRetryConfig defaults when no env vars set" {
     // In a typical test environment no OPENQA_CLI_* env vars are set.
-    const cfg = try resolveRetryConfig(std.testing.allocator, null);
+    const cfg = try resolveRetryConfig(std.testing.allocator, null, 0);
     try std.testing.expectEqual(@as(u32, 0), cfg.retries);
     try std.testing.expectEqual(@as(f64, 30.0), cfg.connect_timeout_s);
     try std.testing.expectEqual(@as(f64, 3.0), cfg.retry_sleep_s);
@@ -145,7 +149,14 @@ test "resolveRetryConfig defaults when no env vars set" {
 }
 
 test "resolveRetryConfig cli_retries takes priority" {
-    const cfg = try resolveRetryConfig(std.testing.allocator, 5);
+    const cfg = try resolveRetryConfig(std.testing.allocator, 5, 0);
+    try std.testing.expectEqual(@as(u32, 5), cfg.retries);
+}
+
+test "resolveRetryConfig falls back to default_retries when no CLI/env" {
+    // clone-job passes default_retries = 5; with no --retry flag and no
+    // OPENQA_CLI_RETRIES env var set, the default must win.
+    const cfg = try resolveRetryConfig(std.testing.allocator, null, 5);
     try std.testing.expectEqual(@as(u32, 5), cfg.retries);
 }
 

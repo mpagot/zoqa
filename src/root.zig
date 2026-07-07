@@ -52,6 +52,7 @@ pub const CallOptions = http_client.CallOptions;
 pub const RawGetOptions = http_client.RawGetOptions;
 pub const openQAReq = http_client.openQAReq;
 pub const openQARawGet = http_client.openQARawGet;
+pub const openQADownloadToFile = http_client.openQADownloadToFile;
 
 // ---------------------------------------------------------------------------
 // Tier 3 : Response parsers (defined here; pure stdlib, no zoqa-internal deps)

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# test_clone_single.sh — Single-job clone tests (CLO-12 to CLO-17, M43–M44, CLO-50 to CLO-83).
+# test_clone_single.sh — Single-job clone tests (CLO-12 to CLO-17, M43–M44, CLO-50 to CLO-83,
+#                         CLO-84 to CLO-89, CLO-98 to CLO-99).
 #
 # All tests in this file operate on a single base job ($JOB_ID) produced by
 # ensure_basic_job, plus CLO-80–83 which create their own phantom fixture job.
@@ -384,7 +385,6 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-set -x
 echo "--- Test CLO-71 CLO-78: Asset download ---"
 # --dir path must exist inside the container (commands run via container_exec).
 # Use separate dirs so Perl's downloads don't mask Zig's absence.
@@ -408,6 +408,8 @@ else
 	echo "FAIL: Perl asset download produced files"
 	failed_tests=$((failed_tests + 1))
 fi
+# CLO-71: every downloaded file must be bit-identical to the source asset.
+assert_downloaded_assets_md5 "$ASSET_DIR_PERL" "CLO-71 Perl"
 
 # Verify Zig downloaded at least one asset file.
 if container_exec find "$ASSET_DIR_ZIG" -type f | grep -q .; then
@@ -416,9 +418,10 @@ else
 	echo "FAIL: Zig asset download produced files"
 	failed_tests=$((failed_tests + 1))
 fi
+# CLO-78: same integrity check for Zig.
+assert_downloaded_assets_md5 "$ASSET_DIR_ZIG" "CLO-78 Zig"
 
 container_exec rm -rf "$ASSET_DIR_PERL" "$ASSET_DIR_ZIG"
-set +x
 
 # =============================================================================
 # CLO-80 to CLO-83: --ignore-missing-assets
@@ -472,12 +475,17 @@ else
 		echo "FAIL: Perl exits non-zero without --ignore-missing-assets (got $_PERL_EXIT)"
 		failed_tests=$((failed_tests + 1))
 	fi
+	# CLO-80 Perl: failed download must not leave a partial file behind.
+	assert_no_partial_files "$ASSET_DIR_CLO_80_PERL" "CLO-80 Perl"
+
 	if [[ "$_ZIG_EXIT" -ne 0 ]]; then
 		echo "PASS: Zig exits non-zero without --ignore-missing-assets"
 	else
 		echo "FAIL: Zig exits non-zero without --ignore-missing-assets (got $_ZIG_EXIT)"
 		failed_tests=$((failed_tests + 1))
 	fi
+	# CLO-80 Zig: same cleanup requirement.
+	assert_no_partial_files "$ASSET_DIR_CLO_80_ZIG" "CLO-80 Zig"
 
 	container_exec rm -rf "$ASSET_DIR_CLO_80_PERL" "$ASSET_DIR_CLO_80_ZIG"
 
@@ -528,3 +536,587 @@ else
 
 	container_exec rm -rf "$ASSET_DIR_CLO_81_PERL" "$ASSET_DIR_CLO_81_ZIG"
 fi
+
+# =============================================================================
+# CLO-RK-1: OPENQA_CLI_RETRY_SLEEP_TIME_S + OPENQA_CLI_RETRY_FACTOR smoke test
+#            for zoqa-clone-job (both Perl and Zig).
+#
+# These env vars tune the inter-retry delay in clone-job (via retry_tx / the
+# Zig retry loop).  Setting them to valid values on a healthy server should
+# have no observable effect beyond the clone completing normally.
+#
+# What we verify: both implementations accept the env vars without crashing
+# and exit 0 on a successful within-instance clone.
+# =============================================================================
+echo ""
+echo "==> [clone_job/single] CLO-RK-1: OPENQA_CLI_RETRY_SLEEP/FACTOR smoke (both impls)"
+
+ensure_basic_job
+
+echo "--- Test CLO-RK-1: OPENQA_CLI_RETRY_SLEEP_TIME_S + RETRY_FACTOR accepted by clone-job ---"
+run_capture "clo-rk-1" perl \
+	"bash -c \"OPENQA_CLI_RETRY_SLEEP_TIME_S=1 OPENQA_CLI_RETRY_FACTOR=2 \
+	$PERL_CLONE_EXE --within-instance http://localhost ${JOB_ID}\""
+if [[ "$_LAST_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-RK-1 Perl accepts OPENQA_CLI_RETRY_SLEEP_TIME_S + RETRY_FACTOR (exits 0)"
+else
+	echo "FAIL: CLO-RK-1 Perl exited $_LAST_EXIT with retry env vars set (expected 0)"
+	failed_tests=$((failed_tests + 1))
+fi
+
+run_capture "clo-rk-1" zig \
+	"bash -c \"OPENQA_CLI_RETRY_SLEEP_TIME_S=1 OPENQA_CLI_RETRY_FACTOR=2 \
+	$ZIG_CLONE_EXE --within-instance http://localhost ${JOB_ID}\""
+if [[ "$_LAST_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-RK-1 Zig accepts OPENQA_CLI_RETRY_SLEEP_TIME_S + RETRY_FACTOR (exits 0)"
+else
+	echo "FAIL: CLO-RK-1 Zig exited $_LAST_EXIT with retry env vars set (expected 0)"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# =============================================================================
+# CLO-84 to CLO-89: Asset download and BFS GET retry via fault-injecting proxy
+#
+# These tests exercise the --retry flag and exponential backoff during asset
+# download (§18.18 item 6).  A tiny stateful Python reverse proxy
+# (fixtures/faultproxy.py) listens on port 9797 inside the container.
+# For the first FAIL_TIMES requests to FAULT_PATH it returns the configured
+# error; subsequent requests are forwarded transparently to the real openQA
+# backend on :80.  The proxy logs every hit to COUNT_FILE so we can verify
+# the exact number of attempts made without relying on timing or stderr parsing.
+#
+# Oracle: openqa-clone-job (Perl) — the Perl implementation uses LWP::UserAgent
+# with its built-in retry (--retry flag, default 5, exponential back-off with
+# maximum 5 retries).  The Zig implementation currently does NOT retry
+# (retry_cfg is ignored in downloadAssets — Gap 2).
+#
+# Test matrix:
+#   CLO-84  503 × 2, then 200: Perl retries and succeeds (PASS expected).
+#   CLO-85  503 × 2, then 200: Zig does NOT retry → exits non-zero (FAIL expected — TDD).
+#   CLO-86  404 × 1 (always):  Neither tool retries on 404 — both exit non-zero (PASS expected).
+#   CLO-87  503 always (FAIL_TIMES=99): Perl exhausts retries → exits non-zero (PASS expected).
+#
+# IMPORTANT: CLO-85 is expected to FAIL until Gap 2 is implemented.  It is
+# written as a TDD marker (same pattern as CLO-90b for --max-depth).  The FAIL
+# line from CLO-85 will disappear once the retry logic is wired in.
+#
+# All four tests use the same job (ensure_rich_job — has a real HDD asset).
+# A fresh proxy process is started and stopped for each sub-test.
+# =============================================================================
+
+echo ""
+echo "==> [clone_job/single] CLO-84–87: Asset download retry (fault proxy)"
+
+# Ensure a rich job exists (has a real HDD asset: cirros-*.qcow2).
+ensure_rich_job
+RETRY_JOB_ID="$RICH_JOB_ID"
+
+# -----------------------------------------------------------------------------
+# CLO-84: 503 × 2 then 200 — Perl retries and succeeds (PASS expected)
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-84: Perl retries on transient 503 and succeeds ---"
+tag="clo-84"
+ASSET_DIR_CLO_84="/tmp/e2e-${tag}-perl-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_84"
+start_faultproxy 2 503
+
+run_capture "${tag}" perl \
+	"$PERL_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps \
+	 ${RETRY_JOB_ID} --dir ${ASSET_DIR_CLO_84}"
+_PERL_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+if [[ "$_PERL_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-84 Perl exits 0 (retried past 503s and downloaded asset)"
+else
+	echo "FAIL: CLO-84 Perl exited $_PERL_EXIT (expected 0 — should retry)"
+	cat "$LOG_DIR/${tag}_perl_stderr.log"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Verify Perl made 3 attempts: 2 faulted + 1 successful
+_CLO84_HITS=$(get_faultproxy_hits "/tests/${RETRY_JOB_ID}/asset/")
+if [[ "$_CLO84_HITS" -ge 3 ]]; then
+	echo "PASS: CLO-84 Perl made $_CLO84_HITS download attempts (2 faulted + ≥1 success)"
+else
+	echo "FAIL: CLO-84 Perl made only $_CLO84_HITS download attempt(s) (expected ≥3)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Verify a file was actually written to disk
+if container_exec find "$ASSET_DIR_CLO_84" -type f | grep -q .; then
+	echo "PASS: CLO-84 Perl wrote asset file(s) to disk"
+else
+	echo "FAIL: CLO-84 Perl wrote no files to disk"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+# CLO-84: after successful retry the file must be complete and unmodified.
+assert_downloaded_assets_md5 "$ASSET_DIR_CLO_84" "CLO-84 Perl"
+container_exec rm -rf "$ASSET_DIR_CLO_84"
+
+# -----------------------------------------------------------------------------
+# CLO-85: 503 × 2 then 200 — Zig does NOT retry → exits non-zero (TDD — FAIL expected)
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-85: Zig retry on 503 [TDD — FAIL expected until Gap 2 is fixed] ---"
+tag="clo-85"
+ASSET_DIR_CLO_85="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_85"
+start_faultproxy 2 503
+
+run_capture "${tag}" zig \
+	"$ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps \
+	 ${RETRY_JOB_ID} --dir ${ASSET_DIR_CLO_85}"
+_ZIG_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+# Current behaviour: Zig exits non-zero because it makes exactly 1 attempt and
+# treats the 503 as a fatal error.  Once Gap 2 is implemented, this should exit
+# 0 (like Perl in CLO-84) — at that point flip the expected exit to 0 and
+# remove the TDD comment above.
+if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+	echo "FAIL: CLO-85 Zig exited $_ZIG_EXIT — confirms Gap 2 (retry not implemented)"
+	failed_tests=$((failed_tests + 1))
+else
+	echo "PASS: CLO-85 Zig retried and succeeded (Gap 2 implemented)"
+fi
+
+# Verify Zig retried the transient 503 (≥ 3 hits: 2 faulted + ≥1 success),
+# matching the Perl oracle in CLO-84 now that Gap 2 (asset retry) is implemented.
+_CLO85_HITS=$(get_faultproxy_hits "/tests/${RETRY_JOB_ID}/asset/")
+if [[ "$_CLO85_HITS" -ge 3 ]]; then
+	echo "PASS: CLO-85 Zig made $_CLO85_HITS download attempts (2 faulted + ≥1 success — retried correctly)"
+else
+	echo "FAIL: CLO-85 Zig made only $_CLO85_HITS download attempt(s) (expected ≥3 — should retry transient 503)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+# CLO-85: a failed download must not leave a partial file.  Same requirement as
+# CLO-99 and the Perl equivalents — both implementations must clean up on error.
+assert_no_partial_files "$ASSET_DIR_CLO_85" "CLO-85 Zig"
+container_exec rm -rf "$ASSET_DIR_CLO_85"
+
+# -----------------------------------------------------------------------------
+# CLO-86: 404 — no retry for either implementation; exit code differs.
+# PERL BUG: openqa-clone-job calls curl without --fail, so curl exits 0 even
+# on 404; the error check in clone_job_download_assets is therefore a no-op.
+# ZIG DEVIATION (intentional): zoqa-clone-job MUST exit 1 on 404 — see
+# SPEC.md §18.18.1 (Deliberate divergence: exit code on download failure).
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-86: 404 response — Perl exits 0 (known bug), Zig exits 1 (correct) ---"
+tag="clo-86"
+ASSET_DIR_CLO_86_PERL="/tmp/e2e-${tag}-perl-$$"
+ASSET_DIR_CLO_86_ZIG="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_86_PERL" "$ASSET_DIR_CLO_86_ZIG"
+start_faultproxy 99 404  # always 404 — FAIL_TIMES=99 means every request faults
+
+run_capture "${tag}" perl \
+	"$PERL_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps \
+	 ${RETRY_JOB_ID} --dir ${ASSET_DIR_CLO_86_PERL}"
+_PERL_EXIT=$_LAST_EXIT
+
+# Restart proxy to completely reset in-memory hit counts for Zig
+start_faultproxy 99 404
+
+run_capture "${tag}" zig \
+	"$ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps \
+	 ${RETRY_JOB_ID} --dir ${ASSET_DIR_CLO_86_ZIG}"
+_ZIG_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+# Perl exits 0 on 404 — known upstream bug (curl without --fail).
+# We document this but do NOT fail the suite on it.
+if [[ "$_PERL_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-86 Perl exits 0 on 404 (known bug — curl without --fail; see SPEC.md §18.18.1)"
+else
+	echo "WARN: CLO-86 Perl exited $_PERL_EXIT on 404 (unexpected — upstream bug may have been fixed)"
+fi
+# CLO-86 Perl: a 404 is a failure; no partial file must remain (TDD — Perl
+# currently writes the 404 response body to disk via curl).
+assert_no_partial_files "$ASSET_DIR_CLO_86_PERL" "CLO-86 Perl"
+
+# Zig MUST exit non-zero on 404 — intentional deviation from Perl (see SPEC.md §18.18.1).
+if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+	echo "PASS: CLO-86 Zig exits non-zero on 404 (correct — intentional deviation from Perl)"
+else
+	echo "FAIL: CLO-86 Zig exited 0 on 404 (regression — Zig must fail on 404)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Key property: on 404 the spec says "fail immediately, no retry".
+_CLO86_ZIG_HITS=$(get_faultproxy_hits "/tests/${RETRY_JOB_ID}/asset/")
+if [[ "$_CLO86_ZIG_HITS" -eq 1 ]]; then
+	echo "PASS: CLO-86 Zig made exactly 1 attempt on 404 (no retry — correct per spec)"
+else
+	echo "FAIL: CLO-86 Zig made $_CLO86_ZIG_HITS attempt(s) on 404 (expected 1)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+# CLO-86 Zig: same cleanup requirement as Perl — no partial file after 404.
+assert_no_partial_files "$ASSET_DIR_CLO_86_ZIG" "CLO-86 Zig"
+container_exec rm -rf "$ASSET_DIR_CLO_86_PERL" "$ASSET_DIR_CLO_86_ZIG"
+
+# -----------------------------------------------------------------------------
+# CLO-87: 503 always (FAIL_TIMES=99), --retry 2 — Perl exhausts retries.
+# PERL BUG: same curl --fail omission as CLO-86 — Perl exits 0 even after
+# exhausting all retries.
+# Hit count: 12 = (HEAD+GET) × (1+2 retries) × 2 assets.
+#   Perl's _resolve_redirection issues HEAD per asset (inherits --retry);
+#   then the actual download issues GET (also with --retry).  Both go through
+#   the proxy.  3 attempts × 2 request types × 2 assets = 12.
+# ZIG DEVIATION (TDD, Gap 2): once retry is implemented, Zig must exit 1 after
+# exhausting retries — see SPEC.md §18.18.1.
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-87: Perl exhausts retries on persistent 503, exits 0 (known bug) ---"
+tag="clo-87"
+ASSET_DIR_CLO_87="/tmp/e2e-${tag}-perl-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_87"
+start_faultproxy 99 503  # never succeeds
+
+# Use --retry 2 to keep the test fast (2 retries = 3 total attempts, ~7s backoff).
+run_capture "${tag}" perl \
+	"$PERL_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps --retry 2 \
+	 ${RETRY_JOB_ID} --dir ${ASSET_DIR_CLO_87}"
+_PERL_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+# Perl exits 0 — same curl --fail bug as CLO-86; documented, not a suite failure.
+if [[ "$_PERL_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-87 Perl exits 0 after exhausting retries (known bug — curl without --fail; see SPEC.md §18.18.1)"
+else
+	echo "WARN: CLO-87 Perl exited $_PERL_EXIT (unexpected — upstream bug may have been fixed)"
+fi
+
+# Verify curl's retry behavior: (HEAD+GET) × 3 attempts × 2 assets = 12 proxy hits.
+# HEAD comes from _resolve_redirection; GET is the actual download.  Both carry --retry 2.
+_CLO87_HITS=$(get_faultproxy_hits "/tests/${RETRY_JOB_ID}/asset/")
+if [[ "$_CLO87_HITS" -eq 12 ]]; then
+	echo "PASS: CLO-87 Perl made 12 proxy hits ((HEAD+GET)×3 attempts×2 assets — correct curl retry count)"
+else
+	echo "FAIL: CLO-87 Perl made $_CLO87_HITS proxy hit(s) (expected 12 for --retry 2, 2 assets)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+# CLO-87: all retries exhausted, download never succeeded — no partial file must remain.
+assert_no_partial_files "$ASSET_DIR_CLO_87" "CLO-87 Perl"
+container_exec rm -rf "$ASSET_DIR_CLO_87"
+
+# -----------------------------------------------------------------------------
+# CLO-88: --retry 0 disables retries on asset downloads (both implementations)
+#
+# With --retry 0 the user explicitly opts out of all retrying.  The proxy
+# always returns 503 so any retry would be detectable as extra proxy hits.
+#
+# Observable behaviour:
+#   Perl: exits 0 (known curl --fail bug); makes exactly 4 proxy hits
+#         (HEAD+GET for resolution+download × 2 assets, no retries)
+#   Zig:  exits non-zero (correct — 503 is an error); makes exactly 2 proxy hits
+#         (GET × 2 assets, no retries)
+#
+# The hit-count assertions are the key: if --retry 0 is ignored and retries
+# happen, the counts would be much higher (e.g. 28 for Perl with default 5 retries).
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-88: --retry 0 disables retries (Perl 4 hits exits 0, Zig 2 hits exits 1) ---"
+tag="clo-88"
+ASSET_DIR_CLO_88_PERL="/tmp/e2e-${tag}-perl-$$"
+ASSET_DIR_CLO_88_ZIG="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_88_PERL" "$ASSET_DIR_CLO_88_ZIG"
+start_faultproxy 99 503  # always 503 — so any retry would be visible as extra hits
+
+run_capture "${tag}" perl \
+	"$PERL_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps --retry 0 \
+	 ${RETRY_JOB_ID} --dir ${ASSET_DIR_CLO_88_PERL}"
+_PERL_EXIT=$_LAST_EXIT
+
+# Restart proxy to completely reset in-memory hit counts for Zig
+start_faultproxy 99 503
+
+run_capture "${tag}" zig \
+	"$ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps --retry 0 \
+	 ${RETRY_JOB_ID} --dir ${ASSET_DIR_CLO_88_ZIG}"
+_ZIG_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+# Perl exits 0 — same curl --fail bug as CLO-86/CLO-87.
+if [[ "$_PERL_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-88 Perl exits 0 with --retry 0 (known curl --fail bug)"
+else
+	echo "WARN: CLO-88 Perl exited $_PERL_EXIT (unexpected — upstream bug may have been fixed)"
+fi
+# CLO-88 Perl: download failed (503), no partial file must remain.
+assert_no_partial_files "$ASSET_DIR_CLO_88_PERL" "CLO-88 Perl"
+
+# Zig exits non-zero — correct, the server returned 503.
+if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+	echo "PASS: CLO-88 Zig exits non-zero with --retry 0 on persistent 503 (correct)"
+else
+	echo "FAIL: CLO-88 Zig exited 0 on 503 with --retry 0 (regression)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Key assertion: --retry 0 means no retries — both tools make minimal attempts.
+# Zig should make exactly 2 hits (1 GET per asset × 2 assets).
+_CLO88_ZIG_HITS=$(get_faultproxy_hits "/tests/${RETRY_JOB_ID}/asset/")
+if [[ "$_CLO88_ZIG_HITS" -le 2 ]]; then
+	echo "PASS: CLO-88 Zig made $_CLO88_ZIG_HITS download attempt(s) with --retry 0 (no retries — correct)"
+else
+	echo "FAIL: CLO-88 Zig made $_CLO88_ZIG_HITS attempt(s) with --retry 0 (expected ≤2 — --retry 0 not honoured)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+# CLO-88 Zig: same cleanup requirement — no partial file after failed 503.
+assert_no_partial_files "$ASSET_DIR_CLO_88_ZIG" "CLO-88 Zig"
+
+container_exec rm -rf "$ASSET_DIR_CLO_88_PERL" "$ASSET_DIR_CLO_88_ZIG"
+
+# -----------------------------------------------------------------------------
+# CLO-89: Default --retry (5) retries BFS GET on transient 503 [TDD for Zig]
+#
+# The most important user-facing retry scenario: the SOURCE server is briefly
+# unavailable when clone-job tries to fetch job info.  With the default retry
+# count of 5, the clone should succeed after the transient errors clear.
+#
+# Setup: fault proxy intercepts /api/v1/jobs/ (BFS GETs) with 2 × 503, then
+# forwards normally.  Asset downloads and POST bypass the proxy entirely:
+#   --from proxy  → BFS GETs go through proxy
+#   --host localhost → POST goes directly to real backend (port 80)
+#   --skip-download  → no asset downloads
+#
+# Observable behaviour:
+#   Perl: exits 0 — default --retry 5 retries the BFS GET past the 503s
+#         → clone succeeds; proxy sees ≥ 3 hits on the job path
+#   Zig (TDD): exits non-zero — resolveRetryConfig(gpa, null) falls back to
+#         OPENQA_CLI_RETRIES (default 0), so Zig gives up on first 503
+#         → proxy sees exactly 1 hit on the job path
+#
+# Fix needed: default args.retry to 5 (matching Perl's $options->{retry} //= 5)
+# so that BFS GETs and POST also retry by default.  Once fixed, Zig will pass
+# this test and the TDD FAIL line will disappear.
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-89: default --retry retries BFS GET on 503 [TDD — FAIL expected until Zig default fixed] ---"
+tag="clo-89"
+
+# Override FAULT_PATH so only /api/v1/jobs/ fetches are faulted.
+start_faultproxy 2 503 /api/v1/jobs/
+
+run_capture "${tag}" perl \
+	"$PERL_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps --skip-download \
+	 ${RETRY_JOB_ID}"
+_PERL_EXIT=$_LAST_EXIT
+
+# Reset proxy hit counts before running Zig via self-resetting truncation
+reset_faultproxy
+
+run_capture "${tag}" zig \
+	"$ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps --skip-download \
+	 ${RETRY_JOB_ID}"
+_ZIG_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+# Perl: should exit 0 — default --retry 5 retries the BFS GET past the 503s.
+if [[ "$_PERL_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-89 Perl exits 0 (default --retry 5 retried BFS GET past 503s)"
+else
+	echo "FAIL: CLO-89 Perl exited $_PERL_EXIT (expected 0 — should retry BFS GET by default)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Verify Perl made ≥ 3 hits on the job path (2 faulted + 1 success)
+_CLO89_PERL_HITS=$(get_faultproxy_hits "/api/v1/jobs/${RETRY_JOB_ID}")
+if [[ "$_CLO89_PERL_HITS" -ge 3 ]]; then
+	echo "PASS: CLO-89 Perl made $_CLO89_PERL_HITS BFS hits (2 faulted + ≥1 success — retried correctly)"
+else
+	echo "FAIL: CLO-89 Perl made only $_CLO89_PERL_HITS BFS hit(s) (expected ≥3)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Zig (TDD): currently exits non-zero because it uses 0 retries by default.
+# Once args.retry defaults to 5, this should become exit 0 like Perl.
+if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+	echo "FAIL: CLO-89 Zig exited $_ZIG_EXIT — confirms Zig wrong default (0 retries instead of 5)"
+	failed_tests=$((failed_tests + 1))
+else
+	echo "PASS: CLO-89 Zig retried BFS GET by default and succeeded (Zig default fixed)"
+fi
+
+# Verify Zig retried the BFS GET by default (≥ 3 hits: 2 faulted + ≥1 success),
+# matching the Perl oracle above now that args.retry defaults to 5.
+_CLO89_ZIG_HITS=$(get_faultproxy_hits "/api/v1/jobs/${RETRY_JOB_ID}")
+if [[ "$_CLO89_ZIG_HITS" -ge 3 ]]; then
+	echo "PASS: CLO-89 Zig made $_CLO89_ZIG_HITS BFS hits (2 faulted + ≥1 success — retried correctly)"
+else
+	echo "FAIL: CLO-89 Zig made only $_CLO89_ZIG_HITS BFS hit(s) (expected ≥3 — should retry BFS GET by default)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Ensure no stray proxy process is left running after this section
+stop_faultproxy
+
+# =============================================================================
+# CLO-98 / CLO-99: Mid-transfer TCP drop — partial fault mode
+#
+# These tests exercise the scenario described in gap2_plan.md §"Half-Written
+# File Problem": http_client.zig:streamRemaining (line ~574) fails mid-stream
+# because the TCP connection is reset after the 200 OK headers and the first
+# few bytes of the body have already been received.
+#
+# The proxy (fixtures/faultproxy.py --fault-mode partial) forwards the request
+# to the backend, sends the HTTP 200 response headers and exactly PARTIAL_BYTES
+# bytes of the body, then applies SO_LINGER(1,0) so the TCP connection is
+# reset with RST rather than closed with FIN.  Content-Length is deliberately
+# withheld so the client receives CURLE_RECV_ERROR (56) — which curl retries
+# via --retry — rather than CURLE_PARTIAL_FILE (18) which curl does not retry.
+#
+# HEAD requests always pass through in partial mode (they carry no body, so
+# partial-body injection is a no-op).  Only GET asset requests are faulted,
+# keeping the fault budget aligned with what Zig's downloadAssets actually sees.
+#
+# Oracle: openqa-clone-job (Perl) — curl invoked with --retry N detects the
+# mid-stream connection reset (error 56) and retries internally.  After the
+# fault budget (fail_times=2) is exhausted the third attempt succeeds and Perl
+# exits 0.
+#
+# Test matrix:
+#   CLO-98  partial × 2, then 200:  Perl retries and succeeds (PASS expected).
+#   CLO-99  partial × 2, then 200:  Zig does NOT retry → exits non-zero
+#                                    (FAIL expected — TDD until Gap 2 is fixed).
+#
+# IMPORTANT: CLO-99 is a TDD marker — the same pattern as CLO-85.  It documents
+# the current behaviour.  Once Gap 2 is implemented (retry loop in downloadAssets
+# that re-creates the file on each attempt), CLO-99 should be flipped to expect
+# exit 0 and ≥3 proxy hits.
+# =============================================================================
+
+echo ""
+echo "==> [clone_job/single] CLO-98–99: Mid-transfer TCP drop (partial fault mode)"
+
+# Reuse the rich job that has a real HDD asset (cirros qcow2).
+ensure_rich_job
+PARTIAL_JOB_ID="$RICH_JOB_ID"
+
+# -----------------------------------------------------------------------------
+# CLO-98: partial × 2 then 200 — Perl retries and succeeds (PASS expected)
+#
+# curl's --retry retries on CURLE_RECV_ERROR (56, receive-failure / ECONNRESET).
+# With fail_times=2 and default --retry 5, Perl's curl makes 3 total attempts
+# for each asset GET: 2 partial-RST failures then 1 clean 200.
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-98: Perl retries after mid-transfer TCP drop and succeeds ---"
+tag="clo-98"
+ASSET_DIR_CLO_98="/tmp/e2e-${tag}-perl-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_98"
+# partial mode: HEAD passes through; GET is faulted for the first 2 attempts.
+# 64 bytes is well below the cirros qcow2 size so truncation is always visible.
+start_faultproxy 2 partial /tests/ 64
+
+run_capture "${tag}" perl \
+	"$PERL_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps \
+	 ${PARTIAL_JOB_ID} --dir ${ASSET_DIR_CLO_98}"
+_PERL_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+if [[ "$_PERL_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-98 Perl exits 0 (retried past mid-transfer TCP drops and downloaded asset)"
+else
+	echo "FAIL: CLO-98 Perl exited $_PERL_EXIT (expected 0 — curl should retry on ECONNRESET)"
+	cat "$LOG_DIR/${tag}_perl_stderr.log"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Verify Perl made ≥ 3 download attempts (2 partial-RST + 1 success) per asset.
+_CLO98_HITS=$(get_faultproxy_hits "/tests/${PARTIAL_JOB_ID}/asset/")
+if [[ "$_CLO98_HITS" -ge 3 ]]; then
+	echo "PASS: CLO-98 Perl made $_CLO98_HITS proxy hits (2 partial-RST + ≥1 success per asset)"
+else
+	echo "FAIL: CLO-98 Perl made only $_CLO98_HITS proxy hit(s) (expected ≥3 — curl retry not firing)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Verify the asset was fully written to disk after retries
+if container_exec find "$ASSET_DIR_CLO_98" -type f | grep -q .; then
+	echo "PASS: CLO-98 Perl wrote asset file(s) to disk"
+else
+	echo "FAIL: CLO-98 Perl wrote no files to disk"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+# CLO-98: after retry the file must be complete — not a concatenation of partial
+# transfers from multiple attempts.
+assert_downloaded_assets_md5 "$ASSET_DIR_CLO_98" "CLO-98 Perl"
+container_exec rm -rf "$ASSET_DIR_CLO_98"
+
+# -----------------------------------------------------------------------------
+# CLO-99: partial × 2 then 200 — Zig no retry → exits non-zero [TDD]
+#
+# streamRemaining in http_client.zig returns an error on ECONNRESET.
+# downloadAssets currently has no retry loop (Gap 2): it exits immediately on
+# any stream error.  Once Gap 2 is implemented (retry loop that re-creates the
+# destination file on each attempt), this test should be flipped to match
+# CLO-98's expectations: exit 0, ≥3 hits, file on disk.
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-99: Zig mid-transfer TCP drop [TDD — FAIL expected until Gap 2 is fixed] ---"
+tag="clo-99"
+ASSET_DIR_CLO_99="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_99"
+start_faultproxy 2 partial /tests/ 64
+
+run_capture "${tag}" zig \
+	"$ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps \
+	 ${PARTIAL_JOB_ID} --dir ${ASSET_DIR_CLO_99}"
+_ZIG_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+# Current behaviour: Zig exits non-zero — streamRemaining fails and
+# downloadAssets has no retry loop yet (Gap 2).  Once Gap 2 is implemented
+# this should become exit 0 (matching Perl's CLO-98 behaviour); at that point
+# flip the expected exit to 0 and remove the TDD comment above.
+if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+	echo "FAIL: CLO-99 Zig exited $_ZIG_EXIT — confirms Gap 2 (no retry on mid-transfer ECONNRESET)"
+	failed_tests=$((failed_tests + 1))
+else
+	echo "PASS: CLO-99 Zig retried after mid-transfer drop and succeeded (Gap 2 implemented)"
+fi
+
+# Verify Zig made exactly 1 attempt (no retry — current behaviour).
+_CLO99_HITS=$(get_faultproxy_hits "/tests/${PARTIAL_JOB_ID}/asset/")
+if [[ "$_CLO99_HITS" -eq 1 ]]; then
+	echo "PASS: CLO-99 Zig made exactly 1 proxy hit (no retry — expected while Gap 2 is unimplemented)"
+else
+	echo "FAIL: CLO-99 Zig made $_CLO99_HITS proxy hit(s) (expected 1 while Gap 2 is unimplemented)"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+# CLO-99: streamRemaining failed mid-transfer — no partial file must remain.
+# This mirrors the CLO-85 requirement for 503 and CLO-98 for the success case.
+assert_no_partial_files "$ASSET_DIR_CLO_99" "CLO-99 Zig"
+container_exec rm -rf "$ASSET_DIR_CLO_99"
+
+set +x  # end of CLO-98–99 trace
