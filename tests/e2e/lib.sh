@@ -727,6 +727,111 @@ assert_impl_log_pattern() {
 	fi
 }
 
+# ---------------------------------------------------------------------------
+# assert_downloaded_assets_md5 ASSET_DIR LABEL
+#
+# For every file under ASSET_DIR, computes its MD5 inside the container and
+# compares it against the corresponding source file at
+# /var/lib/openqa/share/factory/<rel_path>.
+#
+# The relative path is derived by stripping ASSET_DIR/ from the downloaded
+# path.  Example:
+#   downloaded: /tmp/e2e-clo84-perl-42/hdd/cirros.qcow2
+#   source:     /var/lib/openqa/share/factory/hdd/cirros.qcow2
+#
+# A mismatch means the file is corrupt or truncated (e.g. a partial transfer
+# that was not retried properly).  Increments failed_tests on any mismatch.
+# Silently returns 0 if the directory is empty (file-existence is the
+# caller's responsibility).
+# ---------------------------------------------------------------------------
+assert_downloaded_assets_md5() {
+	local asset_dir="$1"
+	local label="$2"
+
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] assert_downloaded_assets_md5 $asset_dir $label"
+		return 0
+	fi
+
+	local file_list
+	file_list=$(container_exec find "$asset_dir" -type f 2>/dev/null | sort)
+	if [[ -z "$file_list" ]]; then
+		return 0  # nothing downloaded; caller already asserted presence
+	fi
+
+	local _md5_pass=true
+	while IFS= read -r downloaded_file; do
+		if [[ -z "$downloaded_file" ]]; then continue; fi
+		local rel_path="${downloaded_file#"${asset_dir}"/}"
+		local source_file="/var/lib/openqa/share/factory/${rel_path}"
+
+		local downloaded_md5
+		downloaded_md5=$(container_exec bash -c \
+			"md5sum '${downloaded_file}' 2>/dev/null | awk '{print \$1}'" || echo "")
+		local source_md5
+		source_md5=$(container_exec bash -c \
+			"md5sum '${source_file}' 2>/dev/null | awk '{print \$1}'" || echo "")
+
+		if [[ -z "$downloaded_md5" ]]; then
+			echo "FAIL: ${label} MD5 — cannot compute hash of downloaded file: ${downloaded_file}"
+			_md5_pass=false
+		elif [[ -z "$source_md5" ]]; then
+			echo "FAIL: ${label} MD5 — cannot compute hash of source file: ${source_file}"
+			_md5_pass=false
+		elif [[ "$downloaded_md5" == "$source_md5" ]]; then
+			echo "PASS: ${label} MD5 OK — ${rel_path} (${downloaded_md5})"
+		else
+			echo "FAIL: ${label} MD5 mismatch — ${rel_path}: downloaded=${downloaded_md5} expected=${source_md5}"
+			_md5_pass=false
+		fi
+	done <<< "$file_list"
+
+	if [[ "$_md5_pass" == "false" ]]; then
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# assert_no_partial_files ASSET_DIR LABEL
+#
+# Verifies that no files remain in ASSET_DIR after a failed download.  Both
+# Perl and Zig must clean up (delete or never create) the destination file
+# when a download attempt fails — leaving a partial or empty file behind is
+# incorrect because it would silently replace a previously good copy.
+#
+# Any file found (regardless of size, including 0-byte stubs left by a
+# create-before-download pattern) is reported as a failure.
+#
+# Increments failed_tests if any leftover files are found.
+# ---------------------------------------------------------------------------
+assert_no_partial_files() {
+	local asset_dir="$1"
+	local label="$2"
+
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] assert_no_partial_files $asset_dir $label"
+		return 0
+	fi
+
+	local leftover_files
+	leftover_files=$(container_exec find "$asset_dir" -type f 2>/dev/null | sort)
+
+	if [[ -z "$leftover_files" ]]; then
+		echo "PASS: ${label} — no partial files left after failed download"
+	else
+		local count
+		count=$(echo "$leftover_files" | grep -c .)
+		echo "FAIL: ${label} — ${count} partial/leftover file(s) found after failed download (expected none):"
+		while IFS= read -r f; do
+			if [[ -z "$f" ]]; then continue; fi
+			local sz
+			sz=$(container_exec bash -c "wc -c < '${f}' 2>/dev/null" || echo "?")
+			echo "  ${f} (${sz} bytes)"
+		done <<< "$leftover_files"
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
 # ===========================================================================
 # Audit Log Helpers
 #

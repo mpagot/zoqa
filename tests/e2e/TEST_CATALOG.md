@@ -12,14 +12,14 @@ of the harness and how to run it, see [README.md](README.md).
 | `tests_data.sh` | C | Seeded data: pagination, DELETE, output parity, path handling | DAT-18–DAT-24 |
 | `tests_output.sh` | D | Output formatting: `--verbose`, `--pretty`, `--name`, header count | OUT-25–OUT-45 |
 | `tests_robustness.sh` | E | Broken pipe, non-2xx stderr, `--quiet` suppression | ROB-1–ROB-3 |
-| `tests_retry_knobs.sh` | F | Retry/timeout env vars and CLI flags | RET-2–RET-8 |
+| `tests_retry_knobs.sh` | F | Retry/timeout env vars and CLI flags | RET-2–RET-9 |
 | `tests_perf.sh` | G | Performance: timing, peak RSS, interpreter baseline | PERF-B1–PERF-R9 |
 | `tests_archive.sh` | H | Archive subcommand | ARC-1–ARC-63 |
 | `tests_help.sh` | I | Help output structure and stream routing | HEL-1–HEL-8 |
 | `tests_monitor.sh` | I | Monitor subcommand | MON-1–MON-51 |
 | `tests_schedule.sh` | J | Schedule subcommand | SCH-1–SCH-RK-3 |
 | `tests_clone_smoke.sh` | K | Clone-job: smoke (--help, no-args, bare integer) | CLO-1–CLO-11 |
-| `tests_clone_single.sh` | K | Clone-job: single-job flags (--reproduce, --repeat, assets, …) | CLO-12–CLO-83 |
+| `tests_clone_single.sh` | K | Clone-job: single-job flags (--reproduce, --repeat, assets, …) | CLO-12–CLO-83, CLO-RK-1, CLO-84–CLO-89 |
 | `tests_clone_topology.sh` | K | Clone-job: graph topologies (chained, fan-out, diamond, parallel) | CLO-20–M42 |
 | `tests_clone_maxdepth.sh` | K | Clone-job: --max-depth traversal limits | CLO-90–CLO-97 |
 | `tests_stress.sh` | L | Large response stress and gzip negotiation tests | STRESS-1–STRESS-3 |
@@ -108,13 +108,14 @@ of the harness and how to run it, see [README.md](README.md).
 ### Retry & Timeout Knobs (`tests_retry_knobs.sh`)
 | # | Test | Verification |
 |---|---|---|
-| RET-2 | `OPENQA_CLI_RETRIES=0` | Explicit zero accepted on a good request (exit 0). |
-| RET-3 | `OPENQA_CLI_RETRIES=abc` | Invalid value falls back gracefully, no crash. |
-| RET-4 | `RETRY_SLEEP_TIME_S` + `RETRY_FACTOR` | Valid numeric values accepted (exit 0). |
-| RET-5 | Invalid sleep/factor values | Invalid env var values fall back gracefully, no crash. |
+| RET-2 | `OPENQA_CLI_RETRIES=0` | Explicit zero accepted; both Perl and Zig exit 0 on a healthy request. |
+| RET-3 | `OPENQA_CLI_RETRIES=abc` | Invalid value falls back gracefully; both exit 0, no crash. |
+| RET-4 | `RETRY_SLEEP_TIME_S` + `RETRY_FACTOR` | Valid numeric values accepted; both exit 0. |
+| RET-5 | Invalid sleep/factor values | Invalid env var values fall back gracefully; both exit 0, no crash. |
 | RET-6 | `--retries 0` CLI flag | CLI flag accepted by both implementations (exit 0). |
 | RET-7 | `OPENQA_CLI_CONNECT_TIMEOUT` valid | Valid numeric connect timeout accepted (exit 0). |
 | RET-8 | `OPENQA_CLI_CONNECT_TIMEOUT` invalid | Invalid (non-numeric) value rejected (exit 1). |
+| RET-9 | `OPENQA_CLI_RETRIES=2` functional | Fault proxy injects 2×503 then forwards; `OPENQA_CLI_RETRIES=2` → both retry and exit 0; exactly 3 proxy hits confirms retrying occurred. |
 
 ### Help Output Structure (`tests_help.sh`)
 | # | Test | Verification |
@@ -276,8 +277,7 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-42 | --clone-children (parallel) | Cloning parallel parent with `--clone-children` creates both (2 jobs). |
 | CLO-43 | Bare --host localhost to http:// | Clone-job special-cases bare `localhost` to `http://` (not `https://`). |
 | CLO-44 | Bare --host 127.0.0.1 to https:// | Non-localhost bare host gets `https://` (TLS error expected). |
-| CLO-90 | Perl oracle: default --max-depth 1 | No `--max-depth` flag → Perl clones only 2 jobs (layer_a + layer_b) from a 17-layer chain. |
-| CLO-90b | Zig TDD: default --max-depth is 1 | Known gap (CLONE_JOB_TODO.md §Gap 1): Zig defaults to unlimited, not 1 — TDD marker. |
+| CLO-90 | Default --max-depth is 1 (Perl == Zig) | No `--max-depth` flag → both clone only 2 jobs (layer_a + layer_b) from a 17-layer chain. |
 | CLO-91 | Explicit --max-depth 1 | Both Perl and Zig clone 2 jobs from the deeplayer root. |
 | CLO-91b | --max-depth 1 layer identity | Cloned jobs are layer_a and layer_b; layer_c is absent. |
 | CLO-92 | --max-depth 3 | Both clone 4 jobs (layer_a–layer_d); layer_e is absent. |
@@ -286,6 +286,15 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-95 | --max-depth does not limit parents | Cloning leaf (layer_s) with `--max-depth 1` still produces all 17 ancestors. |
 | CLO-96 | Clone from middle + --max-depth 2 | layer_i (position 9) as root: 8 ancestors + layer_i + layer_l = 11 jobs; layer_m (child-depth 3) absent. |
 | CLO-97 | Middle + --skip-deps + --max-depth 0 | layer_i + all 8 descendants (l–s) = 9 jobs; no parents (--skip-deps). |
+| CLO-RK-1 | `OPENQA_CLI_RETRY_SLEEP_TIME_S` + `RETRY_FACTOR` for clone-job | Both Perl and Zig accept these env vars on a healthy server and exit 0. |
+| CLO-84 | Perl retries on 503 | Fault proxy injects 2×503 then forwards; Perl retries and exits 0; ≥3 proxy hits confirmed; MD5 of downloaded asset verified against source. |
+| CLO-85 | Zig retry on 503 [TDD] | Same fault scenario as CLO-84; Zig currently exits non-zero (Gap 2 unimplemented); exactly 1 proxy hit; no partial file must remain (TDD). |
+| CLO-86 | 404 → no retry (both) | Proxy always returns 404; Zig exits non-zero (correct) and must leave no partial file; Perl exits 0 (known bug) and must also leave no partial file (TDD for cleanup). |
+| CLO-87 | Perl exhausts retries | Proxy always 503; `--retry 2` → Perl exits 0 after exactly 3 attempts (known curl bug); no partial file must remain (TDD for cleanup). |
+| CLO-88 | `--retry 0` disables retries | Proxy always 503; `--retry 0` → both tools make minimal attempts; Zig exits non-zero and must leave no partial file; Perl exits 0 (known bug) and must also leave no partial file (TDD). |
+| CLO-89 | Default --retry retries BFS GET [TDD] | Proxy faults `/api/v1/jobs/` with 2×503 then forwards; Perl retries by default and succeeds; Zig currently fails (wrong default of 0 retries instead of 5). |
+| CLO-98 | Perl retries after mid-transfer TCP drop | Proxy sends 200 + 64 bytes then RST (partial mode) × 2, then forwards cleanly; Perl's curl retries on CURLE_RECV_ERROR (56) and exits 0; ≥3 proxy hits confirmed; MD5 verified — file must not be a concatenation of partial attempts. |
+| CLO-99 | Zig mid-transfer TCP drop [TDD] | Same partial fault scenario as CLO-98; Zig currently exits non-zero (Gap 2 unimplemented — no retry in `downloadAssets`); exactly 1 proxy hit; no partial file must remain (TDD). |
 
 ### Stress Tests (`tests_stress.sh`)
 | # | Test | Verification |

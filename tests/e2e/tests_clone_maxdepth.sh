@@ -19,10 +19,10 @@
 # --max-depth does NOT apply to parents: the parent BFS always traverses
 # the full ancestor chain regardless of N.
 #
-# Known Zig gap (CLONE_JOB_TODO.md §Gap 1): Zig default is currently unlimited
-# instead of 1 — CLO-90b is a TDD test that documents this gap.
-# All other tests supply an explicit --max-depth flag so that Perl and Zig
-# exercise the same code path and can be compared.
+# The default --max-depth is 1 for both Perl and Zig (CLONE_JOB_TODO.md §Gap 1,
+# resolved: src/clone_job_main.zig uses `args.max_depth orelse 1`). CLO-90
+# checks the flag-omitted default; all other tests supply an explicit
+# --max-depth so Perl and Zig exercise the same code path and can be compared.
 #
 # Sourced by tests.sh after helper functions are defined.
 # Do NOT execute this file directly.
@@ -58,42 +58,16 @@ _cancel_cloned_jobs() {
 }
 
 # ---------------------------------------------------------------------------
-# CLO-90: Perl oracle — default (no flag) --max-depth is 1 → 2 jobs
+# CLO-90: default (no --max-depth flag) is 1 → 2 jobs for both Perl and Zig
+# The Perl script is the oracle; Zig must match it with the flag omitted.
+# (Explicit --max-depth 1 is covered separately by CLO-91.)
 # ---------------------------------------------------------------------------
-echo "--- Test CLO-90: Perl oracle: default --max-depth (no flag) → 2 jobs ---"
-run_capture "clone90" perl \
-	"$PERL_CLONE_EXE --within-instance http://localhost --clone-children $DEEPLAY_LAYER_A_ID"
-_PERL_EXIT=$_LAST_EXIT
-_m90_perl_count=$(grep -oP '(?<=tests/)\d+' "$LOG_DIR/clone90_perl_stdout.log" | wc -l || echo 0)
-if [[ "$_PERL_EXIT" -eq 0 && "$_m90_perl_count" -eq 2 ]]; then
-	echo "PASS"
-else
-	echo "FAIL: Perl exit=$_PERL_EXIT, jobs=$_m90_perl_count (expected 2)"
-	failed_tests=$((failed_tests + 1))
-fi
-for id in $(grep -oP '(?<=tests/)\d+' "$LOG_DIR/clone90_perl_stdout.log" || true); do
-	wait_for_job "$id" 300 >/dev/null || true
-done
-
-# ---------------------------------------------------------------------------
-# CLO-90b: Zig TDD — default must be 1, but Zig currently uses unlimited (Gap 1)
-# ---------------------------------------------------------------------------
-echo "--- Test CLO-90b: Zig TDD: default --max-depth should be 1 (Gap 1 — currently unlimited) ---"
-run_capture "clone90b" zig \
-	"$ZIG_CLONE_EXE --within-instance http://localhost --clone-children $DEEPLAY_LAYER_A_ID"
-_ZIG_EXIT=$_LAST_EXIT
-_m90b_count=$(grep -oP '(?<=tests/)\d+' "$LOG_DIR/clone90b_zig_stdout.log" | wc -l || echo 0)
-if [[ "$_ZIG_EXIT" -eq 0 && "$_m90b_count" -eq 2 ]]; then
-	echo "PASS (Zig gap resolved)"
-else
-	echo "TDD-FAIL: Zig exit=$_ZIG_EXIT, jobs=$_m90b_count (expected 2; fix: max_depth = args.max_depth orelse 1)"
-	failed_tests=$((failed_tests + 1))
-fi
-# Cancel whatever Zig created — up to 17 stray jobs while the gap is unfixed.
-for id in $(grep -oP '(?<=tests/)\d+' "$LOG_DIR/clone90b_zig_stdout.log" 2>/dev/null || true); do
-	[[ -n "$id" ]] && container_exec openqa-cli api --host http://localhost \
-		-X POST "jobs/$id/cancel" >/dev/null 2>&1 || true
-done
+echo "--- Test CLO-90: default --max-depth (no flag) → 2 jobs (Perl oracle == Zig) ---"
+run_clone_both "clone90" \
+	"--within-instance http://localhost --clone-children $DEEPLAY_LAYER_A_ID"
+assert_capture_exits "clone90" 0
+assert_stdout_pattern "clone90" "2 jobs have been created:"
+_cancel_cloned_jobs "clone90"
 
 # ---------------------------------------------------------------------------
 # CLO-91: Explicit --max-depth 1 → 2 jobs for both Perl and Zig
