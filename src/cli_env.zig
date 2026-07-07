@@ -1,9 +1,11 @@
-/// Shared CLI credential and environment-variable resolution.
+/// Shared CLI runtime-input resolution (credentials + retry/timeout knobs).
 ///
 /// This module lives in the executable layer — it uses `std.process` and is
 /// imported by CLI tools, NOT by the zoqa library. It exists to deduplicate
-/// the credential-merge and retry/timeout env-var parsing logic that every
-/// openQA executable needs.
+/// the resolution of runtime inputs (CLI flags > env vars > config file) into
+/// plain values that every openQA executable feeds into the library: the
+/// credential-merge chain and the retry/timeout env-var parsing. Keeping this
+/// here is what lets the zoqa library stay free of `std.process`.
 const std = @import("std");
 const zoqa = @import("zoqa");
 const config = zoqa.config;

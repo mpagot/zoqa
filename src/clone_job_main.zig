@@ -1,6 +1,6 @@
 const std = @import("std");
 const arg_match = @import("arg_match");
-const cli_credentials = @import("cli_credentials");
+const cli_env = @import("cli_env");
 const zoqa = @import("zoqa");
 
 // ---------------------------------------------------------------------------
@@ -21,6 +21,7 @@ fn isNumericId(s: []const u8) bool {
     }
     return true;
 }
+
 test "isNumericId: digits only" {
     try std.testing.expect(isNumericId("42"));
     try std.testing.expect(isNumericId("12345"));
@@ -441,48 +442,6 @@ fn resolveJobRef(allocator: std.mem.Allocator, args: *const CloneArgs) !Resolved
 }
 
 // ---------------------------------------------------------------------------
-// Help text
-// ---------------------------------------------------------------------------
-
-const help_text =
-    \\Usage:
-    \\    Clones a job from the local or a remote openQA instance. Downloads all
-    \\    assets associated with the job (unless --skip-download is specified).
-    \\    Optionally settings can be modified.
-    \\
-    \\      zoqa-clone-job [OPTIONS] JOBREF [KEY=[VALUE] ...]
-    \\
-    \\Options:
-    \\    --host HOST           Target openQA instance (defaults to localhost)
-    \\    --from HOST           Source openQA instance (deduced from JOBREF if URL)
-    \\    --dir DIR             Asset storage directory (defaults to $OPENQA_SHAREDIR/factory)
-    \\    --within-instance HOST
-    \\                          Shortcut for --skip-download --from HOST --host HOST
-    \\    --skip-deps           Do NOT clone parent jobs
-    \\    --skip-chained-deps   Do NOT clone chained parent jobs (START_AFTER_TEST)
-    \\    --skip-download       Do NOT download assets
-    \\    --ignore-missing-assets
-    \\                          Do not fail if an asset is missing
-    \\    --clone-children      Clone all direct child jobs as well
-    \\    --max-depth N         Max depth for cloning children (0 = infinity)
-    \\    --repeat N            Clone the same job N times
-    \\    --retry N             Retry up to N times on transient errors (default: 5)
-    \\    --show-progress       Display progress bar when downloading assets
-    \\    --parental-inheritance
-    \\                          Apply settings overrides to parent jobs
-    \\    --export-command      Print an openqa-cli command instead of cloning
-    \\    --badge               Output markdown badge format
-    \\    --json-output         Output JSON mapping of original to new job IDs
-    \\    --reproduce           Use same test code and needles as original job
-    \\    --check-repos         Check maintenance update repo availability
-    \\    --apikey KEY          API key (overrides config file / env)
-    \\    --apisecret SECRET    API secret (overrides config file / env)
-    \\    --verbose, -v         Increase verbosity
-    \\    --help, -h            Print this help
-    \\
-;
-
-// ---------------------------------------------------------------------------
 // Argument parsing
 // ---------------------------------------------------------------------------
 
@@ -642,9 +601,43 @@ fn parseCloneArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Clone
     return args;
 }
 
-// ---------------------------------------------------------------------------
-// Output helpers
-// ---------------------------------------------------------------------------
+const help_text =
+    \\Usage:
+    \\    Clones a job from the local or a remote openQA instance. Downloads all
+    \\    assets associated with the job (unless --skip-download is specified).
+    \\    Optionally settings can be modified.
+    \\
+    \\      zoqa-clone-job [OPTIONS] JOBREF [KEY=[VALUE] ...]
+    \\
+    \\Options:
+    \\    --host HOST           Target openQA instance (defaults to localhost)
+    \\    --from HOST           Source openQA instance (deduced from JOBREF if URL)
+    \\    --dir DIR             Asset storage directory (defaults to $OPENQA_SHAREDIR/factory)
+    \\    --within-instance HOST
+    \\                          Shortcut for --skip-download --from HOST --host HOST
+    \\    --skip-deps           Do NOT clone parent jobs
+    \\    --skip-chained-deps   Do NOT clone chained parent jobs (START_AFTER_TEST)
+    \\    --skip-download       Do NOT download assets
+    \\    --ignore-missing-assets
+    \\                          Do not fail if an asset is missing
+    \\    --clone-children      Clone all direct child jobs as well
+    \\    --max-depth N         Max depth for cloning children (0 = infinity)
+    \\    --repeat N            Clone the same job N times
+    \\    --retry N             Retry up to N times on transient errors (default: 5)
+    \\    --show-progress       Display progress bar when downloading assets
+    \\    --parental-inheritance
+    \\                          Apply settings overrides to parent jobs
+    \\    --export-command      Print an openqa-cli command instead of cloning
+    \\    --badge               Output markdown badge format
+    \\    --json-output         Output JSON mapping of original to new job IDs
+    \\    --reproduce           Use same test code and needles as original job
+    \\    --check-repos         Check maintenance update repo availability
+    \\    --apikey KEY          API key (overrides config file / env)
+    \\    --apisecret SECRET    API secret (overrides config file / env)
+    \\    --verbose, -v         Increase verbosity
+    \\    --help, -h            Print this help
+    \\
+;
 
 /// Write the help text to stdout (is_error=false) or stderr (is_error=true).
 ///
@@ -674,7 +667,7 @@ fn printStderr(comptime fmt: []const u8, args_fmt: anytype) void {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 1: BFS dependency graph walk
+// BFS dependency graph walk
 // ---------------------------------------------------------------------------
 
 /// Walk the dependency graph starting from the origin job, fetching each
@@ -712,7 +705,7 @@ fn walkDependencyGraph(
     arena_alloc: std.mem.Allocator,
     resolved: anytype,
     from_creds: ?zoqa.config.Credentials,
-    retry_cfg: cli_credentials.RetryConfig,
+    retry_cfg: cli_env.RetryConfig,
     clone_opts: zoqa.clone_job.CloneOptions,
     verbose: bool,
     ignore_missing_assets: bool,
@@ -963,7 +956,7 @@ fn postAndFormatOutput(
     gpa: std.mem.Allocator,
     resolved: anytype,
     host_creds: ?zoqa.config.Credentials,
-    retry_cfg: cli_credentials.RetryConfig,
+    retry_cfg: cli_env.RetryConfig,
     verbose: bool,
     client: *std.http.Client,
     post_body: []const u8,
@@ -1063,7 +1056,7 @@ fn downloadAssets(
     from_url: []const u8,
     from_creds: ?zoqa.config.Credentials,
     asset_dir: []const u8,
-    retry_cfg: cli_credentials.RetryConfig,
+    retry_cfg: cli_env.RetryConfig,
     verbose: bool,
     ignore_missing_assets: bool,
 ) void {
@@ -1224,7 +1217,7 @@ pub fn main() !void {
 
     // ── Credentials ──────────────────────────────────────────────────────────
     // Resolve credentials for source (from_url) and destination (host_url).
-    const from_creds = cli_credentials.resolveCredentials(gpa, resolved.from_url, args.apikey, args.apisecret) catch |err| {
+    const from_creds = cli_env.resolveCredentials(gpa, resolved.from_url, args.apikey, args.apisecret) catch |err| {
         printStderr("Error: credential lookup failed: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
@@ -1241,14 +1234,14 @@ pub fn main() !void {
                 .secret = try gpa.dupe(u8, c.secret),
             };
         } else break :blk null;
-    } else try cli_credentials.resolveCredentials(gpa, resolved.host_url, args.apikey, args.apisecret);
+    } else try cli_env.resolveCredentials(gpa, resolved.host_url, args.apikey, args.apisecret);
     defer if (host_creds) |c| c.deinit();
 
     // ── Retry/timeout knobs ──────────────────────────────────────────────────
     // clone-job defaults to 5 retries for ALL HTTP operations (BFS GETs, the
     // destination POST, and asset downloads), matching the Perl reference's
     // `$options->{retry} //= 5`. A user-set OPENQA_CLI_RETRIES still overrides.
-    const retry_cfg = cli_credentials.resolveRetryConfig(gpa, args.retry, 5) catch |err| {
+    const retry_cfg = cli_env.resolveRetryConfig(gpa, args.retry, 5) catch |err| {
         printStderr("Error: retry config resolution failed: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };

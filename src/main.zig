@@ -1,7 +1,7 @@
 const std = @import("std");
 const zoqa = @import("zoqa");
 const arg_match = @import("arg_match");
-const cli_credentials = @import("cli_credentials");
+const cli_env = @import("cli_env");
 const config = zoqa.config;
 
 // ---------------------------------------------------------------------------
@@ -2636,7 +2636,12 @@ pub fn main() !void {
     // parseArgs guarantees subcmd is non-null when help is false.
     const subcmd = args.subcmd.?;
 
-    // Read --data-file content before buildRequest (filesystem I/O)
+    // Read --data-file (or stdin) eagerly here so buildRequest stays a pure,
+    // in-memory transformation: no filesystem access, no stdin consumption,
+    // trivially unit-testable with plain slices. Also keeps environment errors
+    // (missing file, read failure) separate from argument-validation errors
+    // that buildRequest maps to help output, and ensures stdin is consumed
+    // exactly once regardless of the subcommand path taken.
     var data_file_buf: ?[]u8 = null;
     defer if (data_file_buf) |b| gpa.free(b);
 
@@ -2648,6 +2653,9 @@ pub fn main() !void {
             try std.fs.cwd().readFileAlloc(gpa, df, 10 * 1024 * 1024);
     }
 
+    // Read-only borrow of the buffer for downstream code. data_file_buf stays the
+    // sole owner (it's what the defer above frees). Not required for typing: ?[]u8
+    // coerces implicitly to ?[]const u8; this just makes owner-vs-borrow explicit.
     const data_file_content: ?[]const u8 = if (data_file_buf) |b| b else null;
 
     var req_cfg: ?RequestConfig = null;
@@ -2715,11 +2723,11 @@ pub fn main() !void {
         break :blk args.host orelse "localhost";
     };
 
-    const creds = try cli_credentials.resolveCredentials(gpa, host_for_creds, args.apikey, args.apisecret);
+    const creds = try cli_env.resolveCredentials(gpa, host_for_creds, args.apikey, args.apisecret);
     defer if (creds) |c| c.deinit();
 
     // Retry/timeout knobs: --retries > OPENQA_CLI_* env vars > defaults (0).
-    const retry_cfg = try cli_credentials.resolveRetryConfig(gpa, args.retries, 0);
+    const retry_cfg = try cli_env.resolveRetryConfig(gpa, args.retries, 0);
     const retries = retry_cfg.retries;
     const connect_timeout_s = retry_cfg.connect_timeout_s;
     const retry_sleep_s = retry_cfg.retry_sleep_s;
