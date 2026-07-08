@@ -11,7 +11,7 @@ of the harness and how to run it, see [README.md](README.md).
 | `tests_auth.sh` | B | Authentication (HMAC-SHA1), credential priority chain | AUT-1–AUT-7 |
 | `tests_data.sh` | C | Seeded data: pagination, DELETE, output parity, path handling | DAT-18–DAT-24 |
 | `tests_output.sh` | D | Output formatting: `--verbose`, `--pretty`, `--name`, header count | OUT-25–OUT-45 |
-| `tests_robustness.sh` | E | Broken pipe, non-2xx stderr, `--quiet` suppression | ROB-1–ROB-3 |
+| `tests_robustness.sh` | E | Broken pipe, non-2xx stderr, `--quiet`, `--data-file` edge cases | ROB-1–ROB-7 |
 | `tests_retry_knobs.sh` | F | Retry/timeout env vars and CLI flags | RET-2–RET-9 |
 | `tests_perf.sh` | G | Performance: timing, peak RSS, interpreter baseline | PERF-B1–PERF-R9 |
 | `tests_archive.sh` | H | Archive subcommand | ARC-1–ARC-63 |
@@ -104,6 +104,10 @@ of the harness and how to run it, see [README.md](README.md).
 | ROB-1 | Broken Pipe | `zoqa ... \| head -c 1` exits cleanly without crashing on SIGPIPE. |
 | ROB-2 | Non-2xx stderr | `404` reported on stderr without `--quiet`. |
 | ROB-3 | `--quiet` suppresses stderr | `--quiet` suppresses the non-2xx status line on stderr. |
+| ROB-4 | `--data-file` non-existent | Both exit non-zero when the file does not exist. |
+| ROB-5 | `--data-file` permission denied | Both exit non-zero when the file is not readable. |
+| ROB-6 | `--data-file` empty file | Both agree on exit code when the file is empty (no crash). |
+| ROB-7 | `--data-file` exceeds 10 MiB | Zig exits non-zero for files larger than the 10 MiB cap. |
 
 ### Retry & Timeout Knobs (`tests_retry_knobs.sh`)
 | # | Test | Verification |

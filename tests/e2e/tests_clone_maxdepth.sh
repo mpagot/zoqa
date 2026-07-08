@@ -34,8 +34,6 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_topology.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-echo "==> [clone_job/maxdepth] Running --max-depth tests (CLO-90 to CLO-97)..."
-
 # Local binary handles — different from the global PERL_EXE/ZIG_EXE which
 # point at openqa-cli / zoqa.
 PERL_CLONE_EXE="openqa-clone-job"
@@ -57,21 +55,17 @@ _cancel_cloned_jobs() {
 	done
 }
 
-# ---------------------------------------------------------------------------
-# CLO-90: default (no --max-depth flag) is 1 → 2 jobs for both Perl and Zig
+echo "==> [clone_job/maxdepth] Running --max-depth tests (CLO-90 to CLO-97)..."
+
+echo "--- Test CLO-90: default --max-depth (no flag) → 2 jobs (Perl oracle == Zig) ---"
 # The Perl script is the oracle; Zig must match it with the flag omitted.
 # (Explicit --max-depth 1 is covered separately by CLO-91.)
-# ---------------------------------------------------------------------------
-echo "--- Test CLO-90: default --max-depth (no flag) → 2 jobs (Perl oracle == Zig) ---"
 run_clone_both "clone90" \
 	"--within-instance http://localhost --clone-children $DEEPLAY_LAYER_A_ID"
 assert_capture_exits "clone90" 0
 assert_stdout_pattern "clone90" "2 jobs have been created:"
 _cancel_cloned_jobs "clone90"
 
-# ---------------------------------------------------------------------------
-# CLO-91: Explicit --max-depth 1 → 2 jobs for both Perl and Zig
-# ---------------------------------------------------------------------------
 echo "--- Test CLO-91: --max-depth 1 (explicit) → 2 jobs ---"
 run_clone_both "clone91" \
 	"--within-instance http://localhost --clone-children --max-depth 1 $DEEPLAY_LAYER_A_ID"
@@ -89,8 +83,8 @@ done
 
 wait_for_cloned_jobs "clone91"
 
-# CLO-91b: Confirm cloned jobs are specifically layer_a and layer_b (not deeper)
 echo "--- Test CLO-91b: --max-depth 1 clones layer_a and layer_b only ---"
+# Confirm cloned jobs are specifically layer_a and layer_b (not deeper)
 _m91b_pass=true
 for _lbl in "perl" "zig"; do
 	if [[ "$_lbl" == "perl" ]]; then _ids="$_CLONE_PERL_IDS"; else _ids="$_CLONE_ZIG_IDS"; fi
@@ -113,10 +107,7 @@ for _lbl in "perl" "zig"; do
 done
 [[ "$_m91b_pass" == "true" ]] && echo "PASS" || failed_tests=$((failed_tests + 1))
 
-# ---------------------------------------------------------------------------
-# CLO-92: --max-depth 3 → 4 jobs (layer_a through layer_d)
-# ---------------------------------------------------------------------------
-echo "--- Test CLO-92: --max-depth 3 → 4 jobs (layer_a … layer_d) ---"
+echo "--- Test CLO-92: --max-depth 3 → 4 jobs (layer_a through layer_d) ---"
 run_clone_both "clone92" \
 	"--within-instance http://localhost --clone-children --max-depth 3 $DEEPLAY_LAYER_A_ID"
 assert_capture_exits "clone92" 0
@@ -144,9 +135,6 @@ done
 [[ "$_m92_pass" == "true" ]] && echo "PASS" || failed_tests=$((failed_tests + 1))
 _cancel_cloned_jobs "clone92"
 
-# ---------------------------------------------------------------------------
-# CLO-93: --max-depth 0 (unlimited) → all 17 layers
-# ---------------------------------------------------------------------------
 echo "--- Test CLO-93: --max-depth 0 (unlimited) → all 17 layers ---"
 run_clone_both "clone93" \
 	"--within-instance http://localhost --clone-children --max-depth 0 $DEEPLAY_LAYER_A_ID"
@@ -154,23 +142,17 @@ assert_capture_exits "clone93" 0
 assert_stdout_pattern "clone93" "17 jobs have been created:"
 _cancel_cloned_jobs "clone93"
 
-# ---------------------------------------------------------------------------
-# CLO-94: --max-depth > chain length → same result as unlimited (all 17)
-# Corner case: N=20, chain has only 17 nodes, so N>chain → full chain cloned.
-# ---------------------------------------------------------------------------
 echo "--- Test CLO-94: --max-depth 20 (> chain depth of 17) → all 17 layers ---"
+# Corner case: N=20, chain has only 17 nodes, so N>chain → full chain cloned.
 run_clone_both "clone94" \
 	"--within-instance http://localhost --clone-children --max-depth 20 $DEEPLAY_LAYER_A_ID"
 assert_capture_exits "clone94" 0
 assert_stdout_pattern "clone94" "17 jobs have been created:"
 _cancel_cloned_jobs "clone94"
 
-# ---------------------------------------------------------------------------
-# CLO-95: --max-depth does NOT apply to parents
+echo "--- Test CLO-95: --max-depth 1 does not limit parent traversal (layer_s → 17 jobs) ---"
 # Cloning layer_s (the leaf, position 17) with --max-depth 1 still walks all
 # 16 ancestors — parent BFS is always unlimited regardless of --max-depth.
-# ---------------------------------------------------------------------------
-echo "--- Test CLO-95: --max-depth 1 does not limit parent traversal (layer_s → 17 jobs) ---"
 run_clone_both "clone95" \
 	"--within-instance http://localhost --max-depth 1 $DEEPLAY_LAYER_S_ID"
 assert_capture_exits "clone95" 0
@@ -251,12 +233,9 @@ done
 [[ "$_m96_pass" == "true" ]] && echo "PASS" || failed_tests=$((failed_tests + 1))
 _cancel_cloned_jobs "clone96"
 
-# ---------------------------------------------------------------------------
-# CLO-97: Clone from middle (layer_i) + --skip-deps + --clone-children --max-depth 0
+echo "--- Test CLO-97: layer_i --skip-deps --clone-children --max-depth 0 → 9 jobs ---"
 # --skip-deps suppresses all parent traversal; --max-depth 0 is unlimited for
 # children.  Result: layer_i plus all 8 descendants (l … s) = 9 jobs.
-# ---------------------------------------------------------------------------
-echo "--- Test CLO-97: layer_i --skip-deps --clone-children --max-depth 0 → 9 jobs ---"
 run_clone_both "clone97" \
 	"--within-instance http://localhost --skip-deps --clone-children --max-depth 0 $DEEPLAY_LAYER_I_ID"
 assert_capture_exits "clone97" 0
