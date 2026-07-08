@@ -259,6 +259,31 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
     // exposes per-connection timeout support.
     _ = req.connect_timeout_s;
 
+    // A request body is only valid for methods that permit one (POST/PUT/PATCH).
+    // std.http.Client asserts this precondition inside sendBodyUnflushed, so a
+    // body on e.g. a GET aborts the whole process with a panic in safe builds
+    // (and is silent UB in ReleaseFast). Guard here and fail cleanly instead —
+    // this is a permanent condition, so it is checked once before the retry loop
+    // rather than retried.
+    //
+    // DELIBERATE DIVERGENCE FROM THE PERL CLIENT (openqa-cli):
+    //   Perl silently sends the body on a bodiless method (e.g. a GET) and exits
+    //   0 — the server simply ignores it. zoqa instead rejects the request up
+    //   front with error.BodyOnBodilessMethod (non-zero exit). We consciously
+    //   break behavioural parity here because Perl's behaviour is a footgun and
+    //   Zig's std client cannot send a body on GET without asserting. The most
+    //   common trigger is `--data-file FILE` / `--data` on a GET route without
+    //   an explicit `-X POST`. See ideas/SPEC.md ("Body on a bodiless method")
+    //   and the ROB-8 E2E test in tests/e2e/tests_robustness.sh.
+    if (req.body != null and !req.method.requestHasBody()) {
+        if (!req.quiet)
+            std.debug.print(
+                "Error: a request body was provided for {s}, which does not allow a body (use -X POST/PUT/PATCH)\n",
+                .{@tagName(req.method)},
+            );
+        return error.BodyOnBodilessMethod;
+    }
+
     var attempt: u32 = 0;
     while (true) : (attempt += 1) {
         // Build request headers fresh on each attempt so the HMAC timestamp
@@ -1187,6 +1212,42 @@ test "openQAReq: POST explicit body takes precedence over params" {
 
     try testing.expectEqualStrings("http://localhost/api/v1/jobs", mock.getCapturedUrl());
     try testing.expectEqualStrings("{\"key\":\"value\"}", mock.getCapturedBody());
+}
+
+test "openQAReq: body on GET is rejected cleanly (no panic)" {
+    // Regression test for the panic reproduced by tests_robustness.sh ROB-5:
+    // `--data-file FILE` (or `--data`) attaches a body but leaves the method at
+    // its GET default. std.http.Client asserts requestHasBody() in
+    // sendBodyUnflushed, so a body on GET used to abort the process. execute()
+    // now guards this and returns error.BodyOnBodilessMethod instead.
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const result = openQAReq("http://localhost", "jobs/overview", .{
+        .allocator = allocator,
+        .method = .GET,
+        .body = "hello",
+        .quiet = true,
+    }, &mock);
+    try testing.expectError(error.BodyOnBodilessMethod, result);
+    // The guard runs before any request is issued.
+    try testing.expect(mock.captured_url_len == 0);
+    try testing.expect(mock.captured_body_len == 0);
+}
+
+test "openQAReq: body on DELETE is rejected cleanly" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var mock: TestMockClient = .{};
+
+    const result = openQAReq("http://localhost", "assets/42", .{
+        .allocator = allocator,
+        .method = .DELETE,
+        .body = "{}",
+        .quiet = true,
+    }, &mock);
+    try testing.expectError(error.BodyOnBodilessMethod, result);
 }
 
 test "openQAReq: PUT params routed as body" {

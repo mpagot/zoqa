@@ -12,13 +12,14 @@
 #   OPENQA_API_KEY, OPENQA_API_SECRET
 #   run_test(), run_comparison_api()
 
-echo "==> [auth] Running authentication tests..."
 
 # Prepare a client.conf with wrong credentials inside the container at
 # /tmp/wrongsecret/client.conf so that OPENQA_CONFIG=/tmp/wrongsecret/wrongsecret points at it.  Tests in this
 # file that want to isolate a higher-priority source set OPENQA_CONFIG=/tmp/wrongsecret/wrongsecret
 # to ensure the config file can never accidentally supply valid credentials.
 container_exec bash -c "mkdir -p /tmp/wrongsecret && printf '[localhost]\nkey=WRONG\nsecret=WRONG\n' > /tmp/wrongsecret/client.conf"
+
+echo "==> [AUT] Running authentication tests..."
 
 # Test AUT-1: DELETE 404 — verifies HMAC signing is applied on DELETE requests.
 # Deleted job us untentionally not existing, not to have to seed a job

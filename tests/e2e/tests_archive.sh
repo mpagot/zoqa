@@ -108,8 +108,6 @@ assert_glob_exists() {
 	fi
 }
 
-echo "==> [archive] Running archive subcommand tests..."
-
 # Ensure both jobs exist (basic + rich with full test artifacts).
 ensure_basic_job
 ensure_rich_job
@@ -131,6 +129,8 @@ container_exec rm -rf /tmp/arc_perl /tmp/arc_zig \
 	/tmp/arc_perl_wrongenv /tmp/arc_zig_wrongenv \
 	/tmp/arc_perl_osd_test /tmp/arc_zig_osd_test \
 	2>/dev/null || true
+
+echo "==> [ARC] Running archive subcommand tests..."
 
 # =============================================================================
 # Section 1: Argument Validation (SPEC §13.1)
