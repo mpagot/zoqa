@@ -2,6 +2,7 @@
 # shellcheck disable=SC2153
 # test_clone_single.sh — Single-job clone tests (CLO-12 to CLO-17, M43–M44, CLO-50 to CLO-83,
 #                         CLO-84 to CLO-89, CLO-98 to CLO-99).
+# CLO-72–76: OPENQA_SHAREDIR env var tests (Gap 4).
 #
 # All tests in this file operate on a single base job ($JOB_ID) produced by
 # ensure_basic_job, plus CLO-80–83 which create their own phantom fixture job.
@@ -424,6 +425,333 @@ assert_downloaded_assets_md5 "$ASSET_DIR_ZIG" "CLO-78 Zig"
 container_exec rm -rf "$ASSET_DIR_PERL" "$ASSET_DIR_ZIG"
 
 # =============================================================================
+# CLO-72 to CLO-76: OPENQA_SHAREDIR environment variable (Gap 4)
+#
+# CLO-72: OPENQA_SHAREDIR set to existing dir, no --dir → Perl downloads to
+#         $OPENQA_SHAREDIR/factory; Zig ignores env (Gap 4) and uses default.
+# CLO-73: OPENQA_SHAREDIR set to non-existing path (parent missing), no --dir →
+#         Perl creates nested dirs and downloads; Zig ignores env (Gap 4), uses default.
+# CLO-74: --dir pointing to non-existing folder → both create it and download.
+# CLO-75: No --dir, no OPENQA_SHAREDIR → both use /var/lib/openqa/share/factory
+#         (verified by temporarily removing an asset and checking re-download).
+# CLO-76: --dir overrides OPENQA_SHAREDIR → both honor --dir, env ignored.
+#
+# ISOLATION STRATEGY: /var/lib/openqa/share/factory/ is a shared mutable resource.
+# Any test that downloads without --dir (Zig due to Gap 4, or Zig/Perl on CLO-75)
+# writes there and may corrupt source files used by assert_downloaded_assets_md5,
+# or leave artifacts that leak into the next test. To guarantee each test starts
+# from a known-good state:
+#   1. A snapshot of the factory is taken once before this section begins.
+#   2. restore_factory() wipes factory and restores from that snapshot before
+#      each individual test. It also sets a+rw to avoid Permission denied when
+#      clone-job writes back to the same directory.
+#   3. A final restore_factory() at the end leaves clean state for CLO-80+.
+# =============================================================================
+echo "--- Test CLO-72 to CLO-76: OPENQA_SHAREDIR (Gap 4) ---"
+
+_CLO7X_FACTORY="/var/lib/openqa/share/factory"
+_CLO7X_BACKUP="/tmp/e2e-factory-backup-$$"
+
+# Take the initial snapshot.
+container_exec cp -a "$_CLO7X_FACTORY" "$_CLO7X_BACKUP"
+
+# restore_factory: wipe factory, restore from snapshot, make world-writable.
+# Must be called before each CLO-7x test and once after the last one.
+restore_factory() {
+	container_exec bash -c "rm -rf '$_CLO7X_FACTORY' && cp -a '$_CLO7X_BACKUP' '$_CLO7X_FACTORY' && chmod -R a+rw '$_CLO7X_FACTORY'"
+}
+
+# ---------------------------------------------------------------------------
+# CLO-72: OPENQA_SHAREDIR set to existing dir, no --dir.
+# Perl should respect OPENQA_SHAREDIR and download to $OPENQA_SHAREDIR/factory/.
+# Zig ignores OPENQA_SHAREDIR (Gap 4) and downloads to the default factory path.
+# Separate SHAREDIR dirs for Perl and Zig so each is independently verifiable.
+# ---------------------------------------------------------------------------
+restore_factory
+echo "--- Test CLO-72: OPENQA_SHAREDIR existing dir, no --dir ---"
+SHAREDIR_72_PERL="/tmp/e2e-sharedir-72-perl-$$"
+SHAREDIR_72_ZIG="/tmp/e2e-sharedir-72-zig-$$"
+container_exec mkdir -p "$SHAREDIR_72_PERL" "$SHAREDIR_72_ZIG"
+
+run_capture "clo-72" perl \
+	"bash -c \"OPENQA_SHAREDIR=$SHAREDIR_72_PERL \
+	$PERL_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID\""
+_PERL_EXIT=$_LAST_EXIT
+
+# Restore before Zig run: Zig ignores SHAREDIR and writes to default path, which
+# would corrupt the source files used by assert_downloaded_assets_md5 below.
+restore_factory
+
+run_capture "clo-72" zig \
+	"bash -c \"OPENQA_SHAREDIR=$SHAREDIR_72_ZIG \
+	$ZIG_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID\""
+_ZIG_EXIT=$_LAST_EXIT
+
+# Perl: should exit 0 and have downloaded assets under $SHAREDIR_72_PERL/factory/.
+if [[ "$_PERL_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-72 Perl exits 0 with OPENQA_SHAREDIR set"
+else
+	echo "FAIL: CLO-72 Perl exits 0 with OPENQA_SHAREDIR set (got $_PERL_EXIT)"
+	failed_tests=$((failed_tests + 1))
+fi
+if container_exec find "$SHAREDIR_72_PERL/factory" -type f 2>/dev/null | grep -q .; then
+	echo "PASS: CLO-72 Perl downloaded assets to \$OPENQA_SHAREDIR/factory/"
+else
+	echo "FAIL: CLO-72 Perl downloaded assets to \$OPENQA_SHAREDIR/factory/"
+	failed_tests=$((failed_tests + 1))
+fi
+# MD5 check: source files are intact (factory was restored before Zig ran).
+assert_downloaded_assets_md5 "$SHAREDIR_72_PERL/factory" "CLO-72 Perl"
+
+# Zig: should ALSO download to $SHAREDIR_72_ZIG/factory/
+if [[ "$_ZIG_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-72 Zig exits 0 with OPENQA_SHAREDIR set"
+else
+	echo "FAIL: CLO-72 Zig exits 0 with OPENQA_SHAREDIR set (got $_ZIG_EXIT)"
+	failed_tests=$((failed_tests + 1))
+fi
+if container_exec find "$SHAREDIR_72_ZIG/factory" -type f 2>/dev/null | grep -q .; then
+	echo "PASS: CLO-72 Zig downloaded assets to \$OPENQA_SHAREDIR/factory/"
+else
+	echo "FAIL: CLO-72 Zig downloaded assets to \$OPENQA_SHAREDIR/factory/"
+	failed_tests=$((failed_tests + 1))
+fi
+# No MD5 check for Zig here: factory was wiped/restored before the Zig run, so
+# any files Zig wrote there are the downloads and comparing them to themselves
+# is meaningless.
+
+container_exec rm -rf "$SHAREDIR_72_PERL" "$SHAREDIR_72_ZIG"
+
+# ---------------------------------------------------------------------------
+# CLO-73: OPENQA_SHAREDIR set to non-existing path (parent dir missing), no --dir.
+# Path: /tmp/noparent-73-XX/deep/sharedir — no part of it is pre-created.
+# Perl: wget/curl creates parent dirs automatically; downloads to SHAREDIR/factory/.
+# Zig (Gap 4): ignores env, uses default factory path, exits 0.
+# ---------------------------------------------------------------------------
+restore_factory
+echo "--- Test CLO-73: OPENQA_SHAREDIR non-existing (parent missing), no --dir ---"
+SHAREDIR_73_PERL="/tmp/noparent-73-perl-$$/deep/sharedir"
+SHAREDIR_73_ZIG="/tmp/noparent-73-zig-$$/deep/sharedir"
+# Intentionally do NOT create these paths or any parents.
+
+run_capture "clo-73" perl \
+	"bash -c \"OPENQA_SHAREDIR=$SHAREDIR_73_PERL \
+	$PERL_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID\""
+_PERL_EXIT=$_LAST_EXIT
+
+restore_factory
+
+run_capture "clo-73" zig \
+	"bash -c \"OPENQA_SHAREDIR=$SHAREDIR_73_ZIG \
+	$ZIG_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID\""
+_ZIG_EXIT=$_LAST_EXIT
+
+# Perl: record observed behavior as the oracle (mkdir -p semantics vary by tool).
+echo "  CLO-73 Perl exit=$_PERL_EXIT (informational — oracle documents Perl behavior)"
+if container_exec find "$SHAREDIR_73_PERL/factory" -type f 2>/dev/null | grep -q .; then
+	echo "  CLO-73 Perl created nested dirs and downloaded to \$OPENQA_SHAREDIR/factory/"
+	PERL_73_CREATED_DIRS=true
+else
+	echo "  CLO-73 Perl did NOT create nested dirs (or download failed)"
+	PERL_73_CREATED_DIRS=false
+fi
+
+# Zig should also use SHAREDIR_73_ZIG and
+# behave the same as Perl (exit and dir-creation behavior must match).
+if [[ "$_ZIG_EXIT" -eq "$_PERL_EXIT" ]]; then
+	echo "PASS: CLO-73 Zig exit matches Perl (both=$_ZIG_EXIT)"
+else
+	echo "FAIL: CLO-73 Zig exit ($_ZIG_EXIT) != Perl exit ($_PERL_EXIT)"
+	failed_tests=$((failed_tests + 1))
+fi
+if [[ "$PERL_73_CREATED_DIRS" == "true" ]]; then
+	if container_exec find "$SHAREDIR_73_ZIG/factory" -type f 2>/dev/null | grep -q .; then
+		echo "PASS: CLO-73 Zig also downloaded to \$OPENQA_SHAREDIR/factory/"
+	else
+		echo "FAIL: CLO-73 Zig did not download to \$OPENQA_SHAREDIR/factory/"
+		failed_tests=$((failed_tests + 1))
+	fi
+fi
+
+container_exec rm -rf "/tmp/noparent-73-perl-$$" "/tmp/noparent-73-zig-$$"
+
+# ---------------------------------------------------------------------------
+# CLO-74: --dir pointing to a non-existing folder.
+# Both Perl and Zig should create the directory and download assets there.
+# restore_factory ensures source files are intact for MD5 comparison.
+# ---------------------------------------------------------------------------
+restore_factory
+echo "--- Test CLO-74: --dir non-existing folder ---"
+ASSET_DIR_74_PERL="/tmp/e2e-newdir-74-perl-$$"
+ASSET_DIR_74_ZIG="/tmp/e2e-newdir-74-zig-$$"
+# Intentionally do NOT create these directories.
+
+run_capture "clo-74" perl \
+	"$PERL_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID --dir $ASSET_DIR_74_PERL"
+_PERL_EXIT=$_LAST_EXIT
+
+# Restore before Zig: Perl wrote --dir files (not factory), but Zig without --dir
+# would corrupt factory. Here both use --dir so factory is safe, but restore
+# anyway for consistency and to handle any unexpected writes.
+restore_factory
+
+run_capture "clo-74" zig \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID --dir $ASSET_DIR_74_ZIG"
+_ZIG_EXIT=$_LAST_EXIT
+
+if [[ "$_PERL_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-74 Perl exits 0 with --dir to non-existing folder"
+else
+	echo "FAIL: CLO-74 Perl exits 0 with --dir to non-existing folder (got $_PERL_EXIT)"
+	failed_tests=$((failed_tests + 1))
+fi
+if container_exec find "$ASSET_DIR_74_PERL" -type f 2>/dev/null | grep -q .; then
+	echo "PASS: CLO-74 Perl created dir and downloaded assets"
+else
+	echo "FAIL: CLO-74 Perl created dir and downloaded assets"
+	failed_tests=$((failed_tests + 1))
+fi
+assert_downloaded_assets_md5 "$ASSET_DIR_74_PERL" "CLO-74 Perl"
+
+if [[ "$_ZIG_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-74 Zig exits 0 with --dir to non-existing folder"
+else
+	echo "FAIL: CLO-74 Zig exits 0 with --dir to non-existing folder (got $_ZIG_EXIT)"
+	failed_tests=$((failed_tests + 1))
+fi
+if container_exec find "$ASSET_DIR_74_ZIG" -type f 2>/dev/null | grep -q .; then
+	echo "PASS: CLO-74 Zig created dir and downloaded assets"
+else
+	echo "FAIL: CLO-74 Zig created dir and downloaded assets"
+	failed_tests=$((failed_tests + 1))
+fi
+assert_downloaded_assets_md5 "$ASSET_DIR_74_ZIG" "CLO-74 Zig"
+
+container_exec rm -rf "$ASSET_DIR_74_PERL" "$ASSET_DIR_74_ZIG"
+
+# ---------------------------------------------------------------------------
+# CLO-75: No --dir, no OPENQA_SHAREDIR → default /var/lib/openqa/share/factory.
+# Verified by removing one asset from the factory, running each tool, and
+# confirming the file is re-downloaded to the default path.
+# restore_factory is called before each run to guarantee a clean, writable factory.
+# ---------------------------------------------------------------------------
+restore_factory
+echo "--- Test CLO-75: No --dir, no OPENQA_SHAREDIR → default path ---"
+# Use seed-nocloud.iso (small ISO) as the sentinel asset.
+_CLO75_ASSET="iso/seed-nocloud.iso"
+_CLO75_ASSET_PATH="$_CLO7X_FACTORY/$_CLO75_ASSET"
+
+# Remove the sentinel from the factory so re-download is detectable.
+container_exec rm -f "$_CLO75_ASSET_PATH"
+
+run_capture "clo-75" perl \
+	"bash -c \"unset OPENQA_SHAREDIR; \
+	$PERL_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID\""
+_PERL_EXIT=$_LAST_EXIT
+
+if [[ "$_PERL_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-75 Perl exits 0 without --dir (uses default path)"
+else
+	echo "FAIL: CLO-75 Perl exits 0 without --dir (uses default path, got $_PERL_EXIT)"
+	failed_tests=$((failed_tests + 1))
+fi
+if container_exec test -f "$_CLO75_ASSET_PATH"; then
+	echo "PASS: CLO-75 Perl re-downloaded asset to default factory path"
+else
+	echo "FAIL: CLO-75 Perl re-downloaded asset to default factory path"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Fresh restore before Zig run: removes any Perl artifacts and re-creates
+# the full factory from the snapshot, then removes the sentinel again.
+restore_factory
+container_exec rm -f "$_CLO75_ASSET_PATH"
+
+run_capture "clo-75" zig \
+	"bash -c \"unset OPENQA_SHAREDIR; \
+	$ZIG_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID\""
+_ZIG_EXIT=$_LAST_EXIT
+
+if [[ "$_ZIG_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-75 Zig exits 0 without --dir (uses default path)"
+else
+	echo "FAIL: CLO-75 Zig exits 0 without --dir (uses default path, got $_ZIG_EXIT)"
+	failed_tests=$((failed_tests + 1))
+fi
+if container_exec test -f "$_CLO75_ASSET_PATH"; then
+	echo "PASS: CLO-75 Zig re-downloaded asset to default factory path"
+else
+	echo "FAIL: CLO-75 Zig re-downloaded asset to default factory path"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# ---------------------------------------------------------------------------
+# CLO-76: --dir overrides OPENQA_SHAREDIR.
+# Both tools are given a decoy SHAREDIR and an explicit --dir; --dir must win.
+# ---------------------------------------------------------------------------
+restore_factory
+echo "--- Test CLO-76: --dir overrides OPENQA_SHAREDIR ---"
+SHAREDIR_DECOY="/tmp/e2e-sharedir-decoy-76-$$"
+ASSET_DIR_76_PERL="/tmp/e2e-dir-76-perl-$$"
+ASSET_DIR_76_ZIG="/tmp/e2e-dir-76-zig-$$"
+container_exec mkdir -p "$SHAREDIR_DECOY" "$ASSET_DIR_76_PERL" "$ASSET_DIR_76_ZIG"
+
+run_capture "clo-76" perl \
+	"bash -c \"OPENQA_SHAREDIR=$SHAREDIR_DECOY \
+	$PERL_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID --dir $ASSET_DIR_76_PERL\""
+_PERL_EXIT=$_LAST_EXIT
+
+restore_factory
+
+run_capture "clo-76" zig \
+	"bash -c \"OPENQA_SHAREDIR=$SHAREDIR_DECOY \
+	$ZIG_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID --dir $ASSET_DIR_76_ZIG\""
+_ZIG_EXIT=$_LAST_EXIT
+
+if [[ "$_PERL_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-76 Perl exits 0 with --dir + OPENQA_SHAREDIR"
+else
+	echo "FAIL: CLO-76 Perl exits 0 with --dir + OPENQA_SHAREDIR (got $_PERL_EXIT)"
+	failed_tests=$((failed_tests + 1))
+fi
+if [[ "$_ZIG_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-76 Zig exits 0 with --dir + OPENQA_SHAREDIR"
+else
+	echo "FAIL: CLO-76 Zig exits 0 with --dir + OPENQA_SHAREDIR (got $_ZIG_EXIT)"
+	failed_tests=$((failed_tests + 1))
+fi
+
+if container_exec find "$ASSET_DIR_76_PERL" -type f 2>/dev/null | grep -q .; then
+	echo "PASS: CLO-76 Perl downloaded to --dir (overrides OPENQA_SHAREDIR)"
+else
+	echo "FAIL: CLO-76 Perl downloaded to --dir (overrides OPENQA_SHAREDIR)"
+	failed_tests=$((failed_tests + 1))
+fi
+assert_downloaded_assets_md5 "$ASSET_DIR_76_PERL" "CLO-76 Perl"
+
+if container_exec find "$ASSET_DIR_76_ZIG" -type f 2>/dev/null | grep -q .; then
+	echo "PASS: CLO-76 Zig downloaded to --dir (overrides OPENQA_SHAREDIR)"
+else
+	echo "FAIL: CLO-76 Zig downloaded to --dir (overrides OPENQA_SHAREDIR)"
+	failed_tests=$((failed_tests + 1))
+fi
+assert_downloaded_assets_md5 "$ASSET_DIR_76_ZIG" "CLO-76 Zig"
+
+# Decoy SHAREDIR must be empty — neither tool should have written there.
+if container_exec find "$SHAREDIR_DECOY" -type f 2>/dev/null | grep -q .; then
+	echo "FAIL: CLO-76 assets leaked into OPENQA_SHAREDIR decoy (--dir should override)"
+	failed_tests=$((failed_tests + 1))
+else
+	echo "PASS: CLO-76 OPENQA_SHAREDIR decoy is empty (--dir overrides)"
+fi
+
+container_exec rm -rf "$SHAREDIR_DECOY" "$ASSET_DIR_76_PERL" "$ASSET_DIR_76_ZIG"
+
+# Restore factory to clean state for the tests that follow (CLO-80+).
+restore_factory
+container_exec rm -rf "$_CLO7X_BACKUP"
+
+# =============================================================================
 # CLO-80 to CLO-83: --ignore-missing-assets
 #
 # CLO-80: Without --ignore-missing-assets, clone of a job with a non-existent
@@ -768,8 +1096,6 @@ container_exec rm -rf "$ASSET_DIR_CLO_86_PERL" "$ASSET_DIR_CLO_86_ZIG"
 #   Perl's _resolve_redirection issues HEAD per asset (inherits --retry);
 #   then the actual download issues GET (also with --retry).  Both go through
 #   the proxy.  3 attempts × 2 request types × 2 assets = 12.
-# ZIG DEVIATION (TDD): once retry is implemented, Zig must exit 1 after
-# exhausting retries.
 # -----------------------------------------------------------------------------
 echo "--- Test CLO-87: Perl exhausts retries on persistent 503, exits 0 (known bug) ---"
 tag="clo-87"
@@ -882,7 +1208,7 @@ assert_no_partial_files "$ASSET_DIR_CLO_88_ZIG" "CLO-88 Zig"
 container_exec rm -rf "$ASSET_DIR_CLO_88_PERL" "$ASSET_DIR_CLO_88_ZIG"
 
 # -----------------------------------------------------------------------------
-# CLO-89: Default --retry (5) retries BFS GET on transient 503 [TDD for Zig]
+# CLO-89: Default --retry (5) retries BFS GET on transient 503
 #
 # The most important user-facing retry scenario: the SOURCE server is briefly
 # unavailable when clone-job tries to fetch job info.  With the default retry

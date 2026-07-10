@@ -425,15 +425,6 @@ all suites: API & Protocol, Authentication (HMAC-SHA1), CLI Flags &
 Configuration, Error Handling & Edge Cases, Verbose Headers, Archive, Monitor,
 Schedule, and Stress.
 
-## Expected Failures
-
-All existing tests (api, auth, data, output, robustness, retry, archive, monitor,
-help, perf) pass. The **schedule** suite tests are expected to **FAIL on the Zig
-side** until the `schedule` subcommand is implemented (TDD approach — tests are
-written first). Perl-side assertions in the schedule suite should pass.
-
----
-
 ## Fixture Files
 
 | File | Purpose |
