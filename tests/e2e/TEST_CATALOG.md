@@ -281,6 +281,11 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-42 | --clone-children (parallel) | Cloning parallel parent with `--clone-children` creates both (2 jobs). |
 | CLO-43 | Bare --host localhost to http:// | Clone-job special-cases bare `localhost` to `http://` (not `https://`). |
 | CLO-44 | Bare --host 127.0.0.1 to https:// | Non-localhost bare host gets `https://` (TLS error expected). |
+| CLO-72 | OPENQA_SHAREDIR existing dir, no --dir | `OPENQA_SHAREDIR` set to existing dir; Perl downloads to `$OPENQA_SHAREDIR/factory/`. |
+| CLO-73 | OPENQA_SHAREDIR non-existing (parent missing), no --dir | `OPENQA_SHAREDIR` set to path with missing parent; Perl behavior documented. |
+| CLO-74 | --dir to non-existing folder | `--dir` pointing to non-existing path; both Perl and Zig create the directory and download assets. MD5 verified. |
+| CLO-75 | No --dir, no OPENQA_SHAREDIR → default path | Asset temporarily removed from `/var/lib/openqa/share/factory/`; both re-download to default location, proving the default path is used. |
+| CLO-76 | --dir overrides OPENQA_SHAREDIR | Both `--dir` and `OPENQA_SHAREDIR` set; `--dir` wins for both Perl and Zig. Decoy SHAREDIR path must remain empty. |
 | CLO-90 | Default --max-depth is 1 (Perl == Zig) | No `--max-depth` flag → both clone only 2 jobs (layer_a + layer_b) from a 17-layer chain. |
 | CLO-91 | Explicit --max-depth 1 | Both Perl and Zig clone 2 jobs from the deeplayer root. |
 | CLO-91b | --max-depth 1 layer identity | Cloned jobs are layer_a and layer_b; layer_c is absent. |
@@ -292,13 +297,13 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-97 | Middle + --skip-deps + --max-depth 0 | layer_i + all 8 descendants (l–s) = 9 jobs; no parents (--skip-deps). |
 | CLO-RK-1 | `OPENQA_CLI_RETRY_SLEEP_TIME_S` + `RETRY_FACTOR` for clone-job | Both Perl and Zig accept these env vars on a healthy server and exit 0. |
 | CLO-84 | Perl retries on 503 | Fault proxy injects 2×503 then forwards; Perl retries and exits 0; ≥3 proxy hits confirmed; MD5 of downloaded asset verified against source. |
-| CLO-85 | Zig retry on 503 [TDD] | Same fault scenario as CLO-84; Zig currently exits non-zero (Gap 2 unimplemented); exactly 1 proxy hit; no partial file must remain (TDD). |
-| CLO-86 | 404 → no retry (both) | Proxy always returns 404; Zig exits non-zero (correct) and must leave no partial file; Perl exits 0 (known bug) and must also leave no partial file (TDD for cleanup). |
-| CLO-87 | Perl exhausts retries | Proxy always 503; `--retry 2` → Perl exits 0 after exactly 3 attempts (known curl bug); no partial file must remain (TDD for cleanup). |
-| CLO-88 | `--retry 0` disables retries | Proxy always 503; `--retry 0` → both tools make minimal attempts; Zig exits non-zero and must leave no partial file; Perl exits 0 (known bug) and must also leave no partial file (TDD). |
-| CLO-89 | Default --retry retries BFS GET [TDD] | Proxy faults `/api/v1/jobs/` with 2×503 then forwards; Perl retries by default and succeeds; Zig currently fails (wrong default of 0 retries instead of 5). |
+| CLO-85 | Zig retry on 503 | Same fault scenario as CLO-84; Zig currently exits non-zero (Gap 2 unimplemented); exactly 1 proxy hit; no partial file must remain. |
+| CLO-86 | 404 → no retry (both) | Proxy always returns 404; Zig exits non-zero (correct) and must leave no partial file; Perl exits 0 (known bug) and must also leave no partial file. |
+| CLO-87 | Perl exhausts retries | Proxy always 503; `--retry 2` → Perl exits 0 after exactly 3 attempts (known curl bug); no partial file must remain. |
+| CLO-88 | `--retry 0` disables retries | Proxy always 503; `--retry 0` → both tools make minimal attempts; Zig exits non-zero and must leave no partial file; Perl exits 0 (known bug) and must also leave no partial file. |
+| CLO-89 | Default --retry retries BFS GET | Proxy faults `/api/v1/jobs/` with 2×503 then forwards; Perl retries by default and succeeds; Zig currently fails (wrong default of 0 retries instead of 5). |
 | CLO-98 | Perl retries after mid-transfer TCP drop | Proxy sends 200 + 64 bytes then RST (partial mode) × 2, then forwards cleanly; Perl's curl retries on CURLE_RECV_ERROR (56) and exits 0; ≥3 proxy hits confirmed; MD5 verified — file must not be a concatenation of partial attempts. |
-| CLO-99 | Zig mid-transfer TCP drop [TDD] | Same partial fault scenario as CLO-98; Zig currently exits non-zero (Gap 2 unimplemented — no retry in `downloadAssets`); exactly 1 proxy hit; no partial file must remain (TDD). |
+| CLO-99 | Zig mid-transfer TCP drop | Same partial fault scenario as CLO-98; Zig currently exits non-zero (Gap 2 unimplemented — no retry in `downloadAssets`); exactly 1 proxy hit; no partial file must remain. |
 
 ### Stress Tests (`tests_stress.sh`)
 | # | Test | Verification |

@@ -2619,6 +2619,13 @@ pub fn main() !void {
     };
     defer args.deinit(gpa);
 
+    // ── OS environment variables ──────────────────────────────────────────────
+    // Read all openQA-relevant env vars once at startup, then dispatch
+    // individual values to library functions as needed.
+    var env: cli_env.OsEnv = .{};
+    try cli_env.resolve(gpa, &env);
+    defer env.deinit(gpa);
+
     if (args.help) {
         if (args.subcmd) |sc| {
             switch (sc) {
@@ -2723,11 +2730,27 @@ pub fn main() !void {
         break :blk args.host orelse "localhost";
     };
 
-    const creds = try cli_env.resolveCredentials(gpa, host_for_creds, args.apikey, args.apisecret);
+    const creds = try cli_env.resolveCredentials(
+        gpa,
+        host_for_creds,
+        args.apikey,
+        args.apisecret,
+        env.openqa_api_key,
+        env.openqa_api_secret,
+        env.openqa_config,
+        env.home,
+    );
     defer if (creds) |c| c.deinit();
 
     // Retry/timeout knobs: --retries > OPENQA_CLI_* env vars > defaults (0).
-    const retry_cfg = try cli_env.resolveRetryConfig(gpa, args.retries, 0);
+    const retry_cfg = try cli_env.resolveRetryConfig(
+        args.retries,
+        0,
+        env.openqa_cli_retries,
+        env.openqa_cli_connect_timeout,
+        env.openqa_cli_retry_sleep_time_s,
+        env.openqa_cli_retry_factor,
+    );
     const retries = retry_cfg.retries;
     const connect_timeout_s = retry_cfg.connect_timeout_s;
     const retry_sleep_s = retry_cfg.retry_sleep_s;

@@ -13,7 +13,6 @@
 # Uses the scenario-definitions.yaml cached at /tmp/scenario.yaml inside the
 # container (written by seed_fixtures.sh during infrastructure setup).
 #
-# NOTE (TDD): The Zig schedule subcommand is not yet implemented.
 # All Zig tests are expected to FAIL until the implementation is complete.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"

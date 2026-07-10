@@ -1172,6 +1172,13 @@ pub fn main() !void {
     };
     defer args.deinit(gpa);
 
+    // ── OS environment variables ──────────────────────────────────────────────
+    // Read all openQA-relevant env vars once at startup, then dispatch
+    // individual values to library functions as needed.
+    var env: cli_env.OsEnv = .{};
+    try cli_env.resolve(gpa, &env);
+    defer env.deinit(gpa);
+
     if (args.help) {
         printHelp(false);
         return;
@@ -1217,7 +1224,16 @@ pub fn main() !void {
 
     // ── Credentials ──────────────────────────────────────────────────────────
     // Resolve credentials for source (from_url) and destination (host_url).
-    const from_creds = cli_env.resolveCredentials(gpa, resolved.from_url, args.apikey, args.apisecret) catch |err| {
+    const from_creds = cli_env.resolveCredentials(
+        gpa,
+        resolved.from_url,
+        args.apikey,
+        args.apisecret,
+        env.openqa_api_key,
+        env.openqa_api_secret,
+        env.openqa_config,
+        env.home,
+    ) catch |err| {
         printStderr("Error: credential lookup failed: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
@@ -1234,14 +1250,30 @@ pub fn main() !void {
                 .secret = try gpa.dupe(u8, c.secret),
             };
         } else break :blk null;
-    } else try cli_env.resolveCredentials(gpa, resolved.host_url, args.apikey, args.apisecret);
+    } else try cli_env.resolveCredentials(
+        gpa,
+        resolved.host_url,
+        args.apikey,
+        args.apisecret,
+        env.openqa_api_key,
+        env.openqa_api_secret,
+        env.openqa_config,
+        env.home,
+    );
     defer if (host_creds) |c| c.deinit();
 
     // ── Retry/timeout knobs ──────────────────────────────────────────────────
     // clone-job defaults to 5 retries for ALL HTTP operations (BFS GETs, the
     // destination POST, and asset downloads), matching the Perl reference's
     // `$options->{retry} //= 5`. A user-set OPENQA_CLI_RETRIES still overrides.
-    const retry_cfg = cli_env.resolveRetryConfig(gpa, args.retry, 5) catch |err| {
+    const retry_cfg = cli_env.resolveRetryConfig(
+        args.retry,
+        5,
+        env.openqa_cli_retries,
+        env.openqa_cli_connect_timeout,
+        env.openqa_cli_retry_sleep_time_s,
+        env.openqa_cli_retry_factor,
+    ) catch |err| {
         printStderr("Error: retry config resolution failed: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
@@ -1393,7 +1425,15 @@ pub fn main() !void {
                 std.process.exit(1);
             }
         }
-        const asset_dir = args.dir orelse "/var/lib/openqa/share/factory";
+        const sharedir_factory: ?[]const u8 = if (env.openqa_sharedir) |s|
+            std.fmt.allocPrint(gpa, "{s}/factory", .{s}) catch |err| {
+                printStderr("Error: failed to construct asset dir path: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            }
+        else
+            null;
+        defer if (sharedir_factory) |s| gpa.free(s);
+        const asset_dir = args.dir orelse sharedir_factory orelse "/var/lib/openqa/share/factory";
         downloadAssets(
             gpa,
             &client,
