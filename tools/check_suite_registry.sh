@@ -24,7 +24,7 @@ E2E_DIR="$REPO_ROOT/tests/e2e"
 
 TESTS_SH="$E2E_DIR/tests.sh"
 MAKEFILE="$REPO_ROOT/Makefile"
-README="$E2E_DIR/README.md"
+TEST_CATALOG="$E2E_DIR/TEST_CATALOG.md"
 
 errors=0
 
@@ -77,13 +77,13 @@ for file in "${on_disk[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# 4. Check tests/e2e/README.md — File Layout code block
-#    Each tests_*.sh must appear somewhere in the README.
+# 4. Check tests/e2e/TEST_CATALOG.md — File Layout code block
+#    Each tests_*.sh must appear somewhere in the TEST_CATALOG.md.
 # ---------------------------------------------------------------------------
-echo "  Checking README.md (File Layout)..."
+echo "  Checking TEST_CATALOG.md (File Layout)..."
 for file in "${on_disk[@]}"; do
-	if ! grep -qF "$file" "$README"; then
-		echo "    MISSING: '$file' not mentioned in $README"
+	if ! grep -qF "$file" "$TEST_CATALOG"; then
+		echo "    MISSING: '$file' not mentioned in $TEST_CATALOG"
 		errors=$((errors + 1))
 	fi
 done

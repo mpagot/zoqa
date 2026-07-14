@@ -214,7 +214,7 @@ disk is properly registered in all three required locations:
 
 1. `tests/e2e/tests.sh` — `_e2e_all_suites` array
 2. `Makefile` — `E2E_SCRIPTS` list
-3. `tests/e2e/README.md` — File Layout section
+3. `tests/e2e/TEST_CATALOG.md` — File Layout section
 
 It also detects stale entries (registrations pointing to files that no longer exist).
 
