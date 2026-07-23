@@ -23,7 +23,7 @@ const ProgressWriter = struct {
 
     /// Create a new progress writer that displays download percentage on stdout.
     ///
-    /// Arguments:
+    /// Parameters:
     /// - `out`: The underlying stdout writer for regular output.
     /// - `name`: Display name for the asset being downloaded.
     /// - `cl`: Pointer to the optional content-length (updated by the HTTP layer).
@@ -42,6 +42,14 @@ const ProgressWriter = struct {
         };
     }
 
+    /// Flush buffered data to the underlying file writer and update byte progress.
+    ///
+    /// Parameters:
+    /// - `w`: The writer interface whose buffer holds pending data.
+    /// - `data`: Scatter-gather slice array to drain.
+    /// - `splat`: Repeat count for the last data slice (splatted writes).
+    ///
+    /// Returns: Number of bytes consumed from `data` beyond the internal buffer.
     fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
         const self: *ProgressWriter = @alignCast(@fieldParentPtr("writer", w));
         const aux = w.buffered();
@@ -82,6 +90,7 @@ const ProgressWriter = struct {
         return n;
     }
 
+    /// Print the current download percentage to stdout when it changes.
     fn updateProgress(self: *ProgressWriter) void {
         if (self.content_length.*) |total| {
             if (total > 0) {
@@ -100,6 +109,18 @@ const ProgressWriter = struct {
     }
 };
 
+/// Download a file with progress reporting, streaming it to disk.
+///
+/// Parameters:
+/// - `allocator`: Used for HTTP buffers and temporary path construction.
+/// - `client`: HTTP client instance (injected for testability).
+/// - `host`: Base URL of the openQA instance.
+/// - `url_path`: Absolute URL path to fetch (e.g. "/tests/42/asset/iso/foo.iso").
+/// - `dest_path`: Local filesystem path to write the downloaded file.
+/// - `display_name`: Human-readable name shown in progress output.
+/// - `options`: Archive options (credentials, size limit, quiet mode).
+///
+/// Errors: Returns on any download failure (non-fatal); propagates file I/O errors.
 fn downloadFile(
     allocator: std.mem.Allocator,
     client: anytype,
@@ -165,6 +186,17 @@ fn downloadFile(
     stdout_writer.interface.flush() catch {};
 }
 
+/// Download a file silently (no progress output), used for screenshots and thumbnails.
+///
+/// Parameters:
+/// - `allocator`: Used for HTTP buffers.
+/// - `client`: HTTP client instance.
+/// - `host`: Base URL of the openQA instance.
+/// - `url_path`: Absolute URL path to fetch.
+/// - `dest_path`: Local filesystem path to write the downloaded file.
+/// - `options`: Archive options (credentials, size limit, quiet mode).
+///
+/// Errors: Returns on any download failure (non-fatal); propagates file I/O errors.
 fn downloadFileNoProgress(
     allocator: std.mem.Allocator,
     client: anytype,
@@ -197,6 +229,17 @@ fn downloadFileNoProgress(
     file_ok = true;
 }
 
+/// Process a single test result detail entry (screenshot or inline text).
+///
+/// Parameters:
+/// - `allocator`: Used for path construction and HTTP buffers.
+/// - `client`: HTTP client instance.
+/// - `host`: Base URL of the openQA instance.
+/// - `resultdir`: Local testresults directory path.
+/// - `item`: JSON object map for one detail entry (has "screenshot" or "text" key).
+/// - `options`: Archive options (credentials, thumbnails, quiet mode).
+///
+/// Errors: Propagates allocation and file I/O errors; HTTP failures are non-fatal.
 fn downloadTestResultDetail(
     allocator: std.mem.Allocator,
     client: anytype,
@@ -272,7 +315,7 @@ fn downloadTestResultDetail(
 /// Fetches the asset list for the given job, then downloads each asset
 /// (respecting include/exclude filters) into the specified output directory.
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: General-purpose allocator for HTTP buffers and path construction.
 /// - `client`: HTTP client (injected; supports `anytype` for testability).
 /// - `host`: Base URL of the openQA instance (e.g. "https://openqa.opensuse.org").

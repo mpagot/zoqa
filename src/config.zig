@@ -20,7 +20,7 @@ pub const HostResult = struct {
 
 /// Resolves the effective base URL string from alias flags and host argument.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Used to allocate the `https://` prefix when a bare hostname is given.
 ///   - `flag_osd`: `true` if `--osd` was passed (maps to `http://openqa.suse.de`).
 ///   - `flag_o3`: `true` if `--o3` was passed (maps to `https://openqa.opensuse.org`).
@@ -64,7 +64,7 @@ pub fn resolveHost(
 
 /// Parses INI file content to find credentials for a specific hostname.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Used to allocate owned copies of the key and secret strings.
 ///   - `content`: The raw INI file content to parse.
 ///   - `hostname`: The section name to search for (e.g. `"openqa.suse.de"`).
@@ -127,7 +127,7 @@ pub fn parseIni(allocator: std.mem.Allocator, content: []const u8, hostname: []c
 /// Search order: `$OPENQA_CONFIG/client.conf` > `~/.config/openqa/client.conf`
 /// > `/etc/openqa/client.conf` > `/usr/etc/openqa/client.conf`.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Used for path construction, file I/O, and result allocation.
 ///   - `hostname`: The INI section name to look up (e.g. `"openqa.opensuse.org"`).
 ///

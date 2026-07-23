@@ -28,10 +28,16 @@ pub const JobStatus = struct {
     /// Raw state string returned by the API (useful for printing)
     raw_state: []const u8,
 
+    /// Report whether the job has reached a terminal state (done or cancelled).
+    ///
+    /// Returns: true if no further polling is needed.
     pub fn isTerminal(self: JobStatus) bool {
         return self.state == .done or self.state == .cancelled;
     }
 
+    /// Report whether the job finished successfully (passed or softfailed).
+    ///
+    /// Returns: true for a passing result.
     pub fn isSuccess(self: JobStatus) bool {
         return self.result == .passed or self.result == .softfailed;
     }
@@ -51,6 +57,19 @@ fn parseResult(s: []const u8) JobResult {
 /// `client` is duck-typed: production callers pass `*std.http.Client`; fuzz
 /// harnesses pass a `*ProgrammableMockClient` (see `tests/fuzz/mock_client.zig`).
 /// Forwarded to `http_client.openQAReq`, which already accepts `anytype`.
+///
+/// Parameters:
+///   - allocator: used for the request path and the returned `raw_state`.
+///   - client: an HTTP client compatible with `http_client.openQAReq`.
+///   - host: bare hostname or full base URL of the openQA instance.
+///   - job_id: numeric id of the job to query.
+///   - follow: when true, request status of the whole parallel cluster.
+///   - call_options: credentials and retry policy (method is forced to GET).
+///
+/// Returns: a parsed `JobStatus`; the caller must free `raw_state`.
+///
+/// Errors: `error.HttpError` on a non-200 response, `error.InvalidJson` on a
+/// malformed body, plus allocation and any error propagated by `openQAReq`.
 pub fn checkJobStatus(
     allocator: std.mem.Allocator,
     client: anytype,
@@ -110,6 +129,11 @@ pub fn checkJobStatus(
 /// 0: all passed/softfailed
 /// 2: at least one job failed/incomplete/cancelled
 /// (Exit code 1 for network/API errors should be handled by the caller before this)
+///
+/// Parameters:
+///   - statuses: the terminal statuses of all monitored jobs.
+///
+/// Returns: 0 when every job succeeded, 2 otherwise.
 pub fn exitCodeForStatuses(statuses: []const JobStatus) u8 {
     for (statuses) |s| {
         if (s.state == .cancelled or !s.isSuccess()) {
@@ -144,10 +168,6 @@ test "exitCodeForStatuses - cancelled state returns 2 regardless of result" {
     try std.testing.expectEqual(@as(u8, 2), exitCodeForStatuses(&statuses));
 }
 
-// ---------------------------------------------------------------------------
-// MonitorOptions & runMonitor — library entry point for the monitoring loop
-// ---------------------------------------------------------------------------
-
 /// Configuration for the monitoring loop. Mirrors the CLI flags of the
 /// `monitor` subcommand (§14) and is reused by `schedule --monitor` (§15.7).
 pub const MonitorOptions = struct {
@@ -165,10 +185,20 @@ pub const MonitorOptions = struct {
 ///
 /// `client` is duck-typed: see `checkJobStatus` for the contract.
 ///
-/// Returns the exit code:
-///   0 — all jobs passed or softfailed
-///   1 — API/network error during polling
-///   2 — at least one job failed/cancelled
+/// Parameters:
+///   - allocator: used for per-poll state and status bookkeeping.
+///   - client: an HTTP client compatible with `checkJobStatus`.
+///   - host: bare hostname or full base URL of the openQA instance.
+///   - job_ids: the jobs to monitor until they reach a terminal state.
+///   - options: polling, retry and credential settings (see `MonitorOptions`).
+///
+/// Returns: the exit code:
+///   0 : all jobs passed or softfailed
+///   1 : API/network error during polling
+///   2 : at least one job failed/cancelled
+///
+/// Errors: propagates allocation failures and stdout write failures; per-job
+/// polling errors are handled internally and surfaced via the exit code.
 pub fn runMonitor(
     allocator: std.mem.Allocator,
     client: anytype,

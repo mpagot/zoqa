@@ -11,72 +11,146 @@
 ### Build and Test
 
 ```sh
-# Build
-zig build
-
-# Unit tests
-zig build test --summary all
-
-# Lint (bash -n + shellcheck on all E2E scripts)
-make e2e-lint
-
-# Near end-to-end tests (starts an openQA container via Podman)
-# Requires the binary to be built first:
-zig build
-make e2e
+make zig-build-debug    # debug binary at zig-out/bin/zoqa
+make zig-build-release  # release binary (ReleaseFast + stripped)
+make zig-test           # unit tests (includes discovery guard)
+make e2e-lint           # lint all E2E scripts
+make zig-build-debug && make e2e-dryrun  # validate E2E harness (no container needed)
+make e2e                # full E2E suite (Podman; auto-starts/tears down container)
 ```
 
-Before submitting a PR:
-1. Run `zig fmt src/` to format all source files.
-2. Ensure `zig build test` passes with no failures.
-3. Ensure `make e2e-lint` passes cleanly.
+### Pre-PR Checklist
+
+All of these must pass before opening a pull request; they mirror the CI gate:
+
+```sh
+make zig-lint             # Zig formatting
+make zig-test-discovery   # test discovery guard (Zig issue #10018)
+make e2e-lint             # E2E script linting
+make manual-lint          # manual script linting
+make fuzz-lint            # fuzz script linting
+make fuzz-sanitize        # corpus filename safety (Windows-safe)
+make zig-build-debug && make e2e-dryrun  # build + E2E dry run
+```
+
+Run additionally when relevant:
+
+```sh
+make zig-doc-lint       # docstring completeness (when adding/changing pub fn)
+make e2e-catalog-lint    # catalog parity (when editing E2E tests)
+make e2e SUITES=core     # quick E2E smoke test
+```
 
 ### Make Targets
 
 ```sh
-make help  # print this table
+make help  # print full table
 ```
 
 | Target | Description |
 |---|---|
-| `build` | Build the zoqa executable and static library. |
-| `release` | Build with release optimizations (`ReleaseFast`). |
-| `test` | Run all Zig unit tests. |
+| `zig-build-debug` | `zig build` debug binary at `zig-out/bin/zoqa`. |
+| `zig-build-release` | `zig build -Doptimize=ReleaseFast -Dstrip=true`. |
+| `zig-test` | Run all unit tests (includes `zig-test-discovery`). |
+| `zig-test-discovery` | Guard against Zig issue #10018: verify every `test` block runs. |
+| `zig-lint` | `zig fmt --check src/` Zig source formatting. |
+| `zig-doc-lint` | Check `///` docstring completeness for `pub`/`export fn` in `src/`. |
 | `e2e` | Run the full E2E suite (starts + tears down container). |
 | `e2e-keep` | Run E2E keeping the container alive (`--keep-container`). |
-| `e2e-lint` | Bash `-n` syntax check and shellcheck on all E2E scripts. |
-| `fuzz-build` | Build the instrumented AFL++ fuzz binaries. |
+| `e2e-dryrun` | Simulate E2E run without starting a container. |
+| `e2e-lint` | bash -n + shellcheck + suite registry check on all E2E scripts. |
+| `e2e-catalog-lint` | Test prefix naming and `TEST_CATALOG.md` parity. |
+| `manual-lint` | bash -n + shellcheck on `tests/manual/` scripts. |
+| `fuzz-build` | Build the AFL++ fuzz harness. |
+| `fuzz-sanitize` | Check corpus filenames are Windows-safe (no colons). |
+| `fuzz-lint` | bash -n + shellcheck on `tests/fuzz/` scripts. |
+| `lint` | Aggregate: `zig-lint` + `manual-lint` + `fuzz-lint`. |
 
 ### Testing
 
 #### Unit Tests
 
 ```sh
-zig build test --summary all         # all unit tests
-zig test src/config.zig              # single file
-zig test src/main.zig --test-filter "parseIni"  # substring match
+make zig-test             # full suite (includes discovery guard)
+make zig-test-discovery   # discovery guard only (tools/check_test_count.sh)
+
+# Direct zig commands:
+zig build test --summary all
+zig test src/config.zig                              # single file
+zig test src/main.zig --test-filter "parseIni"       # substring match
 ```
 
-Shortcut: `make test`.
+`zig-test-discovery` counts `test` declarations in `src/*.zig` against the runner's reported count. A mismatch means tests are silently skipped (Zig lazy-analysis [issue #10018](https://github.com/ziglang/zig/issues/10018)). Fix: add `test { _ = @import("missing.zig"); }` to the test root.
 
 #### Near End-to-End (E2E) Tests
 
 Validates CLI behavior, HMAC authentication, and API parity with the Perl reference
 using a live official openQA single-instance container managed by Podman.
 
+Requires `zig-out/bin/zoqa` to be built first (`make zig-build-debug`).
+
+```sh
+make e2e                                   # start container, run all suites, teardown
+make e2e-keep                              # keep container alive after tests
+make e2e-dryrun                            # simulate run without container
+make e2e SUITES=core,auth                  # run specific suites only
+make e2e SUITES=                           # deploy container only, run no tests
+```
+
 See [tests/e2e/README.md](tests/e2e/README.md) for prerequisites, script reference,
 flags, debugging tips, and the full test coverage table.
 
-Shortcuts: `make e2e` and `make e2e-keep`.
+##### E2E Test Catalog
 
+```sh
+make e2e-catalog-lint                               # check all E2E test files
+bash tools/check_test_catalog.sh tests_archive.sh  # check a single file
+```
+
+`tools/check_test_catalog.sh` enforces:
 #### Fuzz Testing
 
 Coverage-guided fuzz testing using AFL++ in Persistent Mode with LLVM instrumentation.
 
+```sh
+make fuzz-build     # build the AFL++ fuzz harness
+make fuzz-sanitize  # check corpus filenames are Windows-safe (no colons)
+```
+
 See [tests/fuzz/README.md](tests/fuzz/README.md) for setup, workflow, crash triage,
 corpus distillation, and coverage reporting.
 
-Shortcut: `make fuzz-build`.
+#### Docstring Completeness
+
+```sh
+make zig-doc-lint                  # check pub/export fn docstrings in src/*.zig
+make zig-doc-lint WITH_PRIVATE=1   # also include private functions
+```
+
+`tools/check_docstrings.py` requires every `pub fn` / `export fn` to have:
+- A summary `///` line
+- `Arguments:` section when the function has non-self/non-underscore params
+- `Returns:` section when the return type is not `void`/`noreturn`
+- `Errors:` section when the return type is an error union (`!T`)
+
+Not gated in CI, run locally when adding or changing public functions.
+
+---
+
+## GitHub Checks at Every PR
+
+`.github/workflows/ci.yml` defines four required jobs:
+
+| Job | Runner | Commands |
+|---|---|---|
+| `lint` | ubuntu | `make zig-lint` |
+| `build-and-test` | ubuntu + macos + windows | `zig build --summary all`, `zig build test --summary all` |
+| `cross-compile` | ubuntu | Cross-compile for 6 targets (x86_64/aarch64 × linux-musl / macos / windows) |
+| `tests-check` | ubuntu | `make e2e-lint`, `make manual-lint`, `make fuzz-lint`, `make fuzz-sanitize`, `make zig-build-debug`, `make e2e-dryrun`, `make zig-test-discovery` |
+
+The `ci` aggregation job is the required status check for branch protection.
+
+**Not gated in CI (local only):** `make e2e` (full suite requires Podman), `make e2e-catalog-lint`, `make zig-doc-lint`.
 
 ---
 
@@ -100,7 +174,7 @@ git pull
 **2. Create and push the tag**
 
 Use [Semantic Versioning](https://semver.org/).  Pre-release versions use a hyphen
-suffix (e.g. `-rc1`, `-beta.1`) — these are automatically marked as pre-releases on
+suffix (e.g. `-rc1`, `-beta.1`); these are automatically marked as pre-releases on
 GitHub.
 
 ```sh
@@ -110,7 +184,7 @@ git tag v1.2.3
 # Pre-release / release candidate
 git tag v1.2.3-rc1
 
-# Push only the new tag (preferred — avoids triggering builds for old tags)
+# Push only the new tag (preferred, avoids triggering builds for old tags)
 git push origin v1.2.3-rc1
 ```
 

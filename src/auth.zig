@@ -3,11 +3,11 @@ const HmacSha1 = std.crypto.auth.hmac.HmacSha1;
 
 /// Writes 40-char lowercase hex HMAC-SHA1 digest into `out[0..40]`.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `key`: The HMAC key (API secret).
 ///   - `message`: The data to be signed.
 ///   - `out`: Pointer to a 40-byte buffer that receives the hex digest.
-pub fn hmacSha1Hex(
+fn hmacSha1Hex(
     key: []const u8,
     message: []const u8,
     out: *[40]u8,
@@ -17,10 +17,20 @@ pub fn hmacSha1Hex(
     out.* = std.fmt.bytesToHex(hmac_out, .lower);
 }
 
+test "hmacSha1Hex" {
+    const testing = std.testing;
+
+    var out: [40]u8 = undefined;
+    hmacSha1Hex("key", "The quick brown fox jumps over the lazy dog", &out);
+
+    // Expected value from standard HMAC-SHA1 tests
+    try testing.expectEqualStrings("de7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9", &out);
+}
+
 /// Builds the three openQA authentication headers (X-API-Microtime,
 /// X-API-Key, X-API-Hash) from the given credentials and request path.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `api_key`: The API key string (borrowed; must outlive the returned headers).
 ///   - `api_secret`: The API secret used as the HMAC key.
 ///   - `path_and_query`: The request path including query string (e.g. `/api/v1/jobs?limit=5`).
@@ -47,16 +57,6 @@ pub fn buildAuthHeaders(
         .{ .name = "X-API-Key", .value = api_key },
         .{ .name = "X-API-Hash", .value = hash_buf },
     };
-}
-
-test "hmacSha1Hex" {
-    const testing = std.testing;
-
-    var out: [40]u8 = undefined;
-    hmacSha1Hex("key", "The quick brown fox jumps over the lazy dog", &out);
-
-    // Expected value from standard HMAC-SHA1 tests
-    try testing.expectEqualStrings("de7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9", &out);
 }
 
 test "buildAuthHeaders" {
@@ -89,7 +89,7 @@ test "buildAuthHeaders" {
 test "buildAuthHeaders: openQA reference values" {
     const testing = std.testing;
 
-    // Synthetic values — HMAC-SHA1 independently verified with Python hmac module
+    // Synthetic values: HMAC-SHA1 independently verified with Python hmac module
     const api_key = "AAAA1111AAAA1111";
     const api_secret = "BBBB2222BBBB2222";
     const path_and_query = "/api/v1/isos";
@@ -127,7 +127,6 @@ test "buildAuthHeaders: dummy values" {
 test "buildAuthHeaders: Turn 21 regression" {
     const testing = std.testing;
 
-    // Synthetic values — HMAC-SHA1 independently verified with Python hmac module
     const api_key = "CCCC3333CCCC3333";
     const api_secret = "DDDD4444DDDD4444";
     const path_and_query = "/api/v1/isos";

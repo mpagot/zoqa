@@ -79,7 +79,7 @@ pub const LinkIterator = struct {
             const url_start = std.mem.indexOfScalar(u8, trimmed, '<') orelse continue;
             const url_end = std.mem.indexOfScalar(u8, trimmed, '>') orelse continue;
             if (url_end <= url_start) continue;
-            const url = trimmed[url_start + 1 .. url_end];
+            const parsed_url = trimmed[url_start + 1 .. url_end];
 
             var params = std.mem.splitScalar(u8, trimmed[url_end + 1 ..], ';');
             while (params.next()) |param| {
@@ -90,7 +90,7 @@ pub const LinkIterator = struct {
                         r = r[1 .. r.len - 1];
                     }
                     if (r.len > 0) {
-                        return .{ .rel = r, .url = url };
+                        return .{ .rel = r, .url = parsed_url };
                     }
                 }
             }
@@ -106,7 +106,7 @@ pub const LinkIterator = struct {
 /// comma-separated entry in the header. Zero allocation, all
 /// returned slices borrow from `header`.
 ///
-/// Arguments:
+/// Parameters:
 /// - `header`: The raw `Link` header string (e.g. `<url>; rel="next", <url>; rel="last"`).
 ///
 /// Returns: A `LinkIterator` that lazily yields `Relation` pairs from the header.
@@ -142,10 +142,6 @@ pub const runMonitor = monitor.runMonitor;
 
 pub const ScheduleOptions = schedule.ScheduleOptions;
 pub const runSchedule = schedule.runSchedule;
-
-// ---------------------------------------------------------------------------
-// Tests — parseLinkHeader (Tier 3, defined in this file)
-// ---------------------------------------------------------------------------
 
 test "parseLinkHeader: multiple relations in header order" {
     const header = "</api/v1/jobs?offset=0>; rel=\"first\", </api/v1/jobs?offset=10>; rel=\"next\"";

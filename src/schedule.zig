@@ -37,15 +37,13 @@ pub const ScheduleOptions = struct {
 ///   4. If `--monitor` is active and job IDs are available (sync or after
 ///      async polling), enter the monitoring loop.
 ///
-/// Arguments:
-///   - `allocator`: Used for JSON parsing and string formatting.
-///   - `client`: Duck-typed HTTP client. Production callers pass `*std.http.Client`;
-///               fuzz harnesses pass a `*ProgrammableMockClient` (see
-///               `tests/fuzz/mock_client.zig`). Forwarded to `http_client.openQAReq`,
-///               which already accepts `anytype`.
-///   - `host`: The resolved base URL of the target openQA instance.
-///   - `params_encoded`: Form-encoded parameter string for the POST request body.
-///   - `options`: Execution options governing credentials, retries, output, and monitoring.
+/// Parameters:
+///   - allocator: used for JSON parsing and string formatting.
+///   - client: duck-typed HTTP client compatible with `http_client.openQAReq`.
+///   - host: the resolved base URL of the target openQA instance.
+///   - params_encoded: form-encoded parameter string for the POST body.
+///   - options: credentials, retries, output, and monitoring settings
+///     (see `ScheduleOptions`).
 ///
 /// Returns: The exit code per:
 ///   - `0` — jobs scheduled successfully (without monitoring), or all passed/softfailed.
@@ -55,10 +53,18 @@ pub const ScheduleOptions = struct {
 /// Errors:
 ///   - Any allocator or I/O error from nested monitor execution or extraction routines.
 pub fn runSchedule(
+    /// Used for JSON parsing and string formatting.
     allocator: std.mem.Allocator,
+    /// Duck-typed HTTP client. Production callers pass `*std.http.Client`;
+    /// fuzz harnesses pass a `*ProgrammableMockClient` (see
+    /// `tests/fuzz/mock_client.zig`). Forwarded to `http_client.openQAReq`,
+    /// which already accepts `anytype`.
     client: anytype,
+    /// The resolved base URL of the target openQA instance.
     host: []const u8,
+    /// Form-encoded parameter string for the POST request body.
     params_encoded: []const u8,
+    /// Execution options governing credentials, retries, output, and monitoring.
     options: ScheduleOptions,
 ) !u8 {
     var stdout_buf: [4096]u8 = undefined;
@@ -234,7 +240,7 @@ pub fn runSchedule(
 /// intentional and matches the Perl reference (`_wait_for_jobs` also loops
 /// indefinitely).
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Used for building the URL path, parsing JSON responses, and allocating job ID arrays.
 ///   - `client`: Duck-typed HTTP client (same contract as `runSchedule`'s `client`).
 ///   - `host`: The resolved base URL of the target openQA instance.
@@ -372,7 +378,7 @@ fn asyncPollAndMonitor(
 /// carries an `"error_message"` string field. Output is unconditional —
 /// `options.quiet` does not suppress it.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `obj`: The JSON object map to inspect for a "failed" key.
 ///
 /// Returns: `true` if any failed entries were found (caller should return 1), `false` otherwise.
@@ -408,14 +414,13 @@ fn checkFailedEntries(obj: std.json.ObjectMap) bool {
 ///   1. If the array is empty, print (unless quiet) and return `error.NoJobsCreated`.
 ///   2. Print `"1 job has been created:\n"` or `"{N} jobs have been created:\n"`.
 ///   3. Allocate `[]u64` of length `count`; freed via `errdefer` on any error.
-///   4. Iterate: cast each `.integer` element to `u64` via `@intCast` (note:
-///      panics on negative values — documented as Gap 12), or return
-///      `error.InvalidJobId` for non-integer elements.
+///   4. Iterate: cast each `.integer` element to `u64` via `std.math.cast`,
+///      returning `error.InvalidJobId` for negative or non-integer elements.
 ///   5. Print ` - {host}/tests/{id}` per job.
 ///   6. Flush stdout.
 ///   7. Return the slice — **the caller is responsible for freeing it**.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Used to allocate the returned slice; must outlive the slice.
 ///   - `options`: Execution options (only `options.quiet` is read).
 ///   - `host`: Base URL printed in job links (e.g. `"https://openqa.suse.de"`).
@@ -574,13 +579,13 @@ test "extractJobIds: empty array returns error" {
     try testing.expectError(error.NoJobsCreated, extractJobIds(allocator, .{ .quiet = true }, "http://localhost", &w, arr));
 }
 
-// Regression test for Gap 12 — see ideas/HARNESS_AUDIT.md.
+// Regression test for negative job IDs — see ideas/HARNESS_AUDIT.md.
 // AFL discovered this crash via the schedule fuzzer on 2026-04-29.
 // Before the fix at schedule.zig:435, this test PANICS with
 // "integer does not fit in destination type" because @intCast aborts on
 // negative inputs. After the fix (using std.math.cast), it should return
 // error.InvalidJobId cleanly.
-test "extractJobIds: negative integer is rejected (Gap 12 reproduction)" {
+test "extractJobIds: negative integer is rejected" {
     const allocator = testing.allocator;
     const json_str =
         \\[-1]

@@ -1,14 +1,12 @@
+//! This module provides functions for dealing with http requests to the openQA server
+
 const std = @import("std");
 const config = @import("config.zig");
 const auth = @import("auth.zig");
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 /// A single HTTP response header name/value pair.
-/// Both fields are heap-allocated and owned by the `APIResponse` that contains
-/// this entry. Freed by `APIResponse.deinit()`.
+/// Both fields are heap-allocated and owned by the `APIResponse`
+/// that contains this entry. Freed by `APIResponse.deinit()`.
 const ResponseHeader = struct {
     name: []u8,
     value: []u8,
@@ -20,15 +18,15 @@ const ResponseHeader = struct {
 /// struct. The caller **must** call `deinit()` exactly once to release them.
 ///
 /// Fields:
-/// - `status`           — HTTP status code of the final (non-retried) response.
-/// - `body`             — Decompressed response body. Always non-null; may be
-///                        empty (`""`). Owned by this struct.
-/// - `response_headers` — All response headers, in transmission order. Owned
-///                        by this struct. Used for verbose output.
-/// - `content_type`     — Value of the first `Content-Type` response header, or
-///                        `null` if absent. Owned by this struct.
-/// - `link`             — Value of the first `Link` response header, or `null`
-///                        if absent. Used for pagination. Owned by this struct.
+/// - `status`           HTTP status code of the final (non-retried) response.
+/// - `body`             Decompressed response body. Always non-null; may be
+///                      empty (`""`). Owned by this struct.
+/// - `response_headers` All response headers, in transmission order. Owned
+///                      by this struct. Used for verbose output.
+/// - `content_type`     Value of the first `Content-Type` response header, or
+///                      `null` if absent. Owned by this struct.
+/// - `link`             Value of the first `Link` response header, or `null`
+///                      if absent. Used for pagination. Owned by this struct.
 pub const APIResponse = struct {
     allocator: std.mem.Allocator,
     status: std.http.Status,
@@ -54,8 +52,12 @@ pub const APIResponse = struct {
         self.allocator.free(self.body);
     }
 
-    /// Returns 0 for 2xx status codes, 1 otherwise.
-    /// Suitable for use as a process exit code.
+    /// Map the response status to a process exit code.
+    ///
+    /// Returns: 0 for 2xx status codes, 1 otherwise. Suitable for use directly
+    /// as a process exit code. This code is not about deciding what to return
+    /// as exit code in the cli, it is more to abstract the knowledge about the
+    /// HTTP protocol.
     pub fn exitCode(self: APIResponse) u8 {
         const s = @intFromEnum(self.status);
         return if (s >= 200 and s < 300) 0 else 1;
@@ -64,48 +66,48 @@ pub const APIResponse = struct {
 
 /// Parameters for a single HTTP request dispatched by `execute()`.
 ///
-/// `execute()` does not own any of the slices stored here — all borrowed
+/// `execute()` does not own any of the slices stored here, all borrowed
 /// memory must remain valid for the duration of the call.
 ///
 /// Fields:
-/// - `allocator`        — Used for all internal allocations (header list, body
-///                        buffer, HMAC scratch buffers). The returned `APIResponse`
-///                        is also allocated with this allocator and must be freed
-///                        by the caller via `APIResponse.deinit()`.
-/// - `method`           — HTTP method (GET, POST, PUT, DELETE, …).
-/// - `url`              — Fully-qualified URL string, e.g.
-///                        `"https://openqa.example.com/api/v1/jobs"`.
-///                        Must be a valid absolute URL; parsing errors surface as
-///                        `error.InvalidUri`.
-/// - `headers`          — Caller-supplied HTTP headers appended verbatim before
-///                        the auto-injected `Accept` and `Accept-Encoding` headers.
-///                        If no `Accept` header is present, `application/json` is
-///                        added automatically.
-/// - `body`             — Optional request body bytes. For methods that require a
-///                        body (`requestHasBody()` returns true) but where `body`
-///                        is `null`, an empty body is sent.
-/// - `credentials`      — If non-null, HMAC-SHA1 `X-API-Key` / `X-API-Hash` /
-///                        `X-API-Microtime` headers are computed from the path,
-///                        query string, and current Unix timestamp, then appended.
-///                        Body parameters are intentionally excluded from the HMAC
-///                        message.
-/// - `retries`          — Maximum number of additional attempts after the first
-///                        failure. Retries are triggered by connection errors, send
-///                        errors, and 502/503 HTTP responses. Each retry sleeps for
-///                        an exponentially increasing interval (see `sleepForRetry`).
-/// - `quiet`            — When `true`, suppresses all diagnostic output to stderr
-///                        (connection errors, non-2xx status lines, read/decompress
-///                        errors). Useful in tests and when the caller handles
-///                        errors itself.
-/// - `connect_timeout_s`— TCP connect timeout in seconds. Currently parsed and
-///                        validated but not yet wired into `std.http.Client`
-///                        (which does not expose per-connection timeout support).
-///                        Reserved for future use. Defaults to 30.0.
-/// - `retry_sleep_s`    — Base sleep duration in seconds between retry attempts.
-///                        Actual sleep = `retry_sleep_s * retry_factor^attempt`.
-///                        Defaults to 3.0.
-/// - `retry_factor`     — Exponential backoff multiplier applied per attempt.
-///                        Defaults to 1.0 (constant sleep).
+/// - `allocator`        Used for all internal allocations (header list, body
+///                      buffer, HMAC scratch buffers). The returned `APIResponse`
+///                      is also allocated with this allocator and must be freed
+///                      by the caller via `APIResponse.deinit()`.
+/// - `method`           HTTP method (GET, POST, PUT, DELETE, …).
+/// - `url`              Fully-qualified URL string, e.g.
+///                      `"https://openqa.example.com/api/v1/jobs"`.
+///                      Must be a valid absolute URL; parsing errors surface as
+///                      `error.InvalidUri`.
+/// - `headers`          Caller-supplied HTTP headers appended verbatim before
+///                      the auto-injected `Accept` and `Accept-Encoding` headers.
+///                      If no `Accept` header is present, `application/json` is
+///                      added automatically.
+/// - `body`             Optional request body bytes. For methods that require a
+///                      body (`requestHasBody()` returns true) but where `body`
+///                      is `null`, an empty body is sent.
+/// - `credentials`      If non-null, HMAC-SHA1 `X-API-Key` / `X-API-Hash` /
+///                      `X-API-Microtime` headers are computed from the path,
+///                       query string, and current Unix timestamp, then appended.
+///                      Body parameters are intentionally excluded from the HMAC
+///                      message.
+/// - `retries`          Maximum number of additional attempts after the first
+///                      failure. Retries are triggered by connection errors, send
+///                      errors, and 502/503 HTTP responses. Each retry sleeps for
+///                      an exponentially increasing interval (see `sleepForRetry`).
+/// - `quiet`             When `true`, suppresses all diagnostic output to stderr
+///                       (connection errors, non-2xx status lines, read/decompress
+///                       errors). Useful in tests and when the caller handles
+///                       errors itself.
+/// - `connect_timeout_s` TCP connect timeout in seconds. Currently parsed and
+///                       validated but not yet wired into `std.http.Client`
+///                       (which does not expose per-connection timeout support).
+///                       Reserved for future use. Defaults to 30.0.
+/// - `retry_sleep_s`     Base sleep duration in seconds between retry attempts.
+///                       Actual sleep = `retry_sleep_s * retry_factor^attempt`.
+///                       Defaults to 3.0.
+/// - `retry_factor`      Exponential backoff multiplier applied per attempt.
+///                       Defaults to 1.0 (constant sleep).
 pub const Request = struct {
     allocator: std.mem.Allocator,
     method: std.http.Method,
@@ -126,25 +128,18 @@ pub const Request = struct {
     size_limit: ?u64 = null,
 };
 
-// ---------------------------------------------------------------------------
-// StreamResult — result type for executeStream()
-// ---------------------------------------------------------------------------
-
-/// Result returned by `executeStream()`.
-///
+/// Result returned by `executeStream()`. Result type for executeStream()
 /// Fields:
-/// - `status`         — HTTP status code of the response.
-/// - `content_length` — Value of the `Content-Length` response header, or
-///                      `null` if absent or not parseable as u64.
+/// - `status`         HTTP status code of the response.
+/// - `content_length` Value of the `Content-Length` response header, or
+///                    `null` if absent or not parseable as u64.
 pub const StreamResult = struct {
     status: std.http.Status,
     content_length: ?u64,
 };
 
-// ---------------------------------------------------------------------------
-// Normalize path+query for HMAC signing: %20 → +, ~ → %7E
-// ---------------------------------------------------------------------------
-
+/// Normalize path+query for HMAC signing: %20 → +, ~ → %7E
+///
 /// Normalize a URL path+query string for HMAC-SHA1 signing.
 /// Rewrites %20 → + and ~ → %7E.
 /// Output is written to `writer`. Called internally by `execute()` before
@@ -165,18 +160,14 @@ fn normalizePathQuery(input: []const u8, writer: anytype) !void {
     }
 }
 
-// ---------------------------------------------------------------------------
-// buildHeaders — shared request-header construction
-// ---------------------------------------------------------------------------
-
-/// Build the outbound header list for a single request attempt.
+/// Shared request-header construction. Build the outbound header list for a single request attempt.
 ///
 /// Copies `extra_headers` verbatim, adds `Accept: application/json` if no
 /// `Accept` header is present, always adds `Accept-Encoding: identity`, and
 /// optionally appends HMAC-SHA1 auth headers when `credentials` is non-null.
 ///
 /// The caller must supply `hash_buf` and `timestamp_buf` as stack variables
-/// that outlive the returned list — the HMAC auth headers borrow from them
+/// that outlive the returned list: the HMAC auth headers borrow from them
 /// (see `auth.buildAuthHeaders` doc comment).
 ///
 /// The returned `ArrayList` is owned by the caller; free via
@@ -219,21 +210,19 @@ fn buildHeaders(
         defer msg_buf.deinit(allocator);
 
         const w = msg_buf.writer(allocator);
-
-        // 1. Build the path + query string
+        // Build the path + query string
         try w.print("{s}", .{uri.path.percent_encoded});
         if (uri.query) |q| {
             try w.print("?{s}", .{q.percent_encoded});
         }
 
-        // 2. Normalize: %20 → +, ~ → %7E
+        // Normalize: %20 → +, ~ → %7E
         const raw_path_query = try msg_buf.toOwnedSlice(allocator);
         defer allocator.free(raw_path_query);
         msg_buf.clearRetainingCapacity();
-
         try normalizePathQuery(raw_path_query, w);
 
-        // 3. Generate timestamp and auth headers
+        // Generate timestamp and auth headers
         const timestamp_str = try std.fmt.bufPrint(timestamp_buf, "{d}", .{std.time.timestamp()});
         const auth_headers = auth.buildAuthHeaders(
             creds.key,
@@ -248,20 +237,22 @@ fn buildHeaders(
     return headers;
 }
 
-// ---------------------------------------------------------------------------
-// execute — injectable HTTP engine
-// ---------------------------------------------------------------------------
-
-/// Perform an HTTP request using the provided client.
+/// Perform an HTTP request using the provided client. Injectable HTTP engine
 ///
-/// `client` must implement a `.request(method, uri, options)` method
-/// compatible with `std.http.Client.request`. Pass a pointer to a real
-/// `std.http.Client` for production, or a `MockClient` for tests.
+/// Parameters:
+///   - req: the fully-populated request (method, URL, headers, body,
+///     credentials, retry policy).
+///   - client: an HTTP client implementing `.request(method, uri, options)`
+///     compatible with `std.http.Client.request`. Pass a pointer to a real
+///     `std.http.Client` for production, or a `MockClient` for tests.
 ///
-/// Returns an `APIResponse` that the caller must `deinit()`.
-/// On connection or send errors (after exhausting retries), returns error
-/// rather than an `APIResponse` with a non-2xx status, so that callers can
-/// distinguish network failures from HTTP-level failures.
+/// Returns: an `APIResponse` that the caller must `deinit()`. The response may
+/// carry any HTTP status (including non-2xx); use `APIResponse.exitCode` to map
+/// it to success/failure.
+///
+/// Errors: connection or send failures (after exhausting retries) are returned
+/// as errors rather than as an `APIResponse` with a non-2xx status, so callers
+/// can distinguish network failures from HTTP-level failures.
 pub fn execute(req: Request, client: anytype) !APIResponse {
     // connect_timeout_s is passed in from the caller (resolved from env in main).
     // TODO: wire req.connect_timeout_s into the HTTP client once std.http.Client
@@ -287,20 +278,14 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
             std.debug.print(">\n", .{});
         }
 
-        // ----------------------------------------------------------------
         // Issue the request via the injected client
-        // ----------------------------------------------------------------
         var http_req = client.request(req.method, uri, .{
             .extra_headers = headers.items,
         }) catch |err| {
-            if (attempt < req.retries) {
-                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
-                continue;
-            }
-            if (!req.quiet) {
-                std.debug.print("Connection error: {s}\n", .{@errorName(err)});
-            }
-            return err;
+            if (!req.quiet) std.debug.print("Connection error: {s}\n", .{@errorName(err)});
+            if (attempt >= req.retries) return err;
+            try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+            continue;
         };
         defer http_req.deinit();
 
@@ -309,42 +294,34 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
             const body_mut = try req.allocator.dupe(u8, body_bytes);
             defer req.allocator.free(body_mut);
             http_req.sendBodyComplete(body_mut) catch |err| {
-                if (attempt < req.retries) {
-                    try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
-                    continue;
-                }
-                if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
-                return err;
+                if (!req.quiet) std.debug.print("sendBodyComplete with alloc error: {s}\n", .{@errorName(err)});
+                if (attempt >= req.retries) return err;
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                continue;
             };
         } else if (req.method.requestHasBody()) {
             http_req.sendBodyComplete(&.{}) catch |err| {
-                if (attempt < req.retries) {
-                    try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
-                    continue;
-                }
-                if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
-                return err;
+                if (!req.quiet) std.debug.print("sendBodyComplere error: {s}\n", .{@errorName(err)});
+                if (attempt >= req.retries) return err;
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                continue;
             };
         } else {
             http_req.sendBodiless() catch |err| {
-                if (attempt < req.retries) {
-                    try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
-                    continue;
-                }
-                if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
-                return err;
+                if (!req.quiet) std.debug.print("sendBodyLess error: {s}\n", .{@errorName(err)});
+                if (attempt >= req.retries) return err;
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                continue;
             };
         }
 
         // Receive response headers
         var redirect_buf: [8 * 1024]u8 = undefined;
         var response = http_req.receiveHead(&redirect_buf) catch |err| {
-            if (attempt < req.retries) {
-                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
-                continue;
-            }
             if (!req.quiet) std.debug.print("Response error: {s}\n", .{@errorName(err)});
-            return err;
+            if (attempt >= req.retries) return err;
+            try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+            continue;
         };
 
         const status_uint = @intFromEnum(response.head.status);
@@ -465,24 +442,27 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
     }
 }
 
-// ---------------------------------------------------------------------------
-// executeStream — stream a response body directly to a writer
-// ---------------------------------------------------------------------------
-
-/// Perform a single (non-retried) HTTP request and stream the response body
-/// directly to `writer`.
+/// Perform an HTTP request and stream the response body directly to `writer`.
 ///
-/// Unlike `execute()`, this function does not buffer the body in memory and
-/// does not retry on failure — it is intended for large file downloads (e.g.
-/// the `archive` subcommand) where buffering would be prohibitive.
+/// Unlike `execute()`, this function does not buffer the body in memory:
+/// it is intended for large file downloads (e.g. the `archive` subcommand and
+/// clone-job asset downloads) where buffering would be expencive.
 ///
 /// If `req.size_limit` is set and the `Content-Length` response header is
 /// present and exceeds the limit, `error.FileTooLarge` is returned before
 /// any body bytes are written to `writer`.
 ///
-/// Returns a `StreamResult` with the HTTP status and content length.
-/// The caller is responsible for checking `result.status` and handling
-/// non-2xx responses.
+/// Parameters:
+///   - req: the request to perform (see `Request`).
+///   - client: an HTTP client compatible with `std.http.Client.request`.
+///   - writer: sink the response body is streamed into.
+///   - content_length_out: optional out-param; when non-null it receives the
+///     `Content-Length` header value (or null if absent) before streaming.
+///
+/// Returns: a `StreamResult` with the HTTP status and content length. The caller
+/// is responsible for checking `result.status` and handling non-2xx responses.
+///
+/// Errors: transport failures
 pub fn executeStream(
     req: Request,
     client: anytype,
@@ -644,22 +624,17 @@ test "execute: MockClient returns APIResponse" {
     try testing.expectEqualStrings("{\"jobs\":[]}", resp.body);
 }
 
-// ---------------------------------------------------------------------------
-// CallOptions / RawGetOptions — high-level option structs for openQAReq family
-// ---------------------------------------------------------------------------
-
 /// Configuration for a single openQA API call via `openQAReq`.
 ///
-/// This struct bundles every tuneable aspect of a request — HTTP method,
-/// parameters, body, authentication credentials, retry policy, and
-/// diagnostics — into a single value that is passed to `openQAReq`.
+/// This struct bundles every tuneable aspect of a request into a single value that
+/// is passed to `openQAReq`: HTTP method, parameters, body, authentication credentials, retry policy, and diagnostics.
 /// All fields except `allocator` have sensible defaults, so callers only
 /// need to set the fields that differ from a simple unauthenticated GET.
 ///
 /// **Ownership:** `CallOptions` does **not** own any of the slices or
 /// pointers it holds (`headers`, `params`, `body`, `credentials`). The
 /// caller must ensure these remain valid for the duration of the
-/// `openQAReq` call. There is no `deinit` — nothing to free.
+/// `openQAReq` call. There is no `deinit`, nothing to free.
 pub const CallOptions = struct {
     /// General-purpose allocator used by `openQAReq` for all internal
     /// allocations. Must remain valid until `APIResponse.deinit()` is called.
@@ -670,7 +645,7 @@ pub const CallOptions = struct {
     /// POST/PUT/PATCH unless an explicit `body` is set).
     method: std.http.Method = .GET,
 
-    /// Extra request headers. **Not owned** — caller keeps the memory alive.
+    /// Extra request headers. **Not owned**, caller keeps the memory alive.
     headers: []const std.http.Header = &.{},
 
     /// Pre-encoded URL query / form-encoded parameter string.
@@ -716,15 +691,27 @@ pub const RawGetOptions = struct {
     verbose: bool = false,
 };
 
-// ---------------------------------------------------------------------------
-// openQARawGet — authenticated GET to an absolute path (no /api/v1/ prefix)
-// ---------------------------------------------------------------------------
-
 /// Perform an authenticated GET request to an arbitrary path (no /api/v1/ prefix).
+///
 /// Streams the response body into `writer`. Before streaming starts, deposits
 /// the Content-Length header value into `content_length_out` (if non-null),
 /// allowing callers to set up progress tracking.
 /// No retry — intended for large file downloads.
+///
+/// Parameters:
+///   - host: bare hostname or full base URL of the openQA instance.
+///   - absolute_path: request path; must start with "/" (no /api/v1/ prefix).
+///   - opts: allocator, credentials, size limit and verbosity (see
+///     `RawGetOptions`).
+///   - client: an HTTP client compatible with `std.http.Client.request`.
+///   - writer: destination for the streamed response body.
+///   - content_length_out: optional out-param receiving the Content-Length
+///     header value before streaming begins.
+///
+/// Returns: a `StreamResult` describing the streamed transfer.
+///
+/// Errors: host-resolution/allocation/URL-construction failures and any error
+/// propagated by `executeStream` (transport or write failure).
 pub fn openQARawGet(
     host: []const u8,
     absolute_path: []const u8, // must start with "/"
@@ -759,7 +746,7 @@ pub fn openQARawGet(
 // openQAReq — construct URL and execute a request
 // ---------------------------------------------------------------------------
 
-/// Perform an authenticated request against an openQA instance.
+/// Construct URL and Perform an authenticated request against an openQA instance.
 ///
 /// This is the **primary public entry point** of the library. It orchestrates:
 ///   1. Host resolution (bare hostname → full base URL via `config.resolveHost`).
@@ -771,6 +758,18 @@ pub fn openQARawGet(
 ///   - GET / DELETE:  `opts.params` is appended to the URL as a query string.
 ///   - POST / PUT / PATCH: `opts.params` is used as the request body, unless
 ///     `opts.body` is already set (explicit body takes precedence).
+///
+/// Parameters:
+///   - host: bare hostname or full base URL of the openQA instance.
+///   - path: API path relative to `/api/v1/` (a leading "/" is tolerated).
+///   - opts: method, params, body, credentials and retry policy (see
+///     `CallOptions`).
+///   - client: an HTTP client compatible with `std.http.Client.request`.
+///
+/// Returns: an `APIResponse` that the caller must `deinit()`.
+///
+/// Errors: host-resolution/allocation/URL-construction failures and any error
+/// propagated by `execute` (transport failure surviving retries).
 pub fn openQAReq(
     host: []const u8,
     path: []const u8,
@@ -818,10 +817,6 @@ pub fn openQAReq(
 
     return execute(req, client);
 }
-
-// ---------------------------------------------------------------------------
-// openQAReq tests — mock client captures the Request that execute() builds
-// ---------------------------------------------------------------------------
 
 /// Minimal mock HTTP client for openQAReq unit tests.
 ///
