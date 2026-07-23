@@ -2,7 +2,7 @@
 # shellcheck disable=SC2153
 # test_clone_single.sh — Single-job clone tests (CLO-12 to CLO-17, M43–M44, CLO-50 to CLO-83,
 #                         CLO-84 to CLO-89, CLO-98 to CLO-99).
-# CLO-72–76: OPENQA_SHAREDIR env var tests (Gap 4).
+# CLO-72–76: OPENQA_SHAREDIR env var tests.
 #
 # All tests in this file operate on a single base job ($JOB_ID) produced by
 # ensure_basic_job, plus CLO-80–83 which create their own phantom fixture job.
@@ -392,13 +392,18 @@ echo "--- Test CLO-71 CLO-78: Asset download ---"
 ASSET_DIR_PERL="/tmp/e2e-assets-perl-$$"
 ASSET_DIR_ZIG="/tmp/e2e-assets-zig-$$"
 container_exec mkdir -p "$ASSET_DIR_PERL" "$ASSET_DIR_ZIG"
+
+_perl_start=$(container_exec date +%s)
 run_capture "clone_assets" perl \
         "$PERL_CLONE_EXE --from http://localhost --host localhost $JOB_ID --dir $ASSET_DIR_PERL"
 _PERL_EXIT=$_LAST_EXIT
+_perl_end=$(container_exec date +%s)
 
+_zig_start=$(container_exec date +%s)
 run_capture "clone_assets" zig \
         "$ZIG_CLONE_EXE --from http://localhost --host localhost $JOB_ID --dir $ASSET_DIR_ZIG"
 _ZIG_EXIT=$_LAST_EXIT
+_zig_end=$(container_exec date +%s)
 
 assert_capture_exits "clone_assets" 0
 
@@ -422,22 +427,118 @@ fi
 # CLO-78: same integrity check for Zig.
 assert_downloaded_assets_md5 "$ASSET_DIR_ZIG" "CLO-78 Zig"
 
+# Verify modification time (mtime) of downloaded files was touched to now for both Perl and Zig.
+echo "--- Test Gap 3: Verify downloaded asset mtime is touched to now ---"
+_mtime_pass=true
+for _impl in "perl:$ASSET_DIR_PERL:$_perl_start:$_perl_end" "zig:$ASSET_DIR_ZIG:$_zig_start:$_zig_end"; do
+	_lbl=$(echo "$_impl" | cut -d: -f1)
+	_dir=$(echo "$_impl" | cut -d: -f2)
+	_start=$(echo "$_impl" | cut -d: -f3)
+	_end=$(echo "$_impl" | cut -d: -f4)
+	_files=$(container_exec find "$_dir" -type f)
+	for _file in $_files; do
+		_mtime=$(container_exec stat -c %Y "$_file")
+		# Verify that the file's mtime falls within the command's execution window (with a tiny 2s padding on either side)
+		if [[ $_mtime -lt $((_start - 2)) || $_mtime -gt $((_end + 2)) ]]; then
+			echo "  FAIL: $_lbl asset file $_file mtime is $_mtime, but execution window is [$_start, $_end] (expected inside)"
+			_mtime_pass=false
+		fi
+	done
+done
+if [[ "$_mtime_pass" == "true" ]]; then
+	echo "PASS: Both Perl and Zig asset downloads touched mtime to now (Gap 3)"
+else
+	failed_tests=$((failed_tests + 1))
+fi
+
 container_exec rm -rf "$ASSET_DIR_PERL" "$ASSET_DIR_ZIG"
 
 # =============================================================================
-# CLO-72 to CLO-76: OPENQA_SHAREDIR environment variable (Gap 4)
+# CLO-100 / CLO-101: "skip if already complete" probe (curl --continue-at -)
+# =============================================================================
+# Perl's mirror() downloads assets with `curl --continue-at -` (CloneJob.pm:203),
+# i.e. curl shells out (CURL constant, CloneJob.pm:43) in resume mode. When the
+# destination asset already exists at full size, curl issues a ranged request,
+# openQA's static /assets/ route answers 416 (Range Not Satisfiable), and curl
+# leaves the file untouched — NO body is re-transferred (exit 0, --fail omitted).
+# openqa-clone-job then calls path($dst)->touch (CloneJob.pm:238) to refresh the
+# mtime so openQA's asset-cleanup cron does not prune the freshly-cloned asset.
 #
-# CLO-72: OPENQA_SHAREDIR set to existing dir, no --dir → Perl downloads to
-#         $OPENQA_SHAREDIR/factory; Zig ignores env (Gap 4) and uses default.
+#   * CLO-100 (Perl) is the ORACLE — expected to PASS: Perl skips the body and
+#     touches the mtime.
+#   * CLO-101 (Zig) asserts the same: zoqa-clone-job probes with a ranged GET
+#     (416 Range Not Satisfiable = already complete), skips the body transfer,
+#     and touches the mtime — the skip path is what makes the touch observable.
+#
+# Shared helpers live in lib.sh: skip_if_complete_populate + assert_skip_if_complete.
+# Method: pre-place each asset as a SENTINEL of the correct size but wrong
+# content (all-zero bytes) with an aged mtime, then clone. A skip leaves the
+# sentinel content intact (md5 unchanged, != real asset md5); a touch bumps the
+# aged mtime to ~now.
+echo "==> [clone_job/single] CLO-100/CLO-101: skip-if-complete probe (curl -C -, Gap 10)"
+
+CLO100_REF="/tmp/e2e-clo100-ref-$$"
+CLO100_PERL="/tmp/e2e-clo100-perl-$$"
+CLO100_ZIG="/tmp/e2e-clo100-zig-$$"
+container_exec rm -rf "$CLO100_REF" "$CLO100_PERL" "$CLO100_ZIG"
+container_exec mkdir -p "$CLO100_REF" "$CLO100_PERL" "$CLO100_ZIG"
+
+# Reference clone: source of truth for which asset files exist and their sizes.
+run_capture "clo100_ref" perl \
+	"$PERL_CLONE_EXE --from http://localhost --host localhost $JOB_ID --dir $CLO100_REF"
+if [[ "$_LAST_EXIT" -ne 0 ]]; then
+	echo "  FAIL: CLO-100 reference clone exited $_LAST_EXIT (expected 0)"
+	failed_tests=$((failed_tests + 1))
+fi
+if ! container_exec find "$CLO100_REF" -type f | grep -q .; then
+	echo "  FAIL: CLO-100 reference clone produced no asset files"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# --- CLO-100: PERL skip-if-complete (oracle — expected PASS) ---
+echo "--- Test CLO-100: PERL skips re-download of already-complete asset (curl -C -) and touches mtime ---"
+skip_if_complete_populate "$CLO100_REF" "$CLO100_PERL"
+_clo100_start=$(container_exec date +%s)
+run_capture "clo100" perl \
+	"$PERL_CLONE_EXE --from http://localhost --host localhost $JOB_ID --dir $CLO100_PERL"
+_clo100_end=$(container_exec date +%s)
+if [[ "$_LAST_EXIT" -ne 0 ]]; then
+	echo "  FAIL: CLO-100 Perl clone into pre-populated dir exited $_LAST_EXIT (expected 0)"
+	cat "$LOG_DIR/clo100_perl_stderr.log" 2>/dev/null
+	failed_tests=$((failed_tests + 1))
+fi
+assert_skip_if_complete "CLO-100 Perl" "$CLO100_REF" "$CLO100_PERL" "$_clo100_start" "$_clo100_end"
+
+# --- CLO-101: ZIG skip-if-complete ---
+echo "--- Test CLO-101: ZIG skips re-download of already-complete asset [TDD — FAIL expected until Gap 10 is fixed] ---"
+skip_if_complete_populate "$CLO100_REF" "$CLO100_ZIG"
+_clo101_start=$(container_exec date +%s)
+run_capture "clo101" zig \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost $JOB_ID --dir $CLO100_ZIG"
+_clo101_end=$(container_exec date +%s)
+if [[ "$_LAST_EXIT" -ne 0 ]]; then
+	echo "  FAIL: CLO-101 Zig clone into pre-populated dir exited $_LAST_EXIT (expected 0)"
+	cat "$LOG_DIR/clo101_zig_stderr.log" 2>/dev/null
+	failed_tests=$((failed_tests + 1))
+fi
+assert_skip_if_complete "CLO-101 Zig" "$CLO100_REF" "$CLO100_ZIG" "$_clo101_start" "$_clo101_end"
+
+container_exec rm -rf "$CLO100_REF" "$CLO100_PERL" "$CLO100_ZIG"
+
+# =============================================================================
+# CLO-72 to CLO-76: OPENQA_SHAREDIR environment variable
+#
+# CLO-72: OPENQA_SHAREDIR set to existing dir, no --dir → both Perl and Zig
+#         download to $OPENQA_SHAREDIR/factory.
 # CLO-73: OPENQA_SHAREDIR set to non-existing path (parent missing), no --dir →
-#         Perl creates nested dirs and downloads; Zig ignores env (Gap 4), uses default.
+#         both create the nested dirs and download to $OPENQA_SHAREDIR/factory.
 # CLO-74: --dir pointing to non-existing folder → both create it and download.
 # CLO-75: No --dir, no OPENQA_SHAREDIR → both use /var/lib/openqa/share/factory
 #         (verified by temporarily removing an asset and checking re-download).
 # CLO-76: --dir overrides OPENQA_SHAREDIR → both honor --dir, env ignored.
 #
 # ISOLATION STRATEGY: /var/lib/openqa/share/factory/ is a shared mutable resource.
-# Any test that downloads without --dir (Zig due to Gap 4, or Zig/Perl on CLO-75)
+# Any test that downloads without --dir or OPENQA_SHAREDIR (Zig/Perl on CLO-75)
 # writes there and may corrupt source files used by assert_downloaded_assets_md5,
 # or leave artifacts that leak into the next test. To guarantee each test starts
 # from a known-good state:
@@ -464,7 +565,7 @@ restore_factory() {
 # ---------------------------------------------------------------------------
 # CLO-72: OPENQA_SHAREDIR set to existing dir, no --dir.
 # Perl should respect OPENQA_SHAREDIR and download to $OPENQA_SHAREDIR/factory/.
-# Zig ignores OPENQA_SHAREDIR (Gap 4) and downloads to the default factory path.
+# Zig honors OPENQA_SHAREDIR and downloads to $OPENQA_SHAREDIR/factory.
 # Separate SHAREDIR dirs for Perl and Zig so each is independently verifiable.
 # ---------------------------------------------------------------------------
 restore_factory
@@ -478,8 +579,8 @@ run_capture "clo-72" perl \
 	$PERL_CLONE_EXE --from http://localhost --host localhost --skip-deps $JOB_ID\""
 _PERL_EXIT=$_LAST_EXIT
 
-# Restore before Zig run: Zig ignores SHAREDIR and writes to default path, which
-# would corrupt the source files used by assert_downloaded_assets_md5 below.
+# Restore the factory to a clean snapshot before the Zig run so both impls
+# start from identical source state.
 restore_factory
 
 run_capture "clo-72" zig \
@@ -526,7 +627,7 @@ container_exec rm -rf "$SHAREDIR_72_PERL" "$SHAREDIR_72_ZIG"
 # CLO-73: OPENQA_SHAREDIR set to non-existing path (parent dir missing), no --dir.
 # Path: /tmp/noparent-73-XX/deep/sharedir — no part of it is pre-created.
 # Perl: wget/curl creates parent dirs automatically; downloads to SHAREDIR/factory/.
-# Zig (Gap 4): ignores env, uses default factory path, exits 0.
+# Zig: creates the missing parent dirs and downloads to SHAREDIR/factory/, exits 0.
 # ---------------------------------------------------------------------------
 restore_factory
 echo "--- Test CLO-73: OPENQA_SHAREDIR non-existing (parent missing), no --dir ---"

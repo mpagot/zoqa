@@ -792,6 +792,84 @@ assert_downloaded_assets_md5() {
 }
 
 # ---------------------------------------------------------------------------
+# skip_if_complete_populate REF_DIR TEST_DIR
+#
+# For every regular file under REF_DIR (a directory previously filled by a clean
+# reference clone), create a same-size, all-zero "sentinel" file at the matching
+# path under TEST_DIR and back-date its mtime by 2 hours.
+#
+# Sentinels have the correct SIZE but wrong CONTENT: a client that skips
+# re-downloading an already-complete asset (Perl's `curl --continue-at -`, which
+# gets HTTP 416 on a full-size file — CloneJob.pm:203) leaves the sentinel bytes
+# intact, whereas a client that re-downloads overwrites them with the real asset.
+# The aged mtime lets a caller detect the post-download `touch`.
+#
+# Used by the "skip if already complete" probe (CLO-100/CLO-101).
+# ---------------------------------------------------------------------------
+skip_if_complete_populate() {
+	local ref_dir="$1" test_dir="$2"
+	local _rf _rel
+	while IFS= read -r _rf; do
+		[[ -z "$_rf" ]] && continue
+		_rel="${_rf#"${ref_dir}"/}"
+		container_exec bash -c \
+			"mkdir -p \"\$(dirname '$test_dir/$_rel')\" && \
+			 head -c \"\$(stat -c %s '$_rf')\" /dev/zero > '$test_dir/$_rel' && \
+			 touch -d '2 hours ago' '$test_dir/$_rel'"
+	done <<< "$(container_exec find "$ref_dir" -type f | sort)"
+}
+
+# ---------------------------------------------------------------------------
+# assert_skip_if_complete LABEL REF_DIR TEST_DIR START END
+#
+# After a clone into TEST_DIR (pre-populated by skip_if_complete_populate and run
+# between epoch seconds START and END), assert for every asset that:
+#   * SKIP:  the on-disk md5 still equals the all-zero sentinel md5 AND differs
+#            from the real source asset md5 — i.e. the body was NOT re-fetched.
+#   * TOUCH: the file mtime falls within [START-2, END+2] — refreshed to now.
+#
+# REF_DIR is the reference clone used both to enumerate the assets and (via the
+# real factory copy) to know the "real" md5 each sentinel must NOT match.
+# Increments failed_tests once if any assertion fails.
+# ---------------------------------------------------------------------------
+assert_skip_if_complete() {
+	local label="$1" ref_dir="$2" test_dir="$3" start="$4" end="$5"
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] assert_skip_if_complete $label $ref_dir $test_dir $start $end"
+		return 0
+	fi
+	local pass=true _rf _rel _test_file _src_file _sent_md5 _now_md5 _real_md5 _mtime
+	while IFS= read -r _rf; do
+		[[ -z "$_rf" ]] && continue
+		_rel="${_rf#"${ref_dir}"/}"
+		_test_file="$test_dir/$_rel"
+		_src_file="/var/lib/openqa/share/factory/$_rel"
+		_sent_md5=$(container_exec bash -c "head -c \"\$(stat -c %s '$_rf')\" /dev/zero | md5sum | awk '{print \$1}'")
+		_now_md5=$(container_exec bash -c "md5sum '$_test_file' 2>/dev/null | awk '{print \$1}'")
+		_real_md5=$(container_exec bash -c "md5sum '$_src_file' 2>/dev/null | awk '{print \$1}'")
+		_mtime=$(container_exec stat -c %Y "$_test_file" 2>/dev/null)
+
+		if [[ -n "$_now_md5" && "$_now_md5" == "$_sent_md5" && "$_now_md5" != "$_real_md5" ]]; then
+			echo "PASS: ${label} skipped re-download of complete asset ${_rel} (content preserved — curl -C -)"
+		else
+			echo "  FAIL: ${label} re-downloaded ${_rel} (md5 now=${_now_md5} sentinel=${_sent_md5} real=${_real_md5} — expected sentinel)"
+			pass=false
+		fi
+
+		if [[ -n "$_mtime" && $_mtime -ge $((start - 2)) && $_mtime -le $((end + 2)) ]]; then
+			echo "PASS: ${label} touched mtime of asset ${_rel} to now (Gap 3)"
+		else
+			echo "  FAIL: ${label} did not touch ${_rel} mtime (${_mtime} not in [${start},${end}])"
+			pass=false
+		fi
+	done <<< "$(container_exec find "$ref_dir" -type f | sort)"
+
+	if [[ "$pass" != "true" ]]; then
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # assert_no_partial_files ASSET_DIR LABEL
 #
 # Verifies that no files remain in ASSET_DIR after a failed download.  Both

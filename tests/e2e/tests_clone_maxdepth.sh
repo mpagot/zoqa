@@ -19,10 +19,10 @@
 # --max-depth does NOT apply to parents: the parent BFS always traverses
 # the full ancestor chain regardless of N.
 #
-# The default --max-depth is 1 for both Perl and Zig (CLONE_JOB_TODO.md §Gap 1,
-# resolved: src/clone_job_main.zig uses `args.max_depth orelse 1`). CLO-90
-# checks the flag-omitted default; all other tests supply an explicit
-# --max-depth so Perl and Zig exercise the same code path and can be compared.
+# The default --max-depth is 1 for both Perl and Zig (src/clone_job_main.zig
+# uses `args.max_depth orelse 1`). CLO-90 checks the flag-omitted default; all
+# other tests supply an explicit --max-depth so Perl and Zig exercise the same
+# code path and can be compared.
 #
 # Sourced by tests.sh after helper functions are defined.
 # Do NOT execute this file directly.
