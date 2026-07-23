@@ -1,0 +1,14 @@
+---
+# Experiment fixture: products and machines defined, but job_templates is
+# empty. Hypothesis: openQA returns count:0 with some kind of error, similar
+# to the SCH-9 FLAVOR=NONEXISTENT path but driven from the YAML side.
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates: {}

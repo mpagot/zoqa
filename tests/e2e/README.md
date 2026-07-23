@@ -1,7 +1,7 @@
 # Near End-to-End (E2E) Test Harness
 
-This directory contains the near end-to-end test harness for `openQAclient`. It
-validates the HTTP client, HMAC handshake, CLI flags, and API interaction against a
+This directory contains the near end-to-end test harness for `zoqa` and all other executable.
+It validates the HTTP client, HMAC handshake, CLI flags, and API interaction against a
 live official openQA single-instance container managed by Podman.
 
 Two test flows are provided:
@@ -10,8 +10,6 @@ Two test flows are provided:
   inside the container using Bash.
 - **Windows** — `run_windows.ps1` runs a zoqa-only subset (~30 tests) using
   PowerShell.  The container still runs in WSL; `zoqa.exe` is called natively.
-
----
 
 ## Prerequisites
 
@@ -26,17 +24,18 @@ Two test flows are provided:
 - `zoqa.exe` built natively on Windows: `zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSafe`
 - PowerShell 5.1+ or `pwsh` 7+
 
----
-
 ## Quick Start
 
 ### Linux / macOS
 
 ```sh
 # Build the binary first
-zig build
+make zig-build-debug # or -release
 
 # Run the full suite (starts container, seeds data, runs tests, tears down)
+make e2e
+
+# Or ...
 bash tests/e2e/run.sh
 ```
 
@@ -68,8 +67,6 @@ wsl --list --verbose
 pwsh tests\e2e\run_windows.ps1 -WslDistro "openSUSE-Tumbleweed"
 ```
 
----
-
 ## Script Overview
 
 ### Linux / macOS scripts
@@ -80,7 +77,7 @@ pwsh tests\e2e\run_windows.ps1 -WslDistro "openSUSE-Tumbleweed"
 | `setup.sh` | Starts the openQA container, waits for bootstrap, seeds fixtures, writes `/tmp/openqa_e2e_env.sh`. |
 | `teardown.sh` | Stops the container, collects optional logs, removes temp files. |
 | `seed_fixtures.sh` | Runs **inside** the container. Loads templates, schedules jobs, registers assets, writes `/tmp/seeded_ids.env`. |
-| `lib.sh` | Shared library sourced by all scripts above. Provides `run_cmd()`, `container_exec()`, `die()`, and common defaults (`CONTAINER_NAME`, `DRY_RUN`, `LOG_PREFIX`). |
+| `lib*.sh` | Shared libraries sourced by test scripts. Provides `run_cmd()`, `container_exec()`, `die()`, and common defaults (`CONTAINER_NAME`, `DRY_RUN`, `LOG_PREFIX`). |
 | `tests.sh` | Sources all `tests_*.sh` domain files. |
 | `tests_*.sh` | Refer to [TEST_CATALOG.md](TEST_CATALOG.md) |
 
@@ -97,8 +94,6 @@ invoked automatically.
 
 `run_windows.ps1` is the only script you need to call directly. The others are
 invoked automatically.
-
----
 
 ## `run.sh` Options (Linux / macOS)
 
@@ -140,8 +135,6 @@ make e2e-keep SUITES=
 make e2e-dryrun
 ```
 
----
-
 ## `setup.sh` Options
 
 ```
@@ -167,7 +160,6 @@ export GROUP_ID="..."
 You can source this file manually after a `--keep-container` run to reuse the seeded
 IDs in ad-hoc commands.
 
----
 
 ## `teardown.sh` Options
 
@@ -188,7 +180,6 @@ When `--collect-logs` is used, logs are written to `./openqa-e2e-logs/`:
 | `gru.log` | Gru / Minion worker logs |
 | `container-stdout-stderr.log` | `podman logs` output |
 
----
 
 ## Generated Files
 
@@ -211,7 +202,6 @@ All files from the Linux flow are also created (inside WSL), plus:
 | `$env:TEMP\openqa_e2e_env.ps1` | `run_container.sh` | PowerShell env file derived from `/tmp/openqa_e2e_env.sh`. Dot-sourced by `run_windows.ps1` to pass credentials and seeded IDs to `run_tests.ps1`. Written to the Windows `TEMP` directory (a real NTFS path) so PowerShell's execution policy does not block dot-sourcing. |
 | `/tmp/openqa_e2e_done` | `run_windows.ps1` | Sentinel file touched by `run_windows.ps1` after tests complete to signal `run_container.sh` to begin teardown. Removed by `run_container.sh` on exit. |
 
----
 
 ## Linting
 
@@ -224,7 +214,7 @@ disk is properly registered in all three required locations:
 
 1. `tests/e2e/tests.sh` — `_e2e_all_suites` array
 2. `Makefile` — `E2E_SCRIPTS` list
-3. `tests/e2e/README.md` — File Layout section
+3. `tests/e2e/TEST_CATALOG.md` — File Layout section
 
 It also detects stale entries (registrations pointing to files that no longer exist).
 
@@ -234,7 +224,6 @@ Run from the repository root:
 make e2e-lint
 ```
 
----
 
 ## Debugging Tips
 
@@ -259,7 +248,32 @@ podman exec openqa-e2e /app/zig-out/bin/zoqa api --host http://localhost jobs/ov
 podman rm -f openqa-e2e
 ```
 
----
+### Investigating a test failure
+
+When a test reports `FAIL`, the first place to look is the per-run log
+directory printed at the start of every run:
+
+```
+==> Log directory: /tmp/zoqa_e2e_20260710T103845
+```
+
+Inside it, `run_capture` stores the raw stdout and stderr of every command
+it executes, named `{tag}_{impl}_stdout.log` and `{tag}_{impl}_stderr.log`
+(e.g., `clo-72_perl_stderr.log`, `clo-72_zig_stdout.log`).
+
+To debug a failure:
+
+```sh
+# See what Perl actually printed (download paths, curl errors, etc.)
+cat /tmp/zoqa_e2e_20260710T103845/clo-75_perl_stderr.log
+
+# Compare both implementations side by side
+diff /tmp/zoqa_e2e_20260710T103845/clo-75_{perl,zig}_stdout.log
+```
+
+The `{tag}` matches the first argument to `run_capture` in the test script.
+The directory persists after the run; clean up old ones with
+`rm -rf /tmp/zoqa_e2e_*`.
 
 ## Interactive Development with `e2e-keep`
 
@@ -395,8 +409,6 @@ podman exec openqa-e2e /app/zig-out/bin/zoqa api --host http://localhost jobs/2/
 podman rm -f openqa-e2e
 ```
 
----
-
 ## Testing Methodology
 
 The harness employs three primary testing patterns to validate the Zig executable:
@@ -405,7 +417,6 @@ The harness employs three primary testing patterns to validate the Zig executabl
 2.  **Comparison Testing:** Runs the same command against both the Perl reference (`openqa-cli`) and the Zig binary, ensuring both return the same exit codes and match specific output patterns.
 3.  **Parity Testing (Diff):** Captures the full JSON output of both binaries for a complex nested resource and performs a `diff` to detect structural or data mismatches.
 
----
 
 ## Test Coverage
 
@@ -413,15 +424,6 @@ See [TEST_CATALOG.md](TEST_CATALOG.md) for the full per-test reference covering
 all suites: API & Protocol, Authentication (HMAC-SHA1), CLI Flags &
 Configuration, Error Handling & Edge Cases, Verbose Headers, Archive, Monitor,
 Schedule, and Stress.
-
-## Expected Failures
-
-All existing tests (api, auth, data, output, robustness, retry, archive, monitor,
-help, perf) pass. The **schedule** suite tests are expected to **FAIL on the Zig
-side** until the `schedule` subcommand is implemented (TDD approach — tests are
-written first). Perl-side assertions in the schedule suite should pass.
-
----
 
 ## Fixture Files
 
@@ -432,35 +434,3 @@ written first). Perl-side assertions in the schedule suite should pass.
 
 These files are committed and must not be modified without updating the corresponding
 test expectations in `run.sh`.
-
----
-
-## File Layout
-
-```
-tests/e2e/
-  .shellcheckrc               — shellcheck configuration (source-path, external-sources)
-  lib.sh                      — shared functions and defaults
-  run.sh                      — main entry point
-  setup.sh                    — container lifecycle + bootstrap + seeding
-  teardown.sh                 — container stop + log collection + cleanup
-  seed_fixtures.sh            — fixture seeding (runs inside container)
-  tests.sh                    — sources all tests_*.sh domain files
-  tests_core.sh               — Section A: core protocol and CLI flag tests
-  tests_auth.sh               — Section B: authentication tests
-  tests_data.sh               — Section C: seeded data, pagination, parity
-  tests_output.sh             — Section D: verbose, pretty, name
-  tests_robustness.sh         — Section E: broken pipe, non-2xx stderr, quiet
-  tests_retry_knobs.sh        — Section F: retry/timeout env var smoke tests
-  tests_archive.sh            — Section H: archive subcommand
-  tests_monitor.sh            — Section I: monitor subcommand
-  tests_schedule.sh           — Section J: schedule subcommand
-  tests_help.sh               — help output structure tests
-  tests_perf.sh               — Section G: wall-clock timing and peak RSS
-  tests_stress.sh             — Section L: large response stress tests
-  check_suite_registry.sh     — lint: verify suite files are registered everywhere
-  fixtures/
-    templates.json            — machine/suite/product/group definitions
-    scenario-definitions.yaml — job scheduling YAML
-```
-

@@ -24,7 +24,7 @@ E2E_DIR="$REPO_ROOT/tests/e2e"
 
 TESTS_SH="$E2E_DIR/tests.sh"
 MAKEFILE="$REPO_ROOT/Makefile"
-README="$E2E_DIR/README.md"
+TEST_CATALOG="$E2E_DIR/TEST_CATALOG.md"
 
 errors=0
 
@@ -48,12 +48,16 @@ echo "==> check_suite_registry: found ${#on_disk[@]} test suite files on disk"
 # 2. Check tests/e2e/tests.sh — _e2e_all_suites array
 #    Each tests_FOO.sh must have FOO in the _e2e_all_suites list.
 # ---------------------------------------------------------------------------
+
+# Extract the full _e2e_all_suites=(...) block — it may span multiple lines.
+_suites_block=$(awk '/_e2e_all_suites=/{found=1} found{print} found && /\)/{exit}' "$TESTS_SH")
+
 echo "  Checking tests.sh (_e2e_all_suites)..."
 for file in "${on_disk[@]}"; do
 	# tests_core.sh → core
 	suite_name="${file#tests_}"
 	suite_name="${suite_name%.sh}"
-	if ! grep -q "_e2e_all_suites=.*\b${suite_name}\b" "$TESTS_SH"; then
+	if ! echo "$_suites_block" | grep -qw "$suite_name"; then
 		echo "    MISSING: suite '$suite_name' not in _e2e_all_suites ($TESTS_SH)"
 		errors=$((errors + 1))
 	fi
@@ -73,13 +77,13 @@ for file in "${on_disk[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# 4. Check tests/e2e/README.md — File Layout code block
-#    Each tests_*.sh must appear somewhere in the README.
+# 4. Check tests/e2e/TEST_CATALOG.md — File Layout code block
+#    Each tests_*.sh must appear somewhere in the TEST_CATALOG.md.
 # ---------------------------------------------------------------------------
-echo "  Checking README.md (File Layout)..."
+echo "  Checking TEST_CATALOG.md (File Layout)..."
 for file in "${on_disk[@]}"; do
-	if ! grep -qF "$file" "$README"; then
-		echo "    MISSING: '$file' not mentioned in $README"
+	if ! grep -qF "$file" "$TEST_CATALOG"; then
+		echo "    MISSING: '$file' not mentioned in $TEST_CATALOG"
 		errors=$((errors + 1))
 	fi
 done
@@ -89,13 +93,11 @@ done
 # ---------------------------------------------------------------------------
 echo "  Checking for stale entries..."
 
-# _e2e_all_suites entries without a matching file
-_suites_line=$(grep '_e2e_all_suites=' "$TESTS_SH" | head -1)
-if [[ -n "$_suites_line" ]]; then
-	# Extract words between ( and )
-	_suites_content="${_suites_line#*\(}"
-	_suites_content="${_suites_content%\)*}"
-	for suite in $_suites_content; do
+# _e2e_all_suites entries without a matching file.
+# Extract suite names from the (possibly multi-line) _e2e_all_suites block:
+# only bare lowercase words (no leading underscore) qualify as suite names.
+if [[ -n "$_suites_block" ]]; then
+	for suite in $(echo "$_suites_block" | grep -oE '\b[a-z][a-z_]*\b'); do
 		expected_file="tests_${suite}.sh"
 		if [[ ! -f "$E2E_DIR/$expected_file" ]]; then
 			echo "    STALE: suite '$suite' in _e2e_all_suites but $expected_file does not exist"

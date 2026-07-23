@@ -41,7 +41,7 @@ help:
 	@echo "  fuzz-sanitize   Check that corpus filenames are Windows-safe (no colons)."
 	@echo " "
 	@echo " "
-	@echo "  lint        Run all linters (zig-lint, manual-lint, fuzz-lint)."
+	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint, fuzz-lint)."
 
 zig-build-debug:
 	zig build
@@ -148,10 +148,13 @@ E2E_SCRIPTS := \
 	tests/e2e/tests_robustness.sh \
 	tests/e2e/tests_monitor.sh \
 	tests/e2e/tests_schedule.sh \
+	tests/e2e/tests_clone_smoke.sh \
+	tests/e2e/tests_clone_single.sh \
+	tests/e2e/tests_clone_topology.sh \
+	tests/e2e/tests_clone_maxdepth.sh \
 	tests/e2e/tests_help.sh \
 	tests/e2e/tests_perf.sh \
-	tests/e2e/tests_stress.sh \
-	tests/e2e/check_suite_registry.sh
+	tests/e2e/tests_stress.sh
 
 e2e-catalog-lint:
 	@echo "==> test prefix and catalog validation"
@@ -166,7 +169,7 @@ e2e-lint:
 	@echo "==> shellcheck"
 	@shellcheck $(E2E_SCRIPTS)
 	@echo "==> suite registry check"
-	@bash tests/e2e/check_suite_registry.sh
+	@bash tools/check_suite_registry.sh
 	@echo "==> e2e-lint passed"
 
 # -----------------------------------------------------------------------------

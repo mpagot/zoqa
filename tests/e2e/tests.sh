@@ -58,7 +58,7 @@ _e2e_suite_enabled() {
 	[[ "$E2E_SUITES" == "all" ]] && return 0
 	# Empty string → skip all tests
 	[[ -z "$E2E_SUITES" ]] && return 1
-	# Check if name appears as a comma-separated token
+	# Check if name appears as a comma-separated token.
 	local suite
 	IFS=',' read -ra _suites <<<"$E2E_SUITES"
 	for suite in "${_suites[@]}"; do
@@ -78,7 +78,9 @@ _e2e_suite_enabled() {
 # ShellCheck cannot follow a dynamic source path; the individual tests_*.sh
 # files are checked independently when `make e2e-lint` is run.
 # shellcheck disable=SC1090
-_e2e_all_suites=(core auth data output robustness retry_knobs archive monitor schedule help stress perf)
+_e2e_all_suites=(core auth data output robustness retry_knobs archive monitor schedule help \
+	clone_smoke clone_single clone_topology clone_maxdepth \
+	stress perf)
 for _suite in "${_e2e_all_suites[@]}"; do
 	if _e2e_suite_enabled "$_suite"; then
 		source "$_E2E_DIR/tests_${_suite}.sh"

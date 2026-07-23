@@ -27,7 +27,16 @@
 #   dump_job_logs()     — fetch and print per-job diagnostics on failure
 #   register_deletable_asset() — create a file-backed asset, prints asset ID
 #
-# Performance helpers (moved here from tests_perf.sh):
+# Sourced on demand from lib_topology.sh (topology fixtures — tests_clone_job.sh only):
+#   schedule_topology_jobs() — generic multi-job topology scheduler
+#   ensure_chained_jobs()    — lazy-init CHAIN_*_ID variables
+#   ensure_fanout_jobs()     — lazy-init FANOUT_*_ID variables
+#   ensure_multilayer_jobs() — lazy-init LAYER_*_ID variables
+#   ensure_diamond_jobs()    — lazy-init DIAMOND_*_ID variables
+#   ensure_parallel_jobs()   — lazy-init PARALLEL_*_ID variables
+#   assert_job_has_chained_parent() — verify chained dependency
+#
+# Performance helpers:
 #   _perf_wall_time_s()  — measure wall-clock time of a container command
 #   _perf_peak_rss_kb()  — measure peak RSS via /usr/bin/time -v
 #   _perf_timev_field()  — read a field from the saved /usr/bin/time -v output
@@ -35,7 +44,23 @@
 # Test-side capture helpers:
 #   run_capture()        — run one command, capture stdout/stderr/exit
 #   run_perl_and_zig()   — run the same args against PERL_EXE and ZIG_EXE
+#   run_capture_both()   — like run_perl_and_zig but with explicit full commands
 #   run_sigpipe_test()   — run CMD | head -c 1, capture CMD's exit via PIPESTATUS
+#   assert_capture_exits() — check _PERL_EXIT/_ZIG_EXIT, PASS/FAIL
+#   assert_stdout_pattern() — check both impl stdout logs for a pattern, PASS/FAIL
+#
+# Test runner functions (the canonical home of these; tests.sh sources lib.sh):
+#   run_test()           — run one command, check exit + optional grep, PASS/FAIL
+#   run_test_exit_nonzero() — run one command, assert non-zero exit code, PASS/FAIL
+#   run_comparison_api()     — run the same api args against PERL_EXE and ZIG_EXE
+#   run_diff_test()      — diff stdout of both impls, PASS/FAIL
+#
+# Clone-job test helpers (require PERL_CLONE_EXE/ZIG_CLONE_EXE set by caller):
+#   run_comparison_clone()   — run same args against both clone-job binaries
+#   run_clone_both()         — run_capture_both with shared clone-job args
+#   run_clone_diff_test()    — diff stdout of both clone-job impls, PASS/FAIL
+#   wait_for_cloned_jobs()   — extract job IDs from logs, wait for all
+#   assert_impl_log_pattern()— check one impl's log file for a pattern
 
 # Guard against double-sourcing
 [[ -n "${_OPENQA_E2E_LIB_LOADED:-}" ]] && return 0
@@ -241,10 +266,11 @@ _perf_timev_field() {
 # ---------------------------------------------------------------------------
 # run_capture TAG IMPL CMD
 #
-# Runs CMD inside the container without aborting on non-zero exit.  Captures
-# stdout to $LOG_DIR/${TAG}_${IMPL}_stdout.log and stderr to
-# $LOG_DIR/${TAG}_${IMPL}_stderr.log.  The command's exit code is left in the
-# global _LAST_EXIT for the caller to inspect.
+# Runs CMD inside the container without aborting on non-zero exit.
+# Captures stdout to $LOG_DIR/${TAG}_${IMPL}_stdout.log and stderr to
+# $LOG_DIR/${TAG}_${IMPL}_stderr.log.
+# The command's exit code is left in the global _LAST_EXIT for the caller to inspect.
+# Command composition accepts any CMD string — fully generic.
 #
 # TAG  — short identifier shared across one logical test (e.g. "mon_cancel")
 # IMPL — "perl" or "zig" (used in the log filenames; any string is accepted)
@@ -270,7 +296,7 @@ run_capture() {
 # run_perl_and_zig TAG ARGS [TIMEOUT_S]
 #
 # Runs the same command tail against both PERL_EXE and ZIG_EXE inside the
-# container.  Stores their exit codes in _PERL_EXIT and _ZIG_EXIT, and writes
+# container. Stores their exit codes in _PERL_EXIT and _ZIG_EXIT, and writes
 # the four log files:
 #     $LOG_DIR/${TAG}_perl_stdout.log  / _perl_stderr.log
 #     $LOG_DIR/${TAG}_zig_stdout.log   / _zig_stderr.log
@@ -345,6 +371,8 @@ run_sigpipe_test() {
 # Analogous to run_perl_and_zig but accepts explicit full command strings
 # instead of building them from the global PERL_EXE/ZIG_EXE with shared args.
 # Use this when the two implementations differ in binary path or flag spelling.
+# Designed to be used both with zoqa and zoqa-clone-job by accepting the two
+# explicit command strings
 #
 # Usage:
 #   run_capture_both "clone12" \
@@ -490,11 +518,30 @@ run_test() {
 }
 
 # ---------------------------------------------------------------------------
+# run_test_exit_nonzero LABEL CMD
+#
+# Helper to assert that a command exits with a non-zero status. It wraps CMD
+# in a shell snippet that inverts the success condition (exits 0 if CMD fails).
+#
+# Parameters:
+#   LABEL — human-readable test name printed in the --- Test: --- line
+#   CMD   — command string passed to container_exec (eval'd via bash -c)
+#
+# Side effects: increments failed_tests on failure (via run_test).
+# ---------------------------------------------------------------------------
+run_test_exit_nonzero() {
+	local label=$1
+	local cmd=$2
+	run_test "$label" "bash -c \"$cmd; exit_code=\\\$?; test \\\$exit_code -ne 0\"" 0
+}
+
+# ---------------------------------------------------------------------------
 # run_comparison_api LABEL ENV_VARS API_ARGS [EXPECTED_EXIT [GREP_PATTERN]]
 #
 # Runs the same API call against both the Perl reference implementation and
-# the Zig implementation, checking each one independently.  A test PASSES
-# when both implementations satisfy the exit-code and grep-pattern criteria;
+# the Zig implementation, checking each one independently.
+# Command composition in this helper is hardcoding "api --host http://localhost" subcommand.
+# A test PASSES when both implementations satisfy the exit-code and grep-pattern criteria;
 # each can fail independently, producing a separate FAIL line.
 #
 # This is the right helper when you care about whether each implementation
@@ -503,12 +550,12 @@ run_test() {
 # you want to assert byte-for-byte output parity (modulo trailing newlines).
 #
 # Parameters:
-#   LABEL         — human-readable test name (prefixed with PERL:/ZIG: automatically)
-#   ENV_VARS      — space-separated env-var assignments prepended to the command
+#   LABEL         : human-readable test name (prefixed with PERL:/ZIG: automatically)
+#   ENV_VARS      : space-separated env-var assignments prepended to the command
 #                   (e.g. "OPENQA_CONFIG=/tmp"); pass "" for none
-#   API_ARGS      — arguments passed after `api --host http://localhost`
-#   EXPECTED_EXIT — expected exit code for both impls (default: 0)
-#   GREP_PATTERN  — optional grep pattern checked against combined stdout+stderr
+#   API_ARGS      : arguments passed after `api --host http://localhost`
+#   EXPECTED_EXIT : expected exit code for both impls (default: 0)
+#   GREP_PATTERN  : optional grep pattern checked against combined stdout+stderr
 #
 # Side effects: increments failed_tests once per implementation that fails.
 # ---------------------------------------------------------------------------
@@ -531,17 +578,19 @@ run_comparison_api() {
 # run_diff_test LABEL API_ARGS
 #
 # Runs the same API call against both implementations and asserts that their
-# stdout output is identical (after trailing-newline normalisation).  stderr is
-# discarded from both sides to avoid noise from ANSI colour codes, Mojo
+# stdout output is identical (after trailing-newline normalisation).
+# # Command composition in this helper is hardcoding "api --host http://localhost"
+# subcommand.
+# stderr is discarded from both sides to avoid noise from ANSI colour codes, Mojo
 # warnings, and the BoltDB deprecation warning emitted by podman on some hosts.
 #
 # Use this helper when you want to detect regressions in the Zig output format
-# relative to the Perl reference — i.e., "both must produce the same body".
+# relative to the Perl reference i.e., "both must produce the same body".
 # For exit-code or pattern checks use run_comparison_api instead.
 #
 # Parameters:
-#   LABEL    — human-readable test name printed in the --- Test: DIFF --- line
-#   API_ARGS — arguments passed after `api --host http://localhost`
+#   LABEL    : human-readable test name printed in the --- Test: DIFF --- line
+#   API_ARGS : arguments passed after `api --host http://localhost`
 #
 # Side effects: increments failed_tests on mismatch.
 # ---------------------------------------------------------------------------
@@ -568,6 +617,295 @@ run_diff_test() {
 	else
 		echo "FAIL: Perl and Zig outputs differ:"
 		cat "$LOG_DIR/test_output_diff.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# run_comparison_clone LABEL CLONE_ARGS [EXPECTED_EXIT [GREP_PATTERN]]
+#
+# Runs the same args against both PERL_CLONE_EXE and ZIG_CLONE_EXE,
+# checking exit code and optional grep pattern independently.
+# ---------------------------------------------------------------------------
+run_comparison_clone() {
+	local label=$1
+	local clone_args=$2
+	local expected_exit=${3:-0}
+	local grep_pattern=$4
+
+	run_test "PERL: $label" \
+		"bash -c \"$PERL_CLONE_EXE $clone_args\"" \
+		"$expected_exit" "$grep_pattern"
+	run_test "ZIG : $label" \
+		"bash -c \"$ZIG_CLONE_EXE $clone_args\"" \
+		"$expected_exit" "$grep_pattern"
+}
+
+# ---------------------------------------------------------------------------
+# run_clone_both TAG CLONE_ARGS
+#
+# Like run_capture_both but builds the two commands from
+# $PERL_CLONE_EXE / $ZIG_CLONE_EXE + shared CLONE_ARGS.
+# ---------------------------------------------------------------------------
+run_clone_both() {
+	local tag=$1
+	local clone_args=$2
+	run_capture_both "$tag" \
+		"$PERL_CLONE_EXE $clone_args" \
+		"$ZIG_CLONE_EXE $clone_args"
+}
+
+# ---------------------------------------------------------------------------
+# wait_for_cloned_jobs TAG [TIMEOUT_S]
+#
+# Extracts job IDs from ${LOG_DIR}/${TAG}_{perl,zig}_stdout.log and waits
+# for each to reach a terminal state. Sets _CLONE_PERL_IDS and
+# _CLONE_ZIG_IDS for subsequent assertions.
+# ---------------------------------------------------------------------------
+wait_for_cloned_jobs() {
+	local tag=$1
+	local timeout=${2:-300}
+	_CLONE_PERL_IDS=$(grep -oP '(?<=tests/)\d+' "$LOG_DIR/${tag}_perl_stdout.log" || true)
+	_CLONE_ZIG_IDS=$(grep -oP '(?<=tests/)\d+' "$LOG_DIR/${tag}_zig_stdout.log" || true)
+	for id in $_CLONE_PERL_IDS $_CLONE_ZIG_IDS; do
+		if [[ -n "$id" ]]; then
+			wait_for_job "$id" "$timeout" >/dev/null || true
+		fi
+	done
+}
+
+# ---------------------------------------------------------------------------
+# run_clone_diff_test LABEL CLONE_ARGS
+#
+# Like run_diff_test but uses clone-job binaries without the api prefix.
+# ---------------------------------------------------------------------------
+run_clone_diff_test() {
+	local label=$1
+	local clone_args=$2
+
+	echo "--- Test: DIFF $label ---"
+
+	set +e
+	container_exec bash -c "$PERL_CLONE_EXE $clone_args" \
+		>"$LOG_DIR/test_output_perl.log" 2>/dev/null
+	container_exec bash -c "$ZIG_CLONE_EXE $clone_args" \
+		>"$LOG_DIR/test_output_zig.log" 2>/dev/null
+	set -e
+
+	{ printf '%s\n' "$(cat "$LOG_DIR/test_output_perl.log")"; } >"$LOG_DIR/test_output_perl_norm.log"
+	{ printf '%s\n' "$(cat "$LOG_DIR/test_output_zig.log")"; } >"$LOG_DIR/test_output_zig_norm.log"
+
+	if diff -u "$LOG_DIR/test_output_perl_norm.log" "$LOG_DIR/test_output_zig_norm.log" \
+		>"$LOG_DIR/test_output_diff.log" 2>&1; then
+		echo "PASS (outputs identical)"
+	else
+		echo "FAIL: Perl and Zig outputs differ:"
+		cat "$LOG_DIR/test_output_diff.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# assert_impl_log_pattern TAG IMPL STREAM PATTERN LABEL
+#
+# Asserts that a specific log stream (stdout/stderr) for a single implementation
+# contains the given grep pattern.
+# ---------------------------------------------------------------------------
+assert_impl_log_pattern() {
+	local tag=$1
+	local impl=$2
+	local stream=$3
+	local pattern=$4
+	local label=$5
+
+	if grep -qiE "$pattern" "$LOG_DIR/${tag}_${impl}_${stream}.log" 2>/dev/null; then
+		echo "PASS: $label"
+	else
+		echo "FAIL: $label"
+		echo "  ${stream} was: \$(cat \"$LOG_DIR/${tag}_${impl}_${stream}.log\" 2>/dev/null)"
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# assert_downloaded_assets_md5 ASSET_DIR LABEL
+#
+# For every file under ASSET_DIR, computes its MD5 inside the container and
+# compares it against the corresponding source file at
+# /var/lib/openqa/share/factory/<rel_path>.
+#
+# The relative path is derived by stripping ASSET_DIR/ from the downloaded
+# path.  Example:
+#   downloaded: /tmp/e2e-clo84-perl-42/hdd/cirros.qcow2
+#   source:     /var/lib/openqa/share/factory/hdd/cirros.qcow2
+#
+# A mismatch means the file is corrupt or truncated (e.g. a partial transfer
+# that was not retried properly).  Increments failed_tests on any mismatch.
+# Silently returns 0 if the directory is empty (file-existence is the
+# caller's responsibility).
+# ---------------------------------------------------------------------------
+assert_downloaded_assets_md5() {
+	local asset_dir="$1"
+	local label="$2"
+
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] assert_downloaded_assets_md5 $asset_dir $label"
+		return 0
+	fi
+
+	local file_list
+	file_list=$(container_exec find "$asset_dir" -type f 2>/dev/null | sort)
+	if [[ -z "$file_list" ]]; then
+		return 0  # nothing downloaded; caller already asserted presence
+	fi
+
+	local _md5_pass=true
+	while IFS= read -r downloaded_file; do
+		if [[ -z "$downloaded_file" ]]; then continue; fi
+		local rel_path="${downloaded_file#"${asset_dir}"/}"
+		local source_file="/var/lib/openqa/share/factory/${rel_path}"
+
+		local downloaded_md5
+		downloaded_md5=$(container_exec bash -c \
+			"md5sum '${downloaded_file}' 2>/dev/null | awk '{print \$1}'" || echo "")
+		local source_md5
+		source_md5=$(container_exec bash -c \
+			"md5sum '${source_file}' 2>/dev/null | awk '{print \$1}'" || echo "")
+
+		if [[ -z "$downloaded_md5" ]]; then
+			echo "FAIL: ${label} MD5 — cannot compute hash of downloaded file: ${downloaded_file}"
+			_md5_pass=false
+		elif [[ -z "$source_md5" ]]; then
+			echo "FAIL: ${label} MD5 — cannot compute hash of source file: ${source_file}"
+			_md5_pass=false
+		elif [[ "$downloaded_md5" == "$source_md5" ]]; then
+			echo "PASS: ${label} MD5 OK — ${rel_path} (${downloaded_md5})"
+		else
+			echo "FAIL: ${label} MD5 mismatch — ${rel_path}: downloaded=${downloaded_md5} expected=${source_md5}"
+			_md5_pass=false
+		fi
+	done <<< "$file_list"
+
+	if [[ "$_md5_pass" == "false" ]]; then
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# skip_if_complete_populate REF_DIR TEST_DIR
+#
+# For every regular file under REF_DIR (a directory previously filled by a clean
+# reference clone), create a same-size, all-zero "sentinel" file at the matching
+# path under TEST_DIR and back-date its mtime by 2 hours.
+#
+# Sentinels have the correct SIZE but wrong CONTENT: a client that skips
+# re-downloading an already-complete asset (Perl's `curl --continue-at -`, which
+# gets HTTP 416 on a full-size file — CloneJob.pm:203) leaves the sentinel bytes
+# intact, whereas a client that re-downloads overwrites them with the real asset.
+# The aged mtime lets a caller detect the post-download `touch`.
+#
+# Used by the "skip if already complete" probe (CLO-100/CLO-101).
+# ---------------------------------------------------------------------------
+skip_if_complete_populate() {
+	local ref_dir="$1" test_dir="$2"
+	local _rf _rel
+	while IFS= read -r _rf; do
+		[[ -z "$_rf" ]] && continue
+		_rel="${_rf#"${ref_dir}"/}"
+		container_exec bash -c \
+			"mkdir -p \"\$(dirname '$test_dir/$_rel')\" && \
+			 head -c \"\$(stat -c %s '$_rf')\" /dev/zero > '$test_dir/$_rel' && \
+			 touch -d '2 hours ago' '$test_dir/$_rel'"
+	done <<< "$(container_exec find "$ref_dir" -type f | sort)"
+}
+
+# ---------------------------------------------------------------------------
+# assert_skip_if_complete LABEL REF_DIR TEST_DIR START END
+#
+# After a clone into TEST_DIR (pre-populated by skip_if_complete_populate and run
+# between epoch seconds START and END), assert for every asset that:
+#   * SKIP:  the on-disk md5 still equals the all-zero sentinel md5 AND differs
+#            from the real source asset md5 — i.e. the body was NOT re-fetched.
+#   * TOUCH: the file mtime falls within [START-2, END+2] — refreshed to now.
+#
+# REF_DIR is the reference clone used both to enumerate the assets and (via the
+# real factory copy) to know the "real" md5 each sentinel must NOT match.
+# Increments failed_tests once if any assertion fails.
+# ---------------------------------------------------------------------------
+assert_skip_if_complete() {
+	local label="$1" ref_dir="$2" test_dir="$3" start="$4" end="$5"
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] assert_skip_if_complete $label $ref_dir $test_dir $start $end"
+		return 0
+	fi
+	local pass=true _rf _rel _test_file _src_file _sent_md5 _now_md5 _real_md5 _mtime
+	while IFS= read -r _rf; do
+		[[ -z "$_rf" ]] && continue
+		_rel="${_rf#"${ref_dir}"/}"
+		_test_file="$test_dir/$_rel"
+		_src_file="/var/lib/openqa/share/factory/$_rel"
+		_sent_md5=$(container_exec bash -c "head -c \"\$(stat -c %s '$_rf')\" /dev/zero | md5sum | awk '{print \$1}'")
+		_now_md5=$(container_exec bash -c "md5sum '$_test_file' 2>/dev/null | awk '{print \$1}'")
+		_real_md5=$(container_exec bash -c "md5sum '$_src_file' 2>/dev/null | awk '{print \$1}'")
+		_mtime=$(container_exec stat -c %Y "$_test_file" 2>/dev/null)
+
+		if [[ -n "$_now_md5" && "$_now_md5" == "$_sent_md5" && "$_now_md5" != "$_real_md5" ]]; then
+			echo "PASS: ${label} skipped re-download of complete asset ${_rel} (content preserved — curl -C -)"
+		else
+			echo "  FAIL: ${label} re-downloaded ${_rel} (md5 now=${_now_md5} sentinel=${_sent_md5} real=${_real_md5} — expected sentinel)"
+			pass=false
+		fi
+
+		if [[ -n "$_mtime" && $_mtime -ge $((start - 2)) && $_mtime -le $((end + 2)) ]]; then
+			echo "PASS: ${label} touched mtime of asset ${_rel} to now (Gap 3)"
+		else
+			echo "  FAIL: ${label} did not touch ${_rel} mtime (${_mtime} not in [${start},${end}])"
+			pass=false
+		fi
+	done <<< "$(container_exec find "$ref_dir" -type f | sort)"
+
+	if [[ "$pass" != "true" ]]; then
+		failed_tests=$((failed_tests + 1))
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# assert_no_partial_files ASSET_DIR LABEL
+#
+# Verifies that no files remain in ASSET_DIR after a failed download.  Both
+# Perl and Zig must clean up (delete or never create) the destination file
+# when a download attempt fails — leaving a partial or empty file behind is
+# incorrect because it would silently replace a previously good copy.
+#
+# Any file found (regardless of size, including 0-byte stubs left by a
+# create-before-download pattern) is reported as a failure.
+#
+# Increments failed_tests if any leftover files are found.
+# ---------------------------------------------------------------------------
+assert_no_partial_files() {
+	local asset_dir="$1"
+	local label="$2"
+
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] assert_no_partial_files $asset_dir $label"
+		return 0
+	fi
+
+	local leftover_files
+	leftover_files=$(container_exec find "$asset_dir" -type f 2>/dev/null | sort)
+
+	if [[ -z "$leftover_files" ]]; then
+		echo "PASS: ${label} — no partial files left after failed download"
+	else
+		local count
+		count=$(echo "$leftover_files" | grep -c .)
+		echo "FAIL: ${label} — ${count} partial/leftover file(s) found after failed download (expected none):"
+		while IFS= read -r f; do
+			if [[ -z "$f" ]]; then continue; fi
+			local sz
+			sz=$(container_exec bash -c "wc -c < '${f}' 2>/dev/null" || echo "?")
+			echo "  ${f} (${sz} bytes)"
+		done <<< "$leftover_files"
 		failed_tests=$((failed_tests + 1))
 	fi
 }
