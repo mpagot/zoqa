@@ -92,7 +92,7 @@ pub const AssetEntry = struct {
 
 /// Parse a `KEY[+]=VALUE` or `KEY:SCOPE[+]=VALUE` override string.
 ///
-/// Arguments:
+/// Parameters:
 /// - `input`: Raw positional string (e.g. "BUILD=123", "TEST+=:PR-1", "KEY:scope=V").
 ///
 /// Returns: An `Override` struct with key, scope, plus flag, and value extracted;
@@ -134,7 +134,7 @@ pub fn parseOverride(input: []const u8) ?Override {
 /// Global settings (WORKER_CLASS, _GROUP, _GROUP_ID) are always applied
 /// to parent jobs regardless of depth.
 ///
-/// Arguments:
+/// Parameters:
 /// - `key`: The setting key name to check.
 ///
 /// Returns: `true` when `key` is one of the recognised global setting names.
@@ -155,7 +155,7 @@ pub fn isGlobalSetting(key: []const u8) bool {
 /// If no deps survive filtering, the key is NOT added (matching Perl semantics:
 /// an empty @filtered causes early return without assignment).
 ///
-/// Arguments:
+/// Parameters:
 /// - `arena`: Allocator for all produced strings (key/value copies, format buffer).
 /// - `settings`: The target settings list to update (existing entry with `name` is replaced).
 /// - `name`: Dependency key name (e.g. "_PARALLEL", "_START_AFTER").
@@ -296,7 +296,7 @@ test "assignExistingDeps: no matching deps does nothing" {
 ///
 /// `depth`: 1 for user-specified job, 2+ for parents, 0 for children.
 ///
-/// Arguments:
+/// Parameters:
 /// - `arena`: Allocator for any new string allocations (appended/duplicated values).
 /// - `settings`: The job's mutable settings list.
 /// - `overrides`: Parsed CLI overrides to apply.
@@ -419,7 +419,7 @@ pub fn applySettings(
 /// Jobs are emitted in the order they appear in `collected_jobs`.
 /// The colon and job ID are literal (not encoded); only values are percent-encoded.
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used for internal buffer growth and the returned owned slice.
 /// - `collected_jobs`: Ordered list of jobs with their settings to encode.
 ///
@@ -469,7 +469,7 @@ pub fn buildPostBody(
 ///
 /// The `collected_jobs` is used to look up the display name for each original ID.
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used for internal buffers and the returned owned slice.
 /// - `ids_map`: JSON object mapping original job ID strings to new job ID integers.
 /// - `collected_jobs`: Job entries for name lookup by original ID.
@@ -552,7 +552,7 @@ pub fn formatOutput(
 /// Values are emitted unencoded (human-readable, not percent-encoded).
 /// Each key-value pair is single-quoted as a separate shell argument.
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used for internal buffers and the returned owned slice.
 /// - `collected_jobs`: Job entries with finalized settings.
 /// - `dest_host`: Resolved destination host URL.
@@ -593,7 +593,7 @@ pub fn formatExportCommand(
 ///
 /// Sorted ascending by original job ID (same order as formatOutput).
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used for internal buffers and the returned owned slice.
 /// - `ids_map`: JSON object mapping original job ID strings to new job ID integers.
 /// - `collected_jobs`: Job entries for name lookup by original ID.
@@ -663,7 +663,7 @@ pub fn formatBadgeOutput(
 ///
 /// Example: {"1233":5000,"1234":5001}
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used for internal buffers and the returned owned slice.
 /// - `ids_map`: JSON object mapping original job ID strings to new job ID integers.
 ///
@@ -723,7 +723,7 @@ pub fn formatJsonOutput(
 ///
 /// The suffix is zero-padded to 2 digits (e.g. `-01`, `-02`).
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Allocator for the new TEST value strings.
 /// - `collected`: Slice of job entries whose TEST settings will be mutated.
 /// - `iteration`: 1-based iteration number (determines suffix `-01`, `-02`, etc.).
@@ -787,7 +787,7 @@ fn stripTrailingDigitSuffix(s: []const u8) []const u8 {
 /// value in `vars_json`. Settings are appended (user overrides applied later
 /// take precedence).
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Allocator for new setting value strings.
 /// - `settings`: The job's settings list to mutate.
 /// - `vars_json`: Parsed JSON object from `GET /tests/{id}/file/vars.json`.
@@ -840,7 +840,7 @@ pub fn injectReproduceSettings(
 /// Collects entries from the `iso`, `hdd`, and `other` arrays. Skips the
 /// `repo` type entirely (repos are not downloadable).
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Arena allocator for filename duplication.
 /// - `job_obj`: The parsed JSON ObjectMap for the `"job"` key.
 /// - `job_id`: The job ID (used in URL construction later).
@@ -898,7 +898,7 @@ pub fn extractAssets(
 /// the given filename. In that case, the asset need not be downloaded
 /// because the cloned parent will regenerate it.
 ///
-/// Arguments:
+/// Parameters:
 /// - `filename`: The asset filename to check.
 /// - `collected`: Slice of all collected job entries.
 ///
@@ -931,7 +931,7 @@ pub fn isAssetGeneratedByClonedJobs(
 /// Copies all keys except "NAME" (server auto-generates it).
 /// Also adds CLONED_FROM and _GROUP_ID as appropriate.
 ///
-/// Arguments:
+/// Parameters:
 /// - `arena`: Allocator for all produced key/value strings and the list itself.
 /// - `job_val`: The parsed JSON object for a single job (the "job" field's content).
 /// - `from_url`: Source instance URL, used to construct the CLONED_FROM value.
@@ -1009,7 +1009,7 @@ pub fn extractJobSettings(
 /// Reads the "Chained", "Directly chained", and "Parallel" arrays from the
 /// specified dependency object (either "parents" or "children").
 ///
-/// Arguments:
+/// Parameters:
 /// - `arena`: Allocator for the returned ID slices.
 /// - `job_obj`: The parsed JSON object for a single job.
 /// - `job_type_key`: Either "parents" or "children".
@@ -1115,7 +1115,7 @@ pub const DependencyWalker = struct {
 
     /// Create a walker seeded with the origin job.
     ///
-    /// Arguments:
+    /// Parameters:
     /// - `allocator`: Arena allocator for worklist/collected storage.
     /// - `origin_job_id`: The root job ID to start the BFS from.
     /// - `opts`: Clone options controlling dep traversal (skip flags, depth limits).
@@ -1167,7 +1167,7 @@ pub const DependencyWalker = struct {
     /// skip/depth filtering, enqueues reachable deps, and records the
     /// job in `collected`.
     ///
-    /// Arguments:
+    /// Parameters:
     /// - `allocator`: Arena allocator for extracted data and worklist growth.
     /// - `item`: The `WorkItem` returned by the preceding `next()` call.
     /// - `job_obj`: The parsed JSON ObjectMap for the `"job"` key in the API response.

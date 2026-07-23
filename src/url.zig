@@ -15,7 +15,7 @@ const std = @import("std");
 ///
 /// This predicate is called per-byte by `formEncodeAppend`, which builds
 /// the encoded form body used for POST requests.
-/// Arguments:
+/// Parameters:
 /// - `c`: input character to check
 fn isUnreserved(c: u8) bool {
     return (c >= 'A' and c <= 'Z') or
@@ -60,7 +60,7 @@ test "isUnreserved: reserved and special chars return false" {
 /// - Space characters (' ') are converted to '+'.
 /// - All other characters are percent-encoded as uppercase hex (e.g., '%0A').
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used to grow the `buf` ArrayList if needed.
 /// - `buf`: The destination buffer to append the encoded string to.
 /// - `input`: The raw string to be encoded.
