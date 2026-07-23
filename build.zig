@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Strip debug symbols from the binary");
 
-    // Library module — exposed to consumers of this package.
+    // Library module exposed to consumers of this package.
     // Note: Zig uses a root source file approach. Only files that are explicitly
     // @import'ed from src/root.zig (or its imported files) will be part of the library.
     const lib_mod = b.addModule("zoqa", .{
@@ -54,6 +54,25 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    // Documentation generation step (on-demand: `zig build docs`)
+    const docs_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const docs_lib = b.addLibrary(.{
+        .name = "zoqa",
+        .root_module = docs_mod,
+        .linkage = .static,
+    });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = docs_lib.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    const docs_step = b.step("docs", "Generate API documentation (output: zig-out/docs/)");
+    docs_step.dependOn(&install_docs.step);
 
     if (b.option(bool, "fuzz", "enable building tooling for fuzz testing") orelse false) {
         setupFuzzing(b, target, optimize);
@@ -123,12 +142,12 @@ fn setupFuzzing(
         .{ .name = "zoqa", .module = lib_mod },
     });
 
-    // zoqa-fuzz-execute: full execute pipeline — auth + retry + gzip + openQAReq
+    // zoqa-fuzz-execute: full execute pipeline: auth + retry + gzip + openQAReq
     addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-execute", "tests/fuzz/fuzz_execute.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },
     });
 
-    // zoqa-fuzz-schedule: schedule subcommand — runSchedule + extractJobIds
+    // zoqa-fuzz-schedule: schedule subcommand: runSchedule + extractJobIds
     // (stub: sync path only, see tests/fuzz/fuzz_schedule.zig STATUS section).
     addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-schedule", "tests/fuzz/fuzz_schedule.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },

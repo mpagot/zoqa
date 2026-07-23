@@ -13,7 +13,7 @@ const config = zoqa.config;
 /// - It contains a colon ":" where all characters before it are NOT '/', '?', or '#'
 ///   (i.e., it matches the pattern ^[^:/?#]+:)
 ///
-/// Arguments:
+/// Parameters:
 /// - `path`: The API path or URL to check.
 ///
 /// Returns: `true` if it's an absolute URL, `false` otherwise.
@@ -105,7 +105,7 @@ pub const Args = struct {
     /// Release the three owned ArrayLists.  Call this (via `defer`) immediately
     /// after a successful `parseArgs` return.
     ///
-    /// Arguments:
+    /// Parameters:
     /// - `allocator`: The same allocator that was passed to `parseArgs`; used to
     ///   release the backing storage of `headers`, `param_files`, and `kv_params`.
     pub fn deinit(self: *Args, allocator: std.mem.Allocator) void {
@@ -413,6 +413,12 @@ fn tryScheduleFlag(
 ///
 /// A successful return guarantees `args.subcmd` is non-null unless
 /// `args.help` is true (the bare `zoqa -h` case).
+///
+/// Parameters:
+///   - allocator: used to build the dynamic lists held by `Args`.
+///   - argv: the full argument vector, including the program name at argv[0].
+///
+/// Returns: a populated `Args` struct describing the parsed command line.
 ///
 /// Errors:
 ///   - `error.MissingSubcommand` — no arguments after the program name.
@@ -852,7 +858,7 @@ test "parseArgs: --links accepted for archive no effects" {
 /// - Booleans: Converted to "true" or "false".
 /// - Null: Result in an empty value (e.g., "key=").
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used for JSON parsing and output buffer allocation.
 /// - `body`: The raw JSON string to convert.
 ///
@@ -1096,7 +1102,7 @@ const ArchiveConfig = struct {
 /// and `--param-file KEY=FILE` entries. Used by both the `api` and `schedule`
 /// subcommands.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Used for file reads (`--param-file`). Temp allocations
 ///     are freed before return.
 ///   - `arena_alloc`: Arena allocator owning the returned string buffer.
@@ -1165,18 +1171,18 @@ fn buildFormParams(
 /// **Side effects:** Reads `--param-file` targets from the filesystem via
 /// `std.fs.cwd().readFileAlloc`. All other processing is pure.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Used for all internal allocations (param encoding buffer,
 ///     form body conversion, host/path buffers, header list). Owned buffers are
 ///     tracked inside the returned `RequestConfig` and freed by its `deinit`.
-///   - `args`: Parsed CLI arguments from `parseArgs`. Borrowed — the caller
+///   - `args`: Parsed CLI arguments from `parseArgs`. Borrowed, the caller
 ///     must keep it alive (and its backing slices valid) for the lifetime of
 ///     the returned `RequestConfig`, since string fields may alias into it.
 ///   - `data_file_content`: Pre-read content of `--data-file` (or stdin).
 ///     Pass `null` when `--data-file` was not supplied. The caller reads
 ///     the file/stdin before calling this function because `--data-file`
-///     supports `-` for stdin — a blocking, consume-once, process-global
-///     operation that cannot be repeated inside a fuzz harness or unit test.
+///     supports `-` for stdin (blocking, consume-once, process-global
+///     operation that cannot be repeated inside fuzz or unit test).
 ///     By contrast, `--param-file` is always a named path (no stdin), so it
 ///     is read internally via `readFileAlloc`; the fuzz harness compensates
 ///     with a temp-file rewrite.
@@ -1738,8 +1744,7 @@ test "buildRequest: POST with KV params uses body not query string" {
     defer req_cfg.deinit();
 
     try std.testing.expect(req_cfg.method == .POST);
-    // buildRequest no longer puts KV params in body — that routing is
-    // owned by openQAReq. Instead, params_encoded holds the encoded pairs.
+    // params_encoded holds the encoded pairs.
     try std.testing.expect(req_cfg.body == null);
     try std.testing.expect(std.mem.indexOf(u8, req_cfg.params_encoded, "DISTRI=sle") != null);
     try std.testing.expect(std.mem.indexOf(u8, req_cfg.params_encoded, "VERSION=15") != null);
@@ -2222,10 +2227,10 @@ test "mergeCredentials: partial secret only returns null (no key anywhere)" {
 /// CLI to exit with a confusing diagnostic; swallowing it produces the same
 /// silent exit behaviour as coreutils.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Scratch allocator for JSON pretty-print parsing. Only used
 ///     when `pretty` is true and the response body is `application/json`.
-///   - `resp`: The HTTP response returned by `zoqa.openQAReq()`. Borrowed —
+///   - `resp`: The HTTP response returned by `zoqa.openQAReq()`. Borrowed:
 ///     the caller retains ownership and is responsible for calling `resp.deinit()`.
 ///   - `verbose`: When true, print the HTTP status line and all response headers
 ///     to stdout before the body.
@@ -2672,7 +2677,7 @@ const help_schedule_options =
 
 /// Print the top-level zoqa usage block.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
@@ -2693,7 +2698,7 @@ fn printHelp(is_error: bool) void {
 /// Print the `api` subcommand usage block.
 /// Called when PATH is missing (exit 255, per Perl reference behavior).
 ///
-/// Arguments:
+/// Parameters:
 ///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printApiHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
@@ -2710,7 +2715,7 @@ fn printApiHelp(is_error: bool) void {
 
 /// Print the `archive` subcommand usage block.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printArchiveHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
@@ -2727,7 +2732,7 @@ fn printArchiveHelp(is_error: bool) void {
 
 /// Print the `monitor` subcommand usage block.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printMonitorHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
@@ -2744,7 +2749,7 @@ fn printMonitorHelp(is_error: bool) void {
 
 /// Print the `schedule` subcommand usage block.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `is_error`: When true, write to stderr; otherwise stdout.
 fn printScheduleHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;

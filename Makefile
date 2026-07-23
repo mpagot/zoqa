@@ -1,12 +1,10 @@
-# Makefile — openQAclient
-#
 # Convenience targets wrapping the standard Zig and Bash commands.
 # All targets are documented below; run `make help` for a quick reference.
 #
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help zig-build-debug zig-release zig-test zig-test-discovery zig-lint e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize zig-docstring lint fuzz-build
+.PHONY: help zig-build-debug zig-build-release zig-test zig-test-discovery zig-lint zig-docs zig-docs-check zig-docs-serve e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize zig-doc-lint lint fuzz-build
 
 # Default target
 help:
@@ -20,15 +18,18 @@ help:
 	@echo "                      Catches Zig issue #10018 (lazy-analysis silently"
 	@echo "                      drops tests in unreferenced files). Runs the suite."
 	@echo "  zig-lint            Check Zig source formatting (zig fmt --check src/)."
-	@echo "  zig-docstring       Check /// docstring completeness for fn declarations in src/."
-	@echo "                      Optional: WITH_PRIVATE=1  — also check private functions."
+	@echo "  zig-doc-lint        Check /// docstring completeness for fn declarations in src/."
+	@echo "                      Optional: WITH_PRIVATE=1   also check private functions."
+	@echo "  zig-docs            Generate API documentation (output: zig-out/docs/)."
+	@echo "  zig-docs-check      Generate docs and verify the output is non-empty."
+	@echo "  zig-docs-serve      Generate docs and serve at http://localhost:8080."
 	@echo " "
 	@echo "  e2e         Run the full E2E suite (starts + tears down container)."
 	@echo "              Requires zig-out/bin/zoqa to exist."
-	@echo "              Optional: SUITES=core,auth  — run only the listed suite(s)."
-	@echo "              Optional: SUITES=           — run no tests (deployment check)."
+	@echo "              Optional: SUITES=core,auth   run only the listed suite(s)."
+	@echo "              Optional: SUITES=            run no tests (deployment check)."
 	@echo "  e2e-keep    Run E2E keeping the container alive (--keep-container)."
-	@echo "              Optional: SUITES=           — deploy only, skip all tests."
+	@echo "              Optional: SUITES=            deploy only, skip all tests."
 	@echo "  e2e-dryrun  Simulate E2E run without starting container (--dryrun)."
 	@echo "  e2e-lint        Run bash -n, shellcheck, and suite registry check on E2E scripts."
 	@echo "  e2e-catalog-lint Run test prefix and catalog validation."
@@ -38,6 +39,8 @@ help:
 	@echo "  fuzz-lint       Run bash -n and shellcheck on tests/fuzz/ scripts."
 	@echo "  fuzz-build      Build the fuzzy app."
 	@echo "  fuzz-sanitize   Check that corpus filenames are Windows-safe (no colons)."
+	@echo " "
+	@echo " "
 	@echo "  lint        Run all linters (zig-lint, manual-lint, fuzz-lint)."
 
 zig-build-debug:
@@ -56,9 +59,6 @@ zig-test: zig-test-discovery
 zig-test-discovery:
 	./tools/check_test_count.sh .
 
-# -----------------------------------------------------------------------------
-# Linting — Zig source formatting check
-# -----------------------------------------------------------------------------
 zig-lint:
 	@echo "==> zig fmt --check src/"
 	@zig fmt --check src/
@@ -70,14 +70,39 @@ zig-lint:
 # Check that every pub/export fn declaration in src/*.zig has a complete /// doc
 # comment (summary, Arguments:, Returns:, Errors: as appropriate).
 # Optional: pass WITH_PRIVATE=1 to also check private functions.
-#   make zig-docstring
-#   make zig-docstring WITH_PRIVATE=1
+#   make zig-doc-lint
+#   make zig-doc-lint WITH_PRIVATE=1
 DOCSTRING_FLAGS := $(if $(WITH_PRIVATE),--with-private,)
 
-zig-docstring:
+zig-doc-lint:
 	@echo "==> docstring completeness check"
 	@python3 tools/check_docstrings.py $(DOCSTRING_FLAGS) .
-	@echo "==> zig-docstring passed"
+	@echo "==> zig-doc-lint passed"
+
+# -----------------------------------------------------------------------------
+# Documentation generation
+# -----------------------------------------------------------------------------
+zig-docs:
+	@echo "==> generating API documentation"
+	@zig build docs
+	@echo "==> docs available at zig-out/docs/"
+
+# Build docs and verify the emitted output is non-empty. Guards against a
+# "successful" build that produced an effectively empty symbol tree: the WASM
+# front end derives each module's root from `<module>/root.zig` or
+# `<module>/<module>.zig` inside sources.tar, so a rename breaking that naming
+# rule (or a source file missing its trailing newline) yields a docs site with
+# no declarations. Neither failure is caught by the docstring format linter.
+zig-docs-check: zig-docs
+	@echo "==> verifying emitted docs"
+	@test -f zig-out/docs/index.html
+	@test -f zig-out/docs/sources.tar
+	@tar tf zig-out/docs/sources.tar | grep -qx 'zoqa/root.zig'
+	@echo "==> zig-docs-check passed"
+
+zig-docs-serve: zig-docs
+	@echo "==> serving docs at http://localhost:8080 (Ctrl+C to stop)"
+	@cd zig-out/docs && python3 -m http.server 8080
 
 # -----------------------------------------------------------------------------
 # Near End-to-End Tests
@@ -105,7 +130,7 @@ e2e-dryrun:
 	./tests/e2e/run.sh --dryrun $(E2E_SUITES_ARG)
 
 # -----------------------------------------------------------------------------
-# Linting — bash syntax check + shellcheck on all E2E scripts
+# Linting  bash syntax check + shellcheck on all E2E scripts
 # -----------------------------------------------------------------------------
 E2E_SCRIPTS := \
 	tests/e2e/run.sh \
@@ -145,7 +170,7 @@ e2e-lint:
 	@echo "==> e2e-lint passed"
 
 # -----------------------------------------------------------------------------
-# Linting — bash syntax check + shellcheck on manual test scripts
+# Linting  bash syntax check + shellcheck on manual test scripts
 # -----------------------------------------------------------------------------
 MANUAL_SCRIPTS := \
 	tests/manual/lib.sh \
@@ -172,7 +197,7 @@ fuzz-sanitize:
 	./tests/fuzz/sanitize_corpus.sh
 
 # -----------------------------------------------------------------------------
-# Linting — bash syntax check + shellcheck on fuzz harness scripts
+# Linting  bash syntax check + shellcheck on fuzz harness scripts
 # -----------------------------------------------------------------------------
 FUZZ_SCRIPTS := \
 	tests/fuzz/build.sh \

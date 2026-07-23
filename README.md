@@ -29,7 +29,7 @@
 [openQA](https://open.qa/) is the test framework used to test openSUSE, SUSE Linux
 Enterprise, Fedora, Debian, and other distributions. Every day, thousands of
 automated test jobs run against new builds, and the primary way to talk to an openQA
-server from the command line is `openqa-cli` — a Perl script bundled with the openQA
+server from the command line is `openqa-cli` Perl script bundled with the openQA
 package.
 
 `openqa-cli` is the standard tool for the job and is actively maintained. But it
@@ -45,7 +45,7 @@ command-line toolset: the four `openqa-cli` subcommands (`api`, `archive`,
 `openqa-clone-custom-git-refspec`. Each tool aims to be a drop-in replacement:
 same flags, same config file format (`~/.config/openqa/client.conf`), same
 HMAC-SHA1 authentication, same output. You should be able to swap any of them
-in your scripts and see no difference — except that they start faster, ship as
+in your scripts and see no difference, except that they start faster, ship as
 single static binaries, and need zero runtime dependencies.
 
 
@@ -56,7 +56,7 @@ single static binaries, and need zero runtime dependencies.
 | **Runtime deps** | Perl 5, ~15 CPAN modules | None (static binary) |
 | **Binary size** | N/A (interpreted) | ~2 MB |
 | **Startup** | Perl interpreter + module loading | Instant (compiled native code) |
-| **Platforms** | Wherever Perl runs | Linux, macOS, Windows (x86_64 + aarch64) — 6 targets from a single build host |
+| **Platforms** | Wherever Perl runs | Linux, macOS, Windows (x86_64 + aarch64) 6 targets from a single build host |
 | **Container-friendly** | Needs Perl + deps installed | Copy one file, done |
 | **Wall-time per `api` call** | ~0.6–1.3 s | ~0.13–0.35 s (4–5× faster) |
 | **Peak memory (`api`)** | ~61 MB | ~5.3 MB (91% less) |
@@ -65,7 +65,7 @@ single static binaries, and need zero runtime dependencies.
 | **Peak memory (`archive`, ~3.4 GB)** | ~70 MB | ~11 MB (6.3× less) |
 
 Measured against a production openQA server over the network. The `api` speedup
-is **Mojolicious startup overhead** — both tools complete the network round-trip
+is **Mojolicious startup overhead**: both tools complete the network round-trip
 in similar time. The `archive` gap is a genuine **architectural difference**:
 zoqa streams to disk; openqa-cli double-writes through a temp file, using 52×
 more CPU.
@@ -92,11 +92,10 @@ No runtime dependencies. One binary, copy it anywhere.
 
 ## Usage
 
-Run `openqa-cli --help` — sorry, force of habit, I meant `zoqa --help`. They're
+Run `openqa-cli --help` sorry, force of habit, I meant `zoqa --help`. They're
 the same. I keep telling you.
 
-The full guide — every subcommand, every flag, the auth file format, host
-aliases — lives in **[docs/Usage.md](docs/Usage.md)**. Or just:
+The full guide: **[docs/Usage.md](docs/Usage.md)**. Or just:
 
 ```sh
 zoqa --help
@@ -119,8 +118,8 @@ The binary is at `zig-out/bin/zoqa`.
 
 ## Project status
 
-zoqa is in active development. All four `openqa-cli` subcommands — `api`,
-`archive`, `monitor`, and `schedule` — are fully implemented, with a
+zoqa is in active development. All four `openqa-cli` subcommands
+(`api`, `archive`, `monitor`, and `schedule`) are fully implemented, with a
 comprehensive suite of end-to-end tests passing against a containerized openQA
 instance.
 

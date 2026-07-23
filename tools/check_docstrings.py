@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""check_docstrings.py — validate docstring completeness for Zig fn declarations.
+"""check_docstrings.py : validate docstring completeness for Zig fn declarations.
 
 Scans all *.zig files under src/ and checks that every fn declaration has a
 doc comment (///) with:
 
   - A summary line (at least one non-empty /// line directly above the fn)
-  - An `Arguments:` section when the function has non-self, non-underscore params
+  - A `Parameters:` section when the function has non-self, non-underscore params
   - A `Returns:` section when the return type is not void or noreturn
   - An `Errors:` section when the return type is an error union (starts with `!`)
 
 Doc comments must be a *contiguous* block of `///` lines immediately above the
-`fn` declaration — no blank lines or `//` non-doc comments between the comment
+`fn` declaration, no blank lines or `//` non-doc comments between the comment
 block and the `fn` keyword.
 
 Usage:
@@ -50,8 +50,13 @@ _TEST_START_RE = re.compile(r'^test[\s"({]')
 _CLOSE_BRACE_RE = re.compile(r"^\}")
 
 # Strips callconv(...) from a return-type candidate.
-# callconv arguments are always simple enum literals (.C, .SysV, …) — no nested parens.
+# callconv arguments are always simple enum literals (.C, .SysV, …), no nested parens.
 _CALLCONV_RE = re.compile(r"\bcallconv\s*\([^)]*\)\s*")
+
+# Matches a struct/union/enum container opening (pub or non-pub).
+_CONTAINER_RE = re.compile(
+    r"^(pub\s+)?const\s+\w+\s*=\s*(?:packed\s+)?(?:struct|union|enum)\b"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +71,7 @@ def find_test_zones(lines: list[str]) -> set[int]:
     at the first ``}`` that appears at column 0.  This intentionally avoids
     brace counting (which would be confused by ``}`` inside string literals)
     at the cost of being misled by a ``}`` at column 0 that is *not* the
-    test close — a pattern that does not occur in this codebase.
+    test close, a pattern that does not occur in this codebase.
 
     Struct methods or helper functions defined inside test blocks are
     therefore also skipped, which is the desired behaviour.
@@ -87,6 +92,32 @@ def find_test_zones(lines: list[str]) -> set[int]:
     return zones
 
 
+def _is_in_nonpub_container(lines: list[str], fn_idx: int) -> bool:
+    """Return True if the ``pub fn`` at *fn_idx* is inside a non-pub container.
+
+    An indented ``pub fn`` lives inside a struct/union/enum body. If the
+    enclosing container declaration is ``const`` (not ``pub const``), the
+    method is effectively private, typically a test mock or internal
+    helper, and should be skipped by the docstring checker.
+
+    Walks backward from *fn_idx* to find the nearest container opening
+    (``[pub] const Name = struct/union/enum``). Returns False for top-level
+    functions (no leading whitespace) or functions inside ``pub`` containers.
+    """
+    # Top-level fn not inside any container.
+    if not lines[fn_idx][:1].isspace():
+        return False
+
+    for i in range(fn_idx - 1, -1, -1):
+        m = _CONTAINER_RE.match(lines[i])
+        if m:
+            # m.group(1) is "pub " if present, else None.
+            return m.group(1) is None
+
+    # Should not happen (indented fn without a container), but be safe.
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Signature collection and parsing
 # ---------------------------------------------------------------------------
@@ -100,8 +131,7 @@ def collect_signature(lines: list[str], fn_idx: int) -> str:
     list has closed).
 
     Known limitation: anonymous struct return types containing ``{`` (e.g.
-    ``fn foo() struct { x: i32 } {``) would cause an early stop — not
-    present in this codebase.
+    ``fn foo() struct { x: i32 } {``) would cause an early stop
     """
     parts: list[str] = []
     paren_depth = 0
@@ -191,7 +221,7 @@ def extract_params(signature: str) -> list[str]:
 
         colon_idx = param.find(":")
         if colon_idx == -1:
-            # No colon — positional type-only param; skip.
+            # No colon, positional type-only param; skip.
             continue
 
         name = param[:colon_idx].strip()
@@ -295,10 +325,10 @@ def check_docstring(
 
     doc_text = "\n".join(doc_lines)
 
-    # Arguments: required when there are non-self/non-underscore params.
+    # Parameters: required when there are non-self/non-underscore params.
     if param_names:
-        if not re.search(r"^\s*Arguments?:", doc_text, re.MULTILINE):
-            missing.append("missing Arguments section")
+        if not re.search(r"^\s*Parameters?:", doc_text, re.MULTILINE):
+            missing.append("missing Parameters section")
 
     # Analyse return type.
     has_error_union = return_type.startswith("!")
@@ -350,6 +380,10 @@ def check_file(
 
         # Skip deinit functions unless explicitly requested.
         if fn_name == "deinit" and not with_deinit:
+            continue
+
+        # Skip pub fn inside non-pub containers (test mocks, internal helpers).
+        if not with_private and _is_in_nonpub_container(lines, i):
             continue
 
         signature = collect_signature(lines, i)
