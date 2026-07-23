@@ -9,7 +9,7 @@ const zoqa = @import("zoqa");
 
 /// Returns true when every byte of `s` is an ASCII digit and `s` is non-empty.
 ///
-/// Arguments:
+/// Parameters:
 /// - `s`: The byte slice to check.
 ///
 /// Returns: `true` if `s` is non-empty and consists entirely of ASCII digits,
@@ -33,7 +33,7 @@ test "isNumericId: digits only" {
 
 /// Returns true when `s` starts with "http://" or "https://".
 ///
-/// Arguments:
+/// Parameters:
 /// - `s`: The byte slice to inspect for an HTTP scheme prefix.
 ///
 /// Returns: `true` if `s` begins with either "http://" or "https://".
@@ -56,7 +56,7 @@ test "hasHttpScheme: detection" {
 ///   /t{digits}              — shortcut form (e.g. /t42)
 ///   /tests/{digits}[/...]   — canonical form (e.g. /tests/42)
 ///
-/// Arguments:
+/// Parameters:
 /// - `path`: The URL path component to parse (e.g. "/tests/42/details").
 ///
 /// Returns: The extracted job ID, or `null` if the path does not match either pattern.
@@ -136,7 +136,7 @@ const SplitJobRefResult = struct {
 ///
 /// The returned `host` is always an owned allocation; call `deinit` to free it.
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used to allocate the returned host URL string.
 /// - `input`: The raw JOBREF string from the CLI (URL, hostname, or bare integer).
 ///
@@ -255,7 +255,7 @@ test "splitJobRef: URL with port" {
 ///
 /// The returned slice is always a new allocation; the caller must free it.
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used to allocate the returned URL string.
 /// - `host`: The raw hostname or URL from the `--host` flag.
 ///
@@ -342,7 +342,7 @@ const ResolvedJobRef = struct {
 ///      on whether the first positional was used as the JOBREF).
 ///   5. --host HOST                    → overrides the destination; defaults to localhost.
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used to allocate the returned URL strings.
 /// - `args`: Parsed CLI arguments (read-only; positionals are not consumed).
 ///
@@ -486,7 +486,7 @@ const CloneArgs = struct {
 
 /// Parse command-line arguments into a `CloneArgs` struct.
 ///
-/// Arguments:
+/// Parameters:
 /// - `allocator`: Used to grow the positionals ArrayList.
 /// - `argv`: Raw argument vector (argv[0] is the program name, skipped).
 ///
@@ -641,7 +641,7 @@ const help_text =
 
 /// Write the help text to stdout (is_error=false) or stderr (is_error=true).
 ///
-/// Arguments:
+/// Parameters:
 /// - `is_error`: When `true`, writes to stderr; when `false`, writes to stdout.
 fn printHelp(is_error: bool) void {
     var buf: [4096]u8 = undefined;
@@ -656,7 +656,7 @@ fn printHelp(is_error: bool) void {
 
 /// Print a formatted message to stderr using a stack-allocated buffer.
 ///
-/// Arguments:
+/// Parameters:
 /// - `fmt`: Compile-time format string.
 /// - `args_fmt`: Format arguments matching the placeholders in `fmt`.
 fn printStderr(comptime fmt: []const u8, args_fmt: anytype) void {
@@ -687,7 +687,7 @@ const WalkResult = struct {
 /// dependency information, extracts asset references, and collects any
 /// server-reported missing asset filenames (when `check_assets=1` is sent).
 ///
-/// Arguments:
+/// Parameters:
 /// - `gpa`: General-purpose allocator for transient allocations (freed per-iteration).
 /// - `arena_alloc`: Arena allocator for long-lived data (walker entries, assets).
 /// - `resolved`: Resolved job reference containing `from_url` and `job_id`.
@@ -825,7 +825,7 @@ fn walkDependencyGraph(
 ///
 /// Calls `std.process.exit(1)` on fatal errors (exe-layer helper).
 ///
-/// Arguments:
+/// Parameters:
 /// - `gpa`: General-purpose allocator for building the POST body string.
 /// - `arena_alloc`: Arena allocator for job entry storage.
 /// - `collected`: Slice of collected BFS entries from the dependency walker.
@@ -938,7 +938,7 @@ const OutputMode = enum {
 ///
 /// Calls `std.process.exit(1)` on fatal errors (exe-layer helper).
 ///
-/// Arguments:
+/// Parameters:
 /// - `gpa`: General-purpose allocator for request/response processing.
 /// - `resolved`: Resolved job reference containing `host_url`.
 /// - `host_creds`: Optional API credentials for the destination instance.
@@ -1035,7 +1035,7 @@ fn postAndFormatOutput(
 /// cloned jobs (PUBLISH_HDD_* / PUBLISH_PFLASH_VARS), then downloads the
 /// remainder via GET /tests/{id}/asset/{type}/{filename}.
 ///
-/// Arguments:
+/// Parameters:
 /// - `gpa`: General-purpose allocator for path construction and HTTP I/O.
 /// - `client`: HTTP client instance (shared across requests).
 /// - `assets`: Slice of asset entries collected during the dependency walk.

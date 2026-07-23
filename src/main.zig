@@ -126,7 +126,7 @@ pub const Args = struct {
 /// The five common flags (--host, --apikey, --apisecret, --verbose, --help)
 /// are handled by `arg_match.tryCommonFlag` in the parse loop.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `args`: Mutable Args struct being populated.
 ///   - `token`: The current argv token being tested.
 ///   - `i`: Current argv index cursor (advanced when a value is consumed).
@@ -314,7 +314,7 @@ test "tryZoqaGlobalFlag: unrecognized token returns false" {
 /// Try to match `token` against a flag specific to the `api` subcommand
 /// (`zoqa api ...`).
 ///
-/// Arguments:
+/// Parameters:
 ///   - `args`: Mutable Args struct being populated.
 ///   - `allocator`: Used to grow `args.headers` and `args.param_files`.
 ///   - `token`: The current argv token being tested.
@@ -518,7 +518,7 @@ test "tryApiFlag: unrecognized token returns false" {
 /// Try to match `token` against a flag specific to the `archive` subcommand
 /// (`zoqa archive ...`).
 ///
-/// Arguments:
+/// Parameters:
 ///   - `args`: Mutable Args struct being populated.
 ///   - `token`: The current argv token being tested.
 ///   - `i`: Current argv index cursor (advanced when a value is consumed).
@@ -620,7 +620,7 @@ test "tryArchiveFlag: unrecognized token returns false" {
 ///     sets `args.poll_interval`. Defaults to `10` in `buildMonitorRequest`
 ///     when absent.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `args`: Mutable Args struct being populated.
 ///   - `token`: The current argv token being tested.
 ///   - `i`: Current argv index cursor (advanced when a value is consumed).
@@ -728,7 +728,7 @@ test "tryMonitorFlag: unrecognized token returns false" {
 ///     form). Unlike the `api` subcommand, `schedule` has no PATH positional;
 ///     every positional is a KEY=VALUE POST parameter for `/api/v1/isos`.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `args`: Mutable Args struct being populated.
 ///   - `allocator`: Used to grow `args.param_files` for `--param-file` entries.
 ///   - `token`: The current argv token being tested.
@@ -894,9 +894,9 @@ test "tryScheduleFlag: unrecognized token returns false" {
 ///     fields (`headers`, `param_files`, `kv_params`). The same allocator must be
 ///     passed to `Args.deinit` to free those allocations.
 ///   - `argv`: The full process argument vector. `argv[0]` is the program name;
-///     `argv[1]` (if present) must be the subcommand or `-h`/`--help`. All string
-///     slices stored in the returned `Args` borrow directly from this slice — no
-///     copies are made, so `argv` must outlive the returned `Args`.
+///     `argv[1]` (if present) must be the subcommand or `-h`/`--help`.
+///     All string slices stored in the returned `Args` borrow directly from this slice;
+///     no copies are made, so `argv` must outlive the returned `Args`.
 ///
 /// Returns: A fully populated `Args` struct. The caller owns the ArrayList
 /// allocations inside it and must call `deinit(allocator)` when done.
@@ -2161,10 +2161,10 @@ test "buildRequest: default User-Agent is openQAclient" {
 /// `.retries`, or `.quiet`: these are supplied by the caller in `main()` from shared
 /// environment and configuration file resolution.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Used for internal allocations (like host resolution buffers).
 ///     Owned buffers are tracked inside the returned `ArchiveConfig` and freed by its `deinit`.
-///   - `args`: Parsed CLI arguments from `parseArgs`. Borrowed — the caller must keep
+///   - `args`: Parsed CLI arguments from `parseArgs`. Borrowed: the caller must keep
 ///     it alive for the lifetime of the returned `ArchiveConfig`.
 ///
 /// Returns:
@@ -2221,7 +2221,7 @@ const MonitorConfig = struct {
 
 /// Transform parsed CLI arguments into a `MonitorConfig` ready for the monitor loop.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Backing allocator for the internal arena.
 ///   - `args`: Parsed CLI arguments from `parseArgs`.
 ///
@@ -2294,7 +2294,7 @@ const ScheduleConfig = struct {
 /// form-encodes all parameters (positional + `--param-file`), and resolves
 /// the target host.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Used for internal allocations.
 ///   - `args`: Parsed CLI arguments from `parseArgs`.
 ///
@@ -2619,8 +2619,7 @@ pub fn main() !void {
     };
     defer args.deinit(gpa);
 
-    // ── OS environment variables ──────────────────────────────────────────────
-    // Read all openQA-relevant env vars once at startup, then dispatch
+    // OS environment variables : read all openQA-relevant env vars once at startup, then dispatch
     // individual values to library functions as needed.
     var env: cli_env.OsEnv = .{};
     try cli_env.resolve(gpa, &env);

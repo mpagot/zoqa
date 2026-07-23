@@ -10,7 +10,7 @@ const std = @import("std");
 /// exclusively for fixed CLI flag matching.  Dynamically-constructed flag names
 /// are not supported and never will be.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `token`: The argv token to test (runtime).
 ///   - `long`: Long-form flag name, e.g. `"--verbose"`, or `null` (comptime).
 ///   - `short`: Short-form alias, e.g. `"-v"`, or `null` (comptime).
@@ -80,7 +80,7 @@ test "matchBool: null short — empty token returns EmptyToken" {
 /// exclusively for fixed CLI flag matching.  Dynamically-constructed flag names
 /// are not supported and never will be.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `token`: The current argv token being tested (runtime).
 ///   - `i`: Current argv index cursor; advanced by 1 when the space form matches.
 ///   - `argv`: The full argv slice, used to fetch the next token for the space form.
@@ -134,7 +134,7 @@ pub fn matchValue(
 /// (all `?[]const u8`), and `verbose`, `help` (both `bool`). A missing or
 /// mistyped field produces a compile error.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `T`: The args struct type; required fields are verified at compile time.
 ///   - `args`: Pointer to the args struct being populated.
 ///   - `token`: The current argv token being tested.

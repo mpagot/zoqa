@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
-    // Shared argument-parsing module — CLI-only utilities shared between
+    // Shared argument-parsing module: CLI-only utilities shared between
     // executables (matchBool, matchValue, tryCommonFlag). Intentionally kept
     // out of root.zig to maintain library UX-agnosticism.
     const arg_match_mod = b.createModule(.{
@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Shared CLI runtime-input resolution module — orchestrates the
+    // Shared CLI runtime-input resolution module: orchestrates the
     // credential priority chain (CLI > env > config) and env-var parsing for
     // retry/timeout knobs. Uses std.process; NOT part of the library.
     const cli_env_mod = b.createModule(.{
@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    // Second executable: zoqa-clone-job (stub — see ROADMAP §5.1)
+    // Second executable: zoqa-clone-job
     const clone_exe = b.addExecutable(.{
         .name = "zoqa-clone-job",
         .root_module = b.createModule(.{

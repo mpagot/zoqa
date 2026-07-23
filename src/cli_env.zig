@@ -51,7 +51,7 @@ pub const OsEnv = struct {
 /// and `null` for each that is absent. Any existing values in `env` are
 /// replaced unconditionally.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: Used to allocate owned copies of each env var value.
 ///   - `env`: Output struct to populate. Call `env.deinit(allocator)` when done.
 ///
@@ -110,7 +110,7 @@ pub const RetryConfig = struct {
 /// Follows the priority chain: CLI flags > `OPENQA_API_KEY`/`OPENQA_API_SECRET`
 /// environment variables > `~/.config/openqa/client.conf` config file.
 ///
-/// Arguments:
+/// Parameters:
 ///   - `allocator`: General-purpose allocator for config file I/O and result duplication.
 ///   - `host_url`: The resolved base URL of the target host (used to extract hostname for config lookup).
 ///   - `cli_key`: API key from CLI `--apikey` flag, or `null`.
@@ -158,7 +158,7 @@ pub fn resolveCredentials(
 /// Priority: `cli_retries` (from --retries flag) > `env_retries` string >
 /// `default_retries`. Timeout and backoff knobs are env-only (no CLI flags).
 ///
-/// Arguments:
+/// Parameters:
 ///   - `cli_retries`: Retry count from CLI `--retries`/`--retry` flag, or `null`.
 ///   - `default_retries`: Value used when neither CLI flag nor env var is set.
 ///     Most tools pass `0`; `clone-job` passes `5` to match the Perl reference's

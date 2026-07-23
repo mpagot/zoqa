@@ -1,4 +1,4 @@
-# Contributing to zoqa
+# Contributing to Zoqa
 
 ## Development Workflow
 
@@ -95,7 +95,7 @@ make e2e-keep                              # keep container alive after tests
 make e2e-dryrun                            # simulate run without container
 make e2e SUITES=core,auth                  # run specific suites only
 make e2e SUITES=                           # deploy container only, run no tests
-make e2e E2E_STORAGE_KEEP_FREE_RATIO=0    # disable isotovideo storage check (low-disk hosts)
+make e2e E2E_STORAGE_KEEP_FREE_RATIO=0     # disable isotovideo storage check (low-disk hosts)
 ```
 
 See [tests/e2e/README.md](tests/e2e/README.md) for prerequisites, script reference,
@@ -110,7 +110,7 @@ flags, debugging tips, and the full test coverage table.
 
 ```sh
 make e2e-catalog-lint                               # check all E2E test files
-bash tools/check_test_catalog.sh tests_archive.sh  # check a single file
+bash tools/check_test_catalog.sh tests_archive.sh   # check a single file
 ```
 
 `tools/check_test_catalog.sh` enforces:
@@ -161,8 +161,6 @@ The `ci` aggregation job is the required status check for branch protection.
 Releases are fully automated via the [Release workflow](.github/workflows/release.yml).
 Pushing a `v*` tag triggers it: the workflow builds cross-compiled binaries for all
 six targets, packages them, and publishes a GitHub Release with SHA-256 checksums.
-
-### Step-by-step
 
 **1. Ensure `main` is in the desired state**
 
