@@ -2,7 +2,6 @@ const std = @import("std");
 const zoqa = @import("zoqa");
 const arg_match = @import("arg_match");
 const cli_env = @import("cli_env");
-const config = zoqa.config;
 
 /// Check if the given API path is an absolute URL.
 ///
@@ -109,14 +108,10 @@ pub const Args = struct {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Scoped flag dispatchers: one function per scope
-// ---------------------------------------------------------------------------
-
-/// Try to match `token` against a zoqa-only global flag (accepted by all
-/// subcommands but not shared with other executables like zoqa-clone-job).
-/// The five common flags (--host, --apikey, --apisecret, --verbose, --help)
-/// are handled by `arg_match.tryCommonFlag` in the parse loop.
+/// Try to match `token` against a zoqa-only global flags:
+///    --osd, --o3, --odn, --quiet, --links, --pretty, --name, --retries
+/// Global flag are NOT Common, Globals are flag accepted by all zoqa subcommands
+/// but not shared with other executables like zoqa-clone-job.
 ///
 /// Parameters:
 ///   - `args`: Mutable Args struct being populated.
@@ -134,7 +129,6 @@ fn tryZoqaGlobalFlag(
     i: *usize,
     argv: []const []const u8,
 ) !bool {
-    // Boolean zoqa-only globals
     if (try arg_match.matchBool(token, "--osd", null)) {
         args.osd = true;
         return true;
@@ -159,8 +153,6 @@ fn tryZoqaGlobalFlag(
         args.pretty = true;
         return true;
     }
-
-    // Value zoqa-only globals
     if (try arg_match.matchValue(token, i, argv, "--name", null)) |v| {
         args.name = v;
         return true;
@@ -323,7 +315,6 @@ fn tryApiFlag(
     i: *usize,
     argv: []const []const u8,
 ) !bool {
-    // Boolean api flags
     if (try arg_match.matchBool(token, "--form", "-f")) {
         args.form = true;
         return true;
@@ -332,8 +323,6 @@ fn tryApiFlag(
         args.json = true;
         return true;
     }
-
-    // Value api flags
     if (try arg_match.matchValue(token, i, argv, "--method", "-X")) |v| {
         args.method = v;
         return true;
@@ -354,7 +343,6 @@ fn tryApiFlag(
         try args.param_files.append(allocator, v);
         return true;
     }
-
     return false;
 }
 
@@ -867,10 +855,6 @@ test "tryScheduleFlag: unrecognized token returns false" {
     try std.testing.expect(!try tryScheduleFlag(&args, allocator, argv[0], &i, argv));
 }
 
-// ---------------------------------------------------------------------------
-// parseArgs : subcommand-dispatched CLI parser
-// ---------------------------------------------------------------------------
-
 /// Parse command-line arguments into an `Args` struct.
 ///
 /// The parser works in two phases:
@@ -906,31 +890,27 @@ pub fn parseArgs(allocator: std.mem.Allocator, argv: []const []const u8) !Args {
         .kv_params = .empty,
     };
 
-    // Phase 1: subcommand extraction and validation.
     if (argv.len < 2) return error.MissingSubcommand;
-
-    const first = argv[1];
-
     // -h / --help at position 1: return immediately with help flag set.
-    if (std.mem.eql(u8, first, "-h") or std.mem.eql(u8, first, "--help")) {
+    if (std.mem.eql(u8, argv[1], "-h") or std.mem.eql(u8, argv[1], "--help")) {
         args.help = true;
         return args;
     }
 
     // Any other flag at position 1 is an error (matches Perl's Mojolicious
     // dispatcher which rejects flags before the subcommand).
-    if (std.mem.startsWith(u8, first, "-")) {
-        std.debug.print("Invalid command \"{s}\".\n", .{first});
+    if (std.mem.startsWith(u8, argv[1], "-")) {
+        std.debug.print("Invalid command \"{s}\".\n", .{argv[1]});
         return error.InvalidCommand;
     }
 
     // Validate the subcommand token.
-    args.subcmd = std.meta.stringToEnum(Subcommand, first) orelse {
-        std.debug.print("Error: Unknown subcommand '{s}'.\n", .{first});
+    args.subcmd = std.meta.stringToEnum(Subcommand, argv[1]) orelse {
+        std.debug.print("Error: Unknown subcommand '{s}'.\n", .{argv[1]});
         return error.UnknownSubcommand;
     };
 
-    // Phase 2: parse flags and positionals after the subcommand.
+    // Parse flags and positionals after the subcommand.
     var i: usize = 2;
     var stop_flags = false;
 
@@ -1317,13 +1297,6 @@ test "parseArgs: --links accepted for archive no effects" {
     try std.testing.expect(parsed.links);
 }
 
-/// Alias for the shared URL form-encoding function (library layer).
-const formEncodeAppend = zoqa.url.formEncodeAppend;
-
-// ---------------------------------------------------------------------------
-// --form: JSON object → application/x-www-form-urlencoded
-// ---------------------------------------------------------------------------
-
 /// Converts a JSON-formatted string into an application/x-www-form-urlencoded string.
 ///
 /// This function is used to implement the `--form` flag logic. It expects the input
@@ -1364,21 +1337,21 @@ fn jsonToFormEncoded(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     while (it.next()) |entry| {
         if (!first) try buf.append(allocator, '&');
         first = false;
-        try formEncodeAppend(allocator, &buf, entry.key_ptr.*);
+        try zoqa.url.formEncodeAppend(allocator, &buf, entry.key_ptr.*);
         try buf.append(allocator, '=');
         switch (entry.value_ptr.*) {
-            .string => |s| try formEncodeAppend(allocator, &buf, s),
+            .string => |s| try zoqa.url.formEncodeAppend(allocator, &buf, s),
             .integer => |n| {
                 const s = try std.fmt.allocPrint(allocator, "{d}", .{n});
                 defer allocator.free(s);
-                try formEncodeAppend(allocator, &buf, s);
+                try zoqa.url.formEncodeAppend(allocator, &buf, s);
             },
             .float => |f| {
                 const s = try std.fmt.allocPrint(allocator, "{d}", .{f});
                 defer allocator.free(s);
-                try formEncodeAppend(allocator, &buf, s);
+                try zoqa.url.formEncodeAppend(allocator, &buf, s);
             },
-            .bool => |b| try formEncodeAppend(allocator, &buf, if (b) "true" else "false"),
+            .bool => |b| try zoqa.url.formEncodeAppend(allocator, &buf, if (b) "true" else "false"),
             .null => {}, // empty value
             else => return error.FormUnsupportedValueType,
         }
@@ -1540,9 +1513,9 @@ fn buildFormParams(
     for (kv_args) |p| {
         const eq = std.mem.indexOfScalar(u8, p, '=') orelse continue;
         if (params.items.len > 0) try params.append(arena_alloc, '&');
-        try formEncodeAppend(arena_alloc, &params, p[0..eq]);
+        try zoqa.url.formEncodeAppend(arena_alloc, &params, p[0..eq]);
         try params.append(arena_alloc, '=');
-        try formEncodeAppend(arena_alloc, &params, p[eq + 1 ..]);
+        try zoqa.url.formEncodeAppend(arena_alloc, &params, p[eq + 1 ..]);
     }
 
     // --param-file KEY=FILE
@@ -1558,9 +1531,9 @@ fn buildFormParams(
         defer allocator.free(contents);
         const trimmed = std.mem.trimRight(u8, contents, "\n\r");
         if (params.items.len > 0) try params.append(arena_alloc, '&');
-        try formEncodeAppend(arena_alloc, &params, key);
+        try zoqa.url.formEncodeAppend(arena_alloc, &params, key);
         try params.append(arena_alloc, '=');
-        try formEncodeAppend(arena_alloc, &params, trimmed);
+        try zoqa.url.formEncodeAppend(arena_alloc, &params, trimmed);
     }
 
     return params.items[0..params.items.len];
@@ -1712,7 +1685,7 @@ pub fn buildRequest(
         }
     } else {
         // Relative path: resolve host from CLI flags / --host / default.
-        const host_res = try config.resolveHost(
+        const host_res = try zoqa.config.resolveHost(
             arena_alloc,
             args.osd,
             args.o3,
@@ -2178,7 +2151,7 @@ fn buildArchiveRequest(
         return error.InvalidJobId;
     const output_path = args.kv_params.items[1];
 
-    const host_res = try config.resolveHost(
+    const host_res = try zoqa.config.resolveHost(
         arena_alloc,
         args.osd,
         args.o3,
@@ -2239,7 +2212,7 @@ fn buildMonitorRequest(
             return error.InvalidJobId;
     }
 
-    const host_res = try config.resolveHost(
+    const host_res = try zoqa.config.resolveHost(
         arena_alloc,
         args.osd,
         args.o3,
@@ -2309,7 +2282,7 @@ fn buildScheduleRequest(
     // All kv_params are KEY=VALUE pairs (no PATH for schedule).
     const params_encoded = try buildFormParams(allocator, arena_alloc, args.kv_params.items, args.param_files.items);
 
-    const host_res = try config.resolveHost(
+    const host_res = try zoqa.config.resolveHost(
         arena_alloc,
         args.osd,
         args.o3,
@@ -2461,10 +2434,6 @@ test "buildMonitorRequest: missing positional arguments returns error" {
 
     try std.testing.expectError(error.MissingMonitorArgs, buildMonitorRequest(allocator, &parsed));
 }
-
-// ---------------------------------------------------------------------------
-// printResponse : format and write HTTP response to stdout/stderr
-// ---------------------------------------------------------------------------
 
 /// Write the HTTP response to stdout (and optionally stderr), implementing
 /// verbose headers, link header parsing and body

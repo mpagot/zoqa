@@ -12,10 +12,6 @@ const std = @import("std");
 /// Characters outside this set must be percent-encoded in form-encoded
 /// payloads so the server can distinguish parameter delimiters from
 /// literal data.
-///
-/// This predicate is called per-byte by `formEncodeAppend`, which builds
-/// the encoded form body used for POST requests.
-/// Parameters:
 /// - `c`: input character to check
 fn isUnreserved(c: u8) bool {
     return (c >= 'A' and c <= 'Z') or
@@ -84,7 +80,9 @@ test "formEncodeAppend: unreserved chars pass through" {
     const allocator = std.testing.allocator;
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
+
     try formEncodeAppend(allocator, &buf, "hello_world-1.0~");
+
     try std.testing.expectEqualStrings("hello_world-1.0~", buf.items);
 }
 
@@ -92,7 +90,9 @@ test "formEncodeAppend: spaces become plus, specials percent-encoded" {
     const allocator = std.testing.allocator;
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
+
     try formEncodeAppend(allocator, &buf, "a b=c&d");
+
     try std.testing.expectEqualStrings("a+b%3Dc%26d", buf.items);
 }
 
@@ -100,7 +100,9 @@ test "formEncodeAppend: empty input produces empty output" {
     const allocator = std.testing.allocator;
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
+
     try formEncodeAppend(allocator, &buf, "");
+
     try std.testing.expectEqual(@as(usize, 0), buf.items.len);
 }
 
