@@ -297,13 +297,15 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-97 | Middle + --skip-deps + --max-depth 0 | layer_i + all 8 descendants (l–s) = 9 jobs; no parents (--skip-deps). |
 | CLO-RK-1 | `OPENQA_CLI_RETRY_SLEEP_TIME_S` + `RETRY_FACTOR` for clone-job | Both Perl and Zig accept these env vars on a healthy server and exit 0. |
 | CLO-84 | Perl retries on 503 | Fault proxy injects 2×503 then forwards; Perl retries and exits 0; ≥3 proxy hits confirmed; MD5 of downloaded asset verified against source. |
-| CLO-85 | Zig retry on 503 | Same fault scenario as CLO-84; Zig currently exits non-zero (Gap 2 unimplemented); exactly 1 proxy hit; no partial file must remain. |
+| CLO-85 | Zig retry on 503 | Same fault scenario as CLO-84; Zig currently exits non-zero; exactly 1 proxy hit; no partial file must remain. |
 | CLO-86 | 404 → no retry (both) | Proxy always returns 404; Zig exits non-zero (correct) and must leave no partial file; Perl exits 0 (known bug) and must also leave no partial file. |
 | CLO-87 | Perl exhausts retries | Proxy always 503; `--retry 2` → Perl exits 0 after exactly 3 attempts (known curl bug); no partial file must remain. |
 | CLO-88 | `--retry 0` disables retries | Proxy always 503; `--retry 0` → both tools make minimal attempts; Zig exits non-zero and must leave no partial file; Perl exits 0 (known bug) and must also leave no partial file. |
 | CLO-89 | Default --retry retries BFS GET | Proxy faults `/api/v1/jobs/` with 2×503 then forwards; Perl retries by default and succeeds; Zig currently fails (wrong default of 0 retries instead of 5). |
 | CLO-98 | Perl retries after mid-transfer TCP drop | Proxy sends 200 + 64 bytes then RST (partial mode) × 2, then forwards cleanly; Perl's curl retries on CURLE_RECV_ERROR (56) and exits 0; ≥3 proxy hits confirmed; MD5 verified — file must not be a concatenation of partial attempts. |
-| CLO-99 | Zig mid-transfer TCP drop | Same partial fault scenario as CLO-98; Zig currently exits non-zero (Gap 2 unimplemented — no retry in `downloadAssets`); exactly 1 proxy hit; no partial file must remain. |
+| CLO-98b | Perl mid-transfer drop WITH Content-Length | Proxy sends 200 + 64 bytes then RST (partial_cl mode) with Content-Length; curl sees CURLE_PARTIAL_FILE (18) and fails; Perl exits non-zero (cannot retry length-bearing drop). |
+| CLO-99 | Zig mid-transfer TCP drop | Same partial fault scenario as CLO-98; Zig currently exits non-zero; exactly 1 proxy hit; no partial file must remain. |
+| CLO-99b | Zig mid-transfer drop WITH Content-Length | Same partial_cl scenario as CLO-98b; Zig currently exits 0 with truncated files. |
 
 ### Stress Tests (`tests_stress.sh`)
 | # | Test | Verification |

@@ -572,7 +572,13 @@ pub fn executeStream(
         // returned rather than retried (see the doc comment above).
         var transfer_buf: [65536]u8 = undefined;
         const body_reader = response.reader(&transfer_buf);
-        _ = try body_reader.streamRemaining(writer);
+        const bytes_written = try body_reader.streamRemaining(writer);
+
+        if (content_length) |cl| {
+            if (bytes_written < cl) {
+                return error.HttpTransferTruncated;
+            }
+        }
 
         return StreamResult{
             .status = response.head.status,
@@ -1746,4 +1752,162 @@ test "openQADownloadToFile: re-downloads when source does not report complete" {
     var buf: [64]u8 = undefined;
     const on_disk = try std.fs.cwd().readFile(dest_path, &buf);
     try testing.expectEqualStrings("{}", on_disk);
+}
+
+test "executeStream: returns error.HttpTransferTruncated on short read" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const TruncatedMockClient = struct {
+        const Self = @This();
+
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_type: ?[]const u8 = "application/json",
+            content_length: ?u64 = 10, // Exceeds body length (2)
+
+            const HeaderIterator = struct {
+                done: bool = false,
+                fn next(self: *HeaderIterator) ?std.http.Header {
+                    if (self.done) return null;
+                    self.done = true;
+                    return .{ .name = "Content-Type", .value = "application/json" };
+                }
+            };
+
+            fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            done: bool = false,
+            fn streamRemaining(self: *MockReader, w: anytype) anyerror!usize {
+                if (self.done) return 0;
+                self.done = true;
+                const body = "{}"; // 2 bytes
+                try w.writeAll(body);
+                return body.len;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        response: MockResponse = .{},
+
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            return &self.response;
+        }
+    };
+
+    var mock: TruncatedMockClient = .{};
+    const req = Request{
+        .allocator = allocator,
+        .method = .GET,
+        .url = "http://localhost/api/v1/jobs",
+        .headers = &.{},
+        .body = null,
+        .credentials = null,
+        .retries = 0,
+        .quiet = true,
+    };
+
+    var discarding: std.Io.Writer.Discarding = .init(&.{});
+    const result = executeStream(req, &mock, &discarding.writer, null);
+    try testing.expectError(error.HttpTransferTruncated, result);
+}
+
+test "openQADownloadToFile: retries on error.HttpTransferTruncated and deletes partial file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const TruncatedMockClient = struct {
+        const Self = @This();
+
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_type: ?[]const u8 = "application/json",
+            content_length: ?u64 = 10, // Exceeds body length (2)
+
+            const HeaderIterator = struct {
+                done: bool = false,
+                fn next(self: *HeaderIterator) ?std.http.Header {
+                    if (self.done) return null;
+                    self.done = true;
+                    return .{ .name = "Content-Type", .value = "application/json" };
+                }
+            };
+
+            fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            done: bool = false,
+            fn streamRemaining(self: *MockReader, w: anytype) anyerror!usize {
+                if (self.done) return 0;
+                self.done = true;
+                const body = "{}"; // 2 bytes
+                try w.writeAll(body);
+                return body.len;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        attempts: u32 = 0,
+        response: MockResponse = .{},
+
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            self.attempts += 1;
+            return &self.response;
+        }
+    };
+
+    var mock: TruncatedMockClient = .{};
+    const dest_path = "temp_download_truncated_test.txt";
+    defer std.fs.cwd().deleteFile(dest_path) catch {};
+
+    const result = openQADownloadToFile("http://localhost", "/tests/123/file.txt", dest_path, .{
+        .allocator = allocator,
+        .credentials = null,
+        .quiet = true,
+        .retries = 2, // 2 retries = 3 total attempts
+        .retry_sleep_s = 0.001, // extremely fast
+        .retry_factor = 1.0,
+    }, &mock);
+
+    // Should exhaust retries and propagate the error.
+    try testing.expectError(error.HttpTransferTruncated, result);
+
+    // Verified that 3 attempts were made.
+    try testing.expectEqual(@as(u32, 3), mock.attempts);
+
+    // Verified that no partial file remains on disk after terminal failure.
+    try testing.expectError(error.FileNotFound, std.fs.cwd().access(dest_path, .{}));
 }

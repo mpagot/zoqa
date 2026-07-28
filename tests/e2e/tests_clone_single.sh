@@ -446,7 +446,7 @@ for _impl in "perl:$ASSET_DIR_PERL:$_perl_start:$_perl_end" "zig:$ASSET_DIR_ZIG:
 	done
 done
 if [[ "$_mtime_pass" == "true" ]]; then
-	echo "PASS: Both Perl and Zig asset downloads touched mtime to now (Gap 3)"
+	echo "PASS: Both Perl and Zig asset downloads touched mtime to now"
 else
 	failed_tests=$((failed_tests + 1))
 fi
@@ -548,7 +548,7 @@ container_exec rm -rf "$CLO100_REF" "$CLO100_PERL" "$CLO100_ZIG"
 #      clone-job writes back to the same directory.
 #   3. A final restore_factory() at the end leaves clean state for CLO-80+.
 # =============================================================================
-echo "--- Test CLO-72 to CLO-76: OPENQA_SHAREDIR (Gap 4) ---"
+echo "--- Test CLO-72 to CLO-76: OPENQA_SHAREDIR ---"
 
 _CLO7X_FACTORY="/var/lib/openqa/share/factory"
 _CLO7X_BACKUP="/tmp/e2e-factory-backup-$$"
@@ -1400,8 +1400,8 @@ stop_faultproxy
 # =============================================================================
 # CLO-98 / CLO-99: Mid-transfer TCP drop — partial fault mode
 #
-# These tests exercise the scenario described in gap2_plan.md §"Half-Written
-# File Problem": http_client.zig:streamRemaining (line ~574) fails mid-stream
+# These tests exercise the scenario "Half-Written File Problem":
+# http_client.zig:streamRemaining (line ~574) fails mid-stream
 # because the TCP connection is reset after the 200 OK headers and the first
 # few bytes of the body have already been received.
 #
@@ -1424,13 +1424,7 @@ stop_faultproxy
 # Test matrix:
 #   CLO-98  partial × 2, then 200:  Perl retries and succeeds.
 #   CLO-99  partial × 2, then 200:  Zig does not retry → exits 0 with truncated files
-#                                    (FAIL expected — TDD until Gap 8 is fixed).
 #
-# IMPORTANT: CLO-99 is a TDD marker for Gap 8 (length-less response silent truncation).
-# Since the asset download retry loop is implemented, the client retries on
-# connection/5xx errors, but because Content-Length is missing in this partial
-# body fixture, the connection close is treated as a successful EOF. Once Gap 8
-# is fixed, CLO-99 can be flipped.
 # =============================================================================
 
 echo ""
@@ -1498,16 +1492,46 @@ echo "WARN: CLO-98 Perl asset files are silently corrupted (MD5 mismatch) becaus
 container_exec rm -rf "$ASSET_DIR_CLO_98"
 
 # -----------------------------------------------------------------------------
-# CLO-99: partial × 2 then 200 — Zig mid-transfer TCP drop [TDD — Gap 8]
+# CLO-98b: partial_cl × 2 then 200 — Perl with Content-Length (Oracle)
+#
+# Since Content-Length is present, curl sees CURLE_PARTIAL_FILE (18) on early close.
+# Because curl's --retry does not retry on partial files, Perl's curl is expected
+# to fail immediately and Perl exits non-zero.
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-98b: Perl handles mid-transfer drop WITH Content-Length (expected fail/exit non-zero) ---"
+tag="clo-98b"
+ASSET_DIR_CLO_98B="/tmp/e2e-${tag}-perl-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_98B"
+start_faultproxy 2 partial_cl /tests/ 64
+
+run_capture "${tag}" perl \
+	"$PERL_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps \
+	 ${PARTIAL_JOB_ID} --dir ${ASSET_DIR_CLO_98B}"
+_PERL_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+if [[ "$_PERL_EXIT" -ne 0 ]]; then
+        echo "PASS: CLO-98b Perl exited non-zero (correctly failed to complete/retry length-bearing drop)"
+else
+        echo "FAIL: CLO-98b Perl exited 0 (unexpected — curl should have failed on CURLE_PARTIAL_FILE)"
+        failed_tests=$((failed_tests + 1))
+fi
+
+container_exec rm -rf "$ASSET_DIR_CLO_98B"
+
+# -----------------------------------------------------------------------------
+# CLO-99: partial × 2 then 200 — Zig mid-transfer TCP drop
 #
 # Since the asset download retry loop is implemented, the client has retry
 # capabilities. However, because Content-Length is missing in this partial
 # body fixture, the connection close/reset is treated as a successful EOF by
-# the client's HTTP library (Gap 8).
+# the client's HTTP library.
 # Therefore, Zig exits 0 on the first attempt of each asset, leaving behind
 # the 64-byte truncated file on disk (which fails MD5/cleanup checks).
 # -----------------------------------------------------------------------------
-echo "--- Test CLO-99: Zig mid-transfer TCP drop [TDD — FAIL expected until Gap 8 is fixed] ---"
+echo "--- Test CLO-99: Zig mid-transfer TCP drop ---"
 tag="clo-99"
 ASSET_DIR_CLO_99="/tmp/e2e-${tag}-zig-$$"
 container_exec mkdir -p "$ASSET_DIR_CLO_99"
@@ -1521,8 +1545,6 @@ _ZIG_EXIT=$_LAST_EXIT
 
 stop_faultproxy
 
-# Since Gap 8 is not yet implemented, Zig incorrectly exits 0 (it thinks the
-# truncated transfer was a clean EOF) instead of failing or retrying.
 if [[ "$_ZIG_EXIT" -eq 0 ]]; then
         echo "PASS: CLO-99 Zig exited 0 (expected under current Gap 8 bug)"
 else
@@ -1541,9 +1563,56 @@ else
 fi
 
 # The key failure for Gap 8 is that the downloaded file is truncated (64 bytes)
-# instead of complete. We assert that there are partial files as a failing condition,
-# which serves as the TDD marker for Gap 8.
+# instead of complete. We assert that there are partial files as a failing condition.
 assert_no_partial_files "$ASSET_DIR_CLO_99" "CLO-99 Zig"
 container_exec rm -rf "$ASSET_DIR_CLO_99"
+
+# -----------------------------------------------------------------------------
+# CLO-99b: partial_cl × 2 then 200 — Zig mid-transfer TCP drop WITH Content-Length
+#
+# Since Content-Length is present, Zig detects the short-read,
+# deletes any partial file, retries the download up to the limit, and eventually
+# succeeds (3 total hits per asset = 6 hits total, exit 0).
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-99b: Zig mid-transfer TCP drop WITH Content-Length ---"
+tag="clo-99b"
+ASSET_DIR_CLO_99B="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_99B"
+start_faultproxy 2 partial_cl /tests/ 64
+
+run_capture "${tag}" zig \
+        "$ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+         --host http://localhost --skip-deps \
+         ${PARTIAL_JOB_ID} --dir ${ASSET_DIR_CLO_99B}"
+_ZIG_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+if [[ "$_ZIG_EXIT" -eq 0 ]]; then
+        echo "PASS: CLO-99b Zig exited 0 (successfully retried and completed)"
+else
+        echo "FAIL: CLO-99b Zig exited $_ZIG_EXIT (expected 0)"
+        failed_tests=$((failed_tests + 1))
+fi
+
+_CLO99B_HITS=$(get_faultproxy_hits "/tests/${PARTIAL_JOB_ID}/asset/")
+if [[ "$_CLO99B_HITS" -ge 6 ]]; then
+        echo "PASS: CLO-99b Zig made $_CLO99B_HITS proxy hits (retried both assets correctly)"
+else
+        echo "FAIL: CLO-99b Zig made $_CLO99B_HITS proxy hit(s) (expected >= 6)"
+        dump_faultproxy_logs
+        failed_tests=$((failed_tests + 1))
+fi
+
+if container_exec find "$ASSET_DIR_CLO_99B" -type f | grep -q .; then
+        echo "PASS: CLO-99b Zig wrote asset file(s) to disk"
+else
+        echo "FAIL: CLO-99b Zig wrote no files to disk"
+        failed_tests=$((failed_tests + 1))
+fi
+
+# Verify the asset was written successfully and is complete (correct MD5)
+assert_downloaded_assets_md5 "$ASSET_DIR_CLO_99B" "CLO-99b Zig"
+container_exec rm -rf "$ASSET_DIR_CLO_99B"
 
 set +x  # end of CLO-98–99 trace

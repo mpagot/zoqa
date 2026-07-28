@@ -12,7 +12,7 @@ Configuration via command-line arguments:
   --port, -p         TCP port to listen on                         (default: 9797)
   --backend, -b      Backend base URL                              (default: http://127.0.0.1:80)
   --fault-path, -f   URL prefix that triggers fault injection      (default: /tests/)
-  --fault-mode, -m   Failure mode: 503 | 404 | reset | partial     (default: 503)
+  --fault-mode, -m   Failure mode: 503 | 404 | reset | partial | partial_cl (default: 503)
   --fail-times, -t   How many initial requests to fault-inject     (default: 2)
   --partial-bytes    Bytes to stream before TCP RST (partial mode) (default: 64)
   --count-file, -c   Path to write per-path hit counts to; written
@@ -109,8 +109,8 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
                 pass
             # Don't send any response — just close
             return
-        elif mode == "partial":
-            self._inject_partial_reset(path, attempt)
+        elif mode in ("partial", "partial_cl"):
+            self._inject_partial_reset(path, attempt, preserve_cl=(mode == "partial_cl"))
             return
         elif mode == "404":
             self.send_response(404)
@@ -125,11 +125,12 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
             sys.stderr.write("[proxy] 503 injected attempt=%d %s\n" % (attempt, path))
         sys.stderr.flush()
 
-    def _inject_partial_reset(self, path, attempt):
+    def _inject_partial_reset(self, path, attempt, preserve_cl=False):
         """Forward the GET to the backend, stream exactly partial_bytes bytes of
         the response body, then abruptly reset the TCP connection.
 
-        Omits Content-Length in the forwarded response so the client receives
+        If preserve_cl is True, forwards Content-Length to allow short-read detection.
+        Otherwise, omits Content-Length in the forwarded response so the client receives
         CURLE_RECV_ERROR (56) on the TCP RST rather than CURLE_PARTIAL_FILE (18).
         curl retries error 56 with --retry; it does not auto-retry error 18.
         """
@@ -142,11 +143,12 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
                     req.add_header(k, v)
             with urllib.request.urlopen(req, timeout=120) as resp:
                 self.send_response(resp.status)
-                # Forward content-type only; deliberately omit content-length so
-                # the client sees CURLE_RECV_ERROR (56) on RST, not CURLE_PARTIAL_FILE (18).
+                # Forward headers; optionally include Content-Length.
+                allowed_headers = ["content-type", "x-api-microtime", "x-api-key", "x-api-hash"]
+                if preserve_cl:
+                    allowed_headers.append("content-length")
                 for k, v in resp.headers.items():
-                    if k.lower() in ("content-type",
-                                     "x-api-microtime", "x-api-key", "x-api-hash"):
+                    if k.lower() in allowed_headers:
                         self.send_header(k, v)
                 self.end_headers()
                 to_send = self.partial_bytes
@@ -214,11 +216,44 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Stateful HTTP fault-injecting reverse proxy.")
+    parser = argparse.ArgumentParser(
+        description="Stateful HTTP fault-injecting reverse proxy.",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
     parser.add_argument("--port", "-p", type=int, default=9797, help="TCP port to listen on")
     parser.add_argument("--backend", "-b", default="http://127.0.0.1:80", help="Backend base URL")
     parser.add_argument("--fault-path", "-f", default="/tests/", help="URL prefix that triggers fault injection")
-    parser.add_argument("--fault-mode", "-m", default="503", help="Failure mode: 503 | 404 | reset | partial")
+    parser.add_argument(
+        "--fault-mode", "-m",
+        default="503",
+        help="""Failure mode to inject:
+- 503: Simulates a transient server overload / gateway error.
+       Returns HTTP 503 Service Unavailable with a short body.
+       Used by: CLO-84 (Perl retry), CLO-85 (Zig retry on 503), CLO-87 (Perl exhausts retries),
+                CLO-88 (retry 0 disables), and CLO-89 (default retry on BFS).
+       Verifies: Transient server errors successfully trigger exponential backoff retries.
+
+- 404: Simulates a permanently missing or deleted asset.
+       Returns HTTP 404 Not Found.
+       Used by: CLO-86 (terminal error), CLO-80/81/82/83 (ignore-missing-assets).
+       Verifies: Non-transient errors terminate downloads immediately with exit 1 without retrying,
+                 or trigger warnings/skips if ignore-missing-assets is configured.
+
+- reset: Simulates a transport-layer connection failure BEFORE response headers are sent.
+         Abruptly resets the connection using SO_LINGER(1,0) -> TCP RST with zero bytes sent.
+         Used to verify transport-layer error resilience during the request handshake.
+
+- partial: Simulates an abrupt mid-transfer TCP drop on a LENGTH-LESS body.
+           Forwards the GET to backend, returns HTTP 200 headers WITHOUT Content-Length,
+           streams partial-bytes of the body, then abruptly closes via SO_LINGER (RST).
+           Used by: CLO-98 (Perl length-less drop), CLO-99 (Zig length-less drop).
+           Verifies: Silent truncation behavior when a length-less body is unexpectedly terminated.
+
+- partial_cl: Simulates an abrupt mid-transfer TCP drop on a LENGTH-BEARING body.
+              Forwards the GET, returns HTTP 200 headers WITH Content-Length preserved,
+              streams partial-bytes of the body, then abruptly closes via SO_LINGER (RST).
+              Verifies: Robust short-read detection and retry mechanisms when bytes received < Content-Length."""
+    )
     parser.add_argument("--fail-times", "-t", type=int, default=2, help="How many initial requests to fault-inject")
     parser.add_argument("--partial-bytes", type=int, default=64, help="Bytes to stream before TCP RST (partial mode only)")
     parser.add_argument("--count-file", "-c", default="/tmp/faultproxy_counts.txt", help="Path to write per-path hit counts to")
