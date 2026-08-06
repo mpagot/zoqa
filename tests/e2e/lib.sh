@@ -241,10 +241,11 @@ _perf_timev_field() {
 # ---------------------------------------------------------------------------
 # run_capture TAG IMPL CMD
 #
-# Runs CMD inside the container without aborting on non-zero exit.  Captures
-# stdout to $LOG_DIR/${TAG}_${IMPL}_stdout.log and stderr to
-# $LOG_DIR/${TAG}_${IMPL}_stderr.log.  The command's exit code is left in the
-# global _LAST_EXIT for the caller to inspect.
+# Runs CMD inside the container without aborting on non-zero exit.
+# Captures stdout to $LOG_DIR/${TAG}_${IMPL}_stdout.log and stderr to
+# $LOG_DIR/${TAG}_${IMPL}_stderr.log.
+# The command's exit code is left in the global _LAST_EXIT for the caller to inspect.
+# Command composition accepts any CMD string — fully generic.
 #
 # TAG  — short identifier shared across one logical test (e.g. "mon_cancel")
 # IMPL — "perl" or "zig" (used in the log filenames; any string is accepted)
@@ -270,7 +271,7 @@ run_capture() {
 # run_perl_and_zig TAG ARGS [TIMEOUT_S]
 #
 # Runs the same command tail against both PERL_EXE and ZIG_EXE inside the
-# container.  Stores their exit codes in _PERL_EXIT and _ZIG_EXIT, and writes
+# container. Stores their exit codes in _PERL_EXIT and _ZIG_EXIT, and writes
 # the four log files:
 #     $LOG_DIR/${TAG}_perl_stdout.log  / _perl_stderr.log
 #     $LOG_DIR/${TAG}_zig_stdout.log   / _zig_stderr.log
@@ -493,8 +494,9 @@ run_test() {
 # run_comparison_api LABEL ENV_VARS API_ARGS [EXPECTED_EXIT [GREP_PATTERN]]
 #
 # Runs the same API call against both the Perl reference implementation and
-# the Zig implementation, checking each one independently.  A test PASSES
-# when both implementations satisfy the exit-code and grep-pattern criteria;
+# the Zig implementation, checking each one independently.
+# Command composition in this helper is hardcoding "api --host http://localhost" subcommand.
+# A test PASSES when both implementations satisfy the exit-code and grep-pattern criteria;
 # each can fail independently, producing a separate FAIL line.
 #
 # This is the right helper when you care about whether each implementation
@@ -503,12 +505,12 @@ run_test() {
 # you want to assert byte-for-byte output parity (modulo trailing newlines).
 #
 # Parameters:
-#   LABEL         — human-readable test name (prefixed with PERL:/ZIG: automatically)
-#   ENV_VARS      — space-separated env-var assignments prepended to the command
+#   LABEL         : human-readable test name (prefixed with PERL:/ZIG: automatically)
+#   ENV_VARS      : space-separated env-var assignments prepended to the command
 #                   (e.g. "OPENQA_CONFIG=/tmp"); pass "" for none
-#   API_ARGS      — arguments passed after `api --host http://localhost`
-#   EXPECTED_EXIT — expected exit code for both impls (default: 0)
-#   GREP_PATTERN  — optional grep pattern checked against combined stdout+stderr
+#   API_ARGS      : arguments passed after `api --host http://localhost`
+#   EXPECTED_EXIT : expected exit code for both impls (default: 0)
+#   GREP_PATTERN  : optional grep pattern checked against combined stdout+stderr
 #
 # Side effects: increments failed_tests once per implementation that fails.
 # ---------------------------------------------------------------------------
@@ -531,17 +533,19 @@ run_comparison_api() {
 # run_diff_test LABEL API_ARGS
 #
 # Runs the same API call against both implementations and asserts that their
-# stdout output is identical (after trailing-newline normalisation).  stderr is
-# discarded from both sides to avoid noise from ANSI colour codes, Mojo
+# stdout output is identical (after trailing-newline normalisation).
+# # Command composition in this helper is hardcoding "api --host http://localhost"
+# subcommand.
+# stderr is discarded from both sides to avoid noise from ANSI colour codes, Mojo
 # warnings, and the BoltDB deprecation warning emitted by podman on some hosts.
 #
 # Use this helper when you want to detect regressions in the Zig output format
-# relative to the Perl reference — i.e., "both must produce the same body".
+# relative to the Perl reference i.e., "both must produce the same body".
 # For exit-code or pattern checks use run_comparison_api instead.
 #
 # Parameters:
-#   LABEL    — human-readable test name printed in the --- Test: DIFF --- line
-#   API_ARGS — arguments passed after `api --host http://localhost`
+#   LABEL    : human-readable test name printed in the --- Test: DIFF --- line
+#   API_ARGS : arguments passed after `api --host http://localhost`
 #
 # Side effects: increments failed_tests on mismatch.
 # ---------------------------------------------------------------------------

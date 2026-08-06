@@ -14,7 +14,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 echo "==> [robustness] Running robustness tests..."
 
-# Test 29: Broken pipe does not crash the CLI.
+# Test ROB-1: Broken pipe does not crash the CLI.
 # Piping into `head -c 1` causes the reader to close the pipe after 1 byte.
 # The next write from zoqa gets EPIPE (or SIGPIPE).  The `catch {}` pattern
 # in printResponse must swallow this so the CLI exits cleanly (exit 0, not
@@ -42,7 +42,7 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# Test 30: Non-2xx error reporting — status line must appear on stderr without --quiet.
+# Test ROB-2: Non-2xx error reporting — status line must appear on stderr without --quiet.
 #
 # on a non-2xx response, the status line must be printed to stderr
 # (unless --quiet is set).
@@ -61,7 +61,7 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# Test 31: --quiet suppresses the non-2xx status line on stderr.
+# Test ROB-3: --quiet suppresses the non-2xx status line on stderr.
 echo "--- Test: PERL vs ZIG : non-2xx stderr with --quiet ---"
 run_perl_and_zig "404q" "api --host http://localhost --quiet non_existent_e2e_route"
 
