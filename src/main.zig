@@ -2,10 +2,6 @@ const std = @import("std");
 const zoqa = @import("zoqa");
 const config = zoqa.config;
 
-// ---------------------------------------------------------------------------
-// URL helpers
-// ---------------------------------------------------------------------------
-
 /// Check if the given API path is an absolute URL.
 ///
 /// According to the specification, a path is absolute if:
@@ -44,10 +40,6 @@ test "isAbsoluteUrl: relative paths" {
     try std.testing.expect(!isAbsoluteUrl("foo/bar:baz"));
     try std.testing.expect(!isAbsoluteUrl("foo?bar:baz"));
 }
-
-// ---------------------------------------------------------------------------
-// Argument parsing
-// ---------------------------------------------------------------------------
 
 pub const Subcommand = enum { api, archive, monitor, schedule };
 
@@ -592,7 +584,7 @@ test "parseArgs: equals-form flags" {
 
 test "parseArgs: unknown flag returns error" {
     const allocator = std.testing.allocator;
-    // Flag before subcommand → InvalidCommand (§1.8)
+    // Flag before subcommand → InvalidCommand
     const argv: []const []const u8 = &.{ "zoqa", "--nonexistent" };
     try std.testing.expectError(error.InvalidCommand, parseArgs(allocator, argv));
 }
@@ -618,7 +610,7 @@ test "parseArgs: invalid retries returns error" {
 
 test "parseArgs: flag before subcommand returns InvalidCommand" {
     const allocator = std.testing.allocator;
-    // --host before the subcommand token → InvalidCommand (§1.8)
+    // --host before the subcommand token → InvalidCommand
     const argv: []const []const u8 = &.{ "zoqa", "--host", "http://example.com", "api", "jobs" };
     try std.testing.expectError(error.InvalidCommand, parseArgs(allocator, argv));
 }
@@ -841,10 +833,6 @@ test "parseArgs: --links accepted for archive no effects" {
 
     try std.testing.expect(parsed.links);
 }
-
-// ---------------------------------------------------------------------------
-// --form: JSON object → application/x-www-form-urlencoded
-// ---------------------------------------------------------------------------
 
 /// Converts a JSON-formatted string into an application/x-www-form-urlencoded string.
 ///
@@ -1229,8 +1217,7 @@ pub fn buildRequest(
         break :blk .GET;
     };
 
-    // --- Host + path resolution ---
-    // Two cases:
+    // Host + path resolution, two cases:
     //   1. Relative path (e.g. "jobs") → resolve host from flags, path = api_path.
     //   2. Absolute URL (e.g. "https://host/api/v1/jobs") → split into host + path.
 
@@ -1239,17 +1226,17 @@ pub fn buildRequest(
     // WHY NOT a safe default like `= ""`?
     //   Using `undefined` makes any missed-assignment bug crash immediately in
     //   Debug builds (Zig fills undefined memory with 0xAA, so dereferencing it
-    //   segfaults).  A dummy default like "" would silently produce wrong URLs.
+    //   segfaults). A dummy default like "" would silently produce wrong URLs.
     //
     // WHY NOT `?[]const u8 = null` (optional)?
-    //   Both values are unconditionally needed after this block.  Wrapping them
+    //   Both values are unconditionally needed after this block. Wrapping them
     //   in optionals would force pointless `.?` unwraps at every use site for a
     //   null state that can never actually occur.
     //
     // PROOF OF SOUNDNESS:
     //   Assigned in the `if (isAbsoluteUrl(api_path)) { ... } else { ... }` block
-    //   immediately below (~50 lines).  That if/else is exhaustive: exactly one
-    //   branch always executes.  Within each branch, every path that doesn't
+    //   immediately below (~50 lines). That if/else is exhaustive: exactly one
+    //   branch always executes. Within each branch, every path that doesn't
     //   propagate an error assigns BOTH variables before the branch ends.
     //
     // MAINTAINER NOTE: if you add an early `return` or new branch inside the
@@ -2225,7 +2212,7 @@ test "mergeCredentials: partial secret only returns null (no key anywhere)" {
 /// process that closes early (e.g. `zoqa ... | head`), the OS delivers SIGPIPE
 /// or returns EPIPE on the next write. Propagating that error would cause the
 /// CLI to exit with a confusing diagnostic; swallowing it produces the same
-/// silent exit behaviour as coreutils.
+/// silent exit behavior as coreutils.
 ///
 /// Parameters:
 ///   - `allocator`: Scratch allocator for JSON pretty-print parsing. Only used
@@ -2373,7 +2360,12 @@ pub fn main() !void {
     // parseArgs guarantees subcmd is non-null when help is false.
     const subcmd = args.subcmd.?;
 
-    // Read --data-file content before buildRequest (filesystem I/O)
+    // Read --data-file (or stdin) eagerly here so buildRequest stays a pure,
+    // in-memory transformation: no filesystem access, no stdin consumption,
+    // trivially unit-testable with plain slices. Also keeps environment errors
+    // (missing file, read failure) separate from argument-validation errors
+    // that buildRequest maps to help output, and ensures stdin is consumed
+    // exactly once regardless of the subcommand path taken.
     var data_file_buf: ?[]u8 = null;
     defer if (data_file_buf) |b| gpa.free(b);
 
@@ -2385,6 +2377,9 @@ pub fn main() !void {
             try std.fs.cwd().readFileAlloc(gpa, df, 10 * 1024 * 1024);
     }
 
+    // Read-only borrow of the buffer for downstream code. data_file_buf stays the
+    // sole owner (it's what the defer above frees). Not required for typing: ?[]u8
+    // coerces implicitly to ?[]const u8; this just makes owner-vs-borrow explicit.
     const data_file_content: ?[]const u8 = if (data_file_buf) |b| b else null;
 
     var req_cfg: ?RequestConfig = null;
