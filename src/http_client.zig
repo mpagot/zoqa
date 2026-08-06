@@ -16,27 +16,17 @@ const ResponseHeader = struct {
 ///
 /// All string fields are heap-allocated using the allocator stored in the
 /// struct. The caller **must** call `deinit()` exactly once to release them.
-///
-/// Fields:
-/// - `status`           HTTP status code of the final (non-retried) response.
-/// - `body`             Decompressed response body. Always non-null; may be
-///                      empty (`""`). Owned by this struct.
-/// - `response_headers` All response headers, in transmission order. Owned
-///                      by this struct. Used for verbose output.
-/// - `content_type`     Value of the first `Content-Type` response header, or
-///                      `null` if absent. Owned by this struct.
-/// - `link`             Value of the first `Link` response header, or `null`
-///                      if absent. Used for pagination. Owned by this struct.
 pub const APIResponse = struct {
     allocator: std.mem.Allocator,
+    /// HTTP status code of the final (non-retried) response.
     status: std.http.Status,
-    /// Decompressed response body. Always allocated; never null.
+    /// Decompressed response body. Always allocated; never null; may be empty (`""`). Owned by this struct.
     body: []u8,
-    /// All response headers, in transmission order. Allocated slice of owned entries.
+    /// All response headers, in transmission order. Allocated slice of owned entries. Owned by this struct. Used for verbose output.
     response_headers: []ResponseHeader,
-    /// Value of the Content-Type header, if present. Allocated.
+    /// Value of the Content-Type header, if present, `null` otherwise. Allocated.
     content_type: ?[]u8,
-    /// Value of the Link header, if present. Allocated.
+    /// Value of the Link header, if present. Allocated. Used for pagination.
     link: ?[]u8,
 
     /// Release all memory owned by this response.
@@ -358,7 +348,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         while (hit.next()) |hdr| {
             // Collect all headers for verbose output (§1.3).
             // Hop-by-hop headers (RFC 7230 §6.1) are excluded to match the
-            // behaviour of Mojolicious's Mojo::Headers, which strips them
+            // behaviors of Mojolicious's Mojo::Headers, which strips them
             // before exposing the header set to application code.
             const hop_by_hop = [_][]const u8{
                 "Connection",          "Keep-Alive", "Proxy-Authenticate",
@@ -754,14 +744,14 @@ pub fn openQARawGet(
 ///   3. HMAC-SHA1 signature generation (via resolved credentials).
 ///   4. HTTP execution and response decompression (via the injected `client`).
 ///
-/// Params routing:
-///   - GET / DELETE:  `opts.params` is appended to the URL as a query string.
+/// Parameters routing:
+///   - GET / DELETE: `opts.params` is appended to the URL as a query string.
 ///   - POST / PUT / PATCH: `opts.params` is used as the request body, unless
 ///     `opts.body` is already set (explicit body takes precedence).
 ///
 /// Parameters:
 ///   - host: bare hostname or full base URL of the openQA instance.
-///   - path: API path relative to `/api/v1/` (a leading "/" is tolerated).
+///   - path: API path relative to `/api/v1/` (leading "/" is tolerated).
 ///   - opts: method, params, body, credentials and retry policy (see
 ///     `CallOptions`).
 ///   - client: an HTTP client compatible with `std.http.Client.request`.
@@ -822,7 +812,7 @@ pub fn openQAReq(
 ///
 /// Captures the URL (reconstructed from the `std.Uri` that `execute` passes
 /// to `client.request`) and the request body (via `sendBodyComplete`), so
-/// test assertions can verify URL construction, params routing, and body
+/// test assertions can verify URL construction, parameters routing, and body
 /// selection without making real HTTP calls.
 const TestMockClient = struct {
     const Self = @This();
@@ -1130,7 +1120,7 @@ test "execute: hop-by-hop headers are excluded from response_headers" {
             content_length: ?u64 = null,
 
             // Emits: Content-Type, Connection, Keep-Alive, Transfer-Encoding,
-            // Server, Upgrade.  The hop-by-hop ones (Connection, Keep-Alive,
+            // Server, Upgrade. The hop-by-hop ones (Connection, Keep-Alive,
             // Transfer-Encoding, Upgrade) must be stripped; Content-Type and
             // Server must survive.
             const HeaderIterator = struct {

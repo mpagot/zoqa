@@ -17,7 +17,7 @@ pub const ScheduleOptions = struct {
     /// Follow newest clone of each job (modifier for monitoring).
     follow: bool = false,
     /// Polling interval in seconds when monitoring is active.
-    /// Default is 1s for schedule (vs 10s for standalone monitor per §14.2).
+    /// Default is 1s for schedule (vs 10s for standalone monitor).
     poll_interval: u64 = 1,
     /// User-Agent header value.
     name: []const u8 = "openQAclient",
@@ -27,13 +27,13 @@ pub const ScheduleOptions = struct {
     output_writer: ?*std.Io.Writer = null,
 };
 
-// runSchedule — library entry point for the schedule subcommand
+// Library entry point for the schedule subcommand
 
 /// Execute the full `schedule` flow:
 ///   1. POST `/api/v1/isos` with form-encoded params.
 ///   2. Handle synchronous response (extract `ids`) or async response
 ///      (`scheduled_product_id` without `ids`).
-///   3. Print job URLs to stdout
+///   3. Print job URLs to standard output
 ///   4. If `--monitor` is active and job IDs are available (sync or after
 ///      async polling), enter the monitoring loop.
 ///
@@ -46,9 +46,9 @@ pub const ScheduleOptions = struct {
 ///     (see `ScheduleOptions`).
 ///
 /// Returns: The exit code per:
-///   - `0` — jobs scheduled successfully (without monitoring), or all passed/softfailed.
-///   - `1` — scheduling error, network error, server error.
-///   - `2` — any monitored job failed/cancelled.
+///   - `0` : jobs scheduled successfully (without monitoring), or all passed/softfailed.
+///   - `1` : scheduling error, network error, server error.
+///   - `2` : any monitored job failed/cancelled.
 ///
 /// Errors:
 ///   - Any allocator or I/O error from nested monitor execution or extraction routines.
@@ -199,8 +199,8 @@ pub fn runSchedule(
     } else if (ids_present) {
         // Sync response with empty ids array — zero products matched.
         // Matches Perl's _create_jobs which returns 0 when there is neither
-        // a top-level `error` nor a non-empty `failed` array (see §15.4
-        // step 6). Print the empty-set note for visibility but do NOT
+        // a top-level `error` nor a non-empty `failed` array.
+        // Print the empty-set note for visibility but do NOT
         // override the exit code.
         if (!options.quiet) std.debug.print("schedule: no jobs scheduled\n", .{});
         return 0;
@@ -213,7 +213,7 @@ pub fn runSchedule(
         stdout.flush() catch {};
         return 0;
     } else {
-        // No ids and no scheduled_product_id — error
+        // No ids and no scheduled_product_id error
         if (!options.quiet) std.debug.print("schedule: no jobs scheduled and no scheduled_product_id in response\n", .{});
         return 1;
     }
@@ -344,7 +344,7 @@ fn asyncPollAndMonitor(
             const job_ids = extractJobIds(allocator, options, host, stdout, job_ids_val) catch return 1;
             defer allocator.free(job_ids);
 
-            // Enter monitoring loop (§15.7)
+            // Enter monitoring loop
             return monitor.runMonitor(allocator, client, host, job_ids, .{
                 .credentials = options.credentials,
                 .quiet = options.quiet,
@@ -362,10 +362,6 @@ fn asyncPollAndMonitor(
         return 1;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// Inspect the `failed` key of a JSON response object and print any error messages.
 ///

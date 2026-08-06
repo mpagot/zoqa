@@ -169,7 +169,7 @@ test "exitCodeForStatuses - cancelled state returns 2 regardless of result" {
 }
 
 /// Configuration for the monitoring loop. Mirrors the CLI flags of the
-/// `monitor` subcommand (§14) and is reused by `schedule --monitor` (§15.7).
+/// `monitor` subcommand is reused by `schedule --monitor`.
 pub const MonitorOptions = struct {
     credentials: ?config.Credentials = null,
     quiet: bool = false,
