@@ -30,3 +30,7 @@ client.conf.e2e
 .idea/
 *.swp
 *.swo
+
+# Python cache
+__pycache__/
+tools/__pycache__/

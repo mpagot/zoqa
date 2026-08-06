@@ -1,4 +1,4 @@
-# Contributing to zoqa
+# Contributing to Zoqa
 
 ## Development Workflow
 
@@ -95,6 +95,7 @@ make e2e-keep                              # keep container alive after tests
 make e2e-dryrun                            # simulate run without container
 make e2e SUITES=core,auth                  # run specific suites only
 make e2e SUITES=                           # deploy container only, run no tests
+make e2e E2E_STORAGE_KEEP_FREE_RATIO=0     # disable isotovideo storage check (low-disk hosts)
 ```
 
 See [tests/e2e/README.md](tests/e2e/README.md) for prerequisites, script reference,
@@ -102,9 +103,14 @@ flags, debugging tips, and the full test coverage table.
 
 ##### E2E Test Catalog
 
+`tools/check_test_catalog.sh` enforces:
+1. Each `tests/e2e/tests_<suite>.sh` uses a 3-letter prefix from its filename (e.g. `tests_archive.sh` → `ARC`).
+2. Every test execution line is preceded within 40 lines by a `# <PREFIX>-N:` comment.
+3. Every prefix comment has a bidirectional match in `tests/e2e/TEST_CATALOG.md`.
+
 ```sh
 make e2e-catalog-lint                               # check all E2E test files
-bash tools/check_test_catalog.sh tests_archive.sh  # check a single file
+bash tools/check_test_catalog.sh tests_archive.sh   # check a single file
 ```
 
 `tools/check_test_catalog.sh` enforces:
@@ -133,11 +139,8 @@ make zig-doc-lint WITH_PRIVATE=1   # also include private functions
 - `Returns:` section when the return type is not `void`/`noreturn`
 - `Errors:` section when the return type is an error union (`!T`)
 
-Not gated in CI, run locally when adding or changing public functions.
 
----
-
-## GitHub Checks at Every PR
+## CI Compliance — GitHub Checks at Every PR
 
 `.github/workflows/ci.yml` defines four required jobs:
 
@@ -152,15 +155,12 @@ The `ci` aggregation job is the required status check for branch protection.
 
 **Not gated in CI (local only):** `make e2e` (full suite requires Podman), `make e2e-catalog-lint`, `make zig-doc-lint`.
 
----
 
 ## Creating a Release
 
 Releases are fully automated via the [Release workflow](.github/workflows/release.yml).
 Pushing a `v*` tag triggers it: the workflow builds cross-compiled binaries for all
 six targets, packages them, and publishes a GitHub Release with SHA-256 checksums.
-
-### Step-by-step
 
 **1. Ensure `main` is in the desired state**
 
@@ -173,7 +173,7 @@ git pull
 
 **2. Create and push the tag**
 
-Use [Semantic Versioning](https://semver.org/).  Pre-release versions use a hyphen
+Use [Semantic Versioning](https://semver.org/). Pre-release versions use a hyphen
 suffix (e.g. `-rc1`, `-beta.1`); these are automatically marked as pre-releases on
 GitHub.
 
@@ -191,7 +191,7 @@ git push origin v1.2.3-rc1
 > **Important:** use `git push origin <tag>` rather than `git push --tags`.
 > Pushing `--tags` sends *all* local tags that the remote doesn't have yet.
 > If you have older un-pushed tags, that would trigger a separate release
-> workflow run for each one.  The workflow has a guard that skips tags whose
+> workflow run for each one. The workflow has a guard that skips tags whose
 > releases already exist, but it still wastes runner time.
 
 **3. Monitor the workflow**
@@ -209,7 +209,7 @@ gh release view v1.2.3-rc1 --repo mpagot/zoqa
 
 Confirm all six platform archives and `SHA256SUMS` are attached.
 
-### Re-running a failed release
+### Re-Running a Failed Release
 
 If a build step fails after the release was already created (partial artifacts),
 delete the release and tag, then re-tag:
@@ -223,7 +223,7 @@ git tag v1.2.3-rc1
 git push origin v1.2.3-rc1
 ```
 
-### Tagging conventions
+### Tagging Conventions
 
 | Pattern | Meaning | Marked as pre-release |
 |---|---|---|
