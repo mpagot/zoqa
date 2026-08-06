@@ -221,6 +221,7 @@ _ensure_job() {
 
 	# No-op if already set.
 	if [[ -n "${!var_name:-}" ]]; then
+		echo "_ensure_job var_name:${var_name} already defined ${!var_name}"
 		return 0
 	fi
 

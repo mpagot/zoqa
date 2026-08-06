@@ -58,7 +58,7 @@ _e2e_suite_enabled() {
 	[[ "$E2E_SUITES" == "all" ]] && return 0
 	# Empty string → skip all tests
 	[[ -z "$E2E_SUITES" ]] && return 1
-	# Check if name appears as a comma-separated token
+	# Check if name appears as a comma-separated token.
 	local suite
 	IFS=',' read -ra _suites <<<"$E2E_SUITES"
 	for suite in "${_suites[@]}"; do
