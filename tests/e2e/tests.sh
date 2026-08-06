@@ -79,7 +79,7 @@ _e2e_suite_enabled() {
 # files are checked independently when `make e2e-lint` is run.
 # shellcheck disable=SC1090
 _e2e_all_suites=(core auth data output robustness retry_knobs archive monitor schedule help \
-	clone_smoke clone_single clone_topology clone_maxdepth \
+	clone_smoke clone_single clone_topology clone_maxdepth clone_uefi \
 	stress perf)
 for _suite in "${_e2e_all_suites[@]}"; do
 	if _e2e_suite_enabled "$_suite"; then

@@ -30,6 +30,8 @@ pub const JobEntry = struct {
     settings: std.ArrayList(SettingPair),
     /// The job's display name (from the API response). Arena-owned.
     name: []const u8,
+    /// Whether this job has parent dependencies on the source instance.
+    has_parents: bool = false,
 };
 
 /// Options controlling the clone graph walk.
@@ -922,6 +924,64 @@ pub fn isAssetGeneratedByClonedJobs(
     return false;
 }
 
+/// Check whether an asset filename matches the `UEFI_PFLASH_VARS` setting of
+/// any collected job. Internal helper for `shouldSkipUefiVarsAsset`.
+fn isUefiVarsAsset(filename: []const u8, collected: []const JobEntry) bool {
+    for (collected) |entry| {
+        for (entry.settings.items) |pair| {
+            if (std.mem.eql(u8, pair.key, "UEFI_PFLASH_VARS") and
+                std.mem.eql(u8, pair.value, filename)) return true;
+        }
+    }
+    return false;
+}
+
+/// Whether some collected job that references `filename` via `UEFI_PFLASH_VARS`
+/// still declares parents on the source instance. Internal helper for the
+/// self-heal branch of `shouldSkipUefiVarsAsset`.
+fn uefiVarsHasParentPublisher(filename: []const u8, collected: []const JobEntry) bool {
+    for (collected) |entry| {
+        if (!entry.has_parents) continue;
+        for (entry.settings.items) |pair| {
+            if (std.mem.eql(u8, pair.key, "UEFI_PFLASH_VARS") and
+                std.mem.eql(u8, pair.value, filename)) return true;
+        }
+    }
+    return false;
+}
+
+/// Decide whether a `UEFI_PFLASH_VARS` asset should be skipped from download.
+///
+/// This is the single source of truth for the UEFI vars download policy,
+/// consumed by both the download path and the missing-asset pre-check in the
+/// executable. It combines the §18.18 item 3 filter with the §18.18.4
+/// self-heal divergence:
+///
+/// - A vars asset is normally skipped: its publishing parent (cloned alongside
+///   the child) regenerates it on the target instance.
+/// - **Self-heal exception (§18.18.4):** when parent enqueuing was skipped
+///   (`--skip-deps`/`--skip-chained-deps`, i.e. `skipped_parents == true`) yet
+///   the requesting job still declares parents on the source, no cloned job
+///   will regenerate the asset. It must be downloaded directly to keep the
+///   cloned child runnable, so it is *not* skipped.
+///
+/// Parameters:
+/// - `filename`: The asset filename (basename) to classify.
+/// - `collected`: Slice of all collected job entries (the final job list).
+/// - `skipped_parents`: `true` when `--skip-deps` or `--skip-chained-deps` is active.
+///
+/// Returns: `true` to skip the asset, `false` to download it. Always `false`
+///   for filenames that are not referenced via any job's `UEFI_PFLASH_VARS`.
+pub fn shouldSkipUefiVarsAsset(
+    filename: []const u8,
+    collected: []const JobEntry,
+    skipped_parents: bool,
+) bool {
+    if (!isUefiVarsAsset(filename, collected)) return false;
+    const self_heal = skipped_parents and uefiVarsHasParentPublisher(filename, collected);
+    return !self_heal;
+}
+
 // ---------------------------------------------------------------------------
 // Job settings extraction from JSON
 // ---------------------------------------------------------------------------
@@ -1792,6 +1852,60 @@ test "isAssetGeneratedByClonedJobs: matches PUBLISH_PFLASH_VARS" {
 
     try std.testing.expect(isAssetGeneratedByClonedJobs("uefi-vars.qcow2", &entries));
     try std.testing.expect(!isAssetGeneratedByClonedJobs("other.qcow2", &entries));
+}
+
+test "isUefiVarsAsset: matches UEFI_PFLASH_VARS" {
+    const allocator = std.testing.allocator;
+    var settings: std.ArrayList(SettingPair) = .empty;
+    defer settings.deinit(allocator);
+    try settings.append(allocator, .{ .key = "UEFI_PFLASH_VARS", .value = "my-uefi-vars.qcow2" });
+
+    const entries = [_]JobEntry{.{
+        .job_id = 10,
+        .settings = settings,
+        .name = "parent",
+    }};
+
+    try std.testing.expect(isUefiVarsAsset("my-uefi-vars.qcow2", &entries));
+    try std.testing.expect(!isUefiVarsAsset("other.qcow2", &entries));
+}
+
+test "shouldSkipUefiVarsAsset: skip unless self-healing skipped parents" {
+    const allocator = std.testing.allocator;
+
+    // A job with no parents that references a UEFI vars asset.
+    var s_no_parent: std.ArrayList(SettingPair) = .empty;
+    defer s_no_parent.deinit(allocator);
+    try s_no_parent.append(allocator, .{ .key = "UEFI_PFLASH_VARS", .value = "vars.qcow2" });
+    const no_parent = [_]JobEntry{.{
+        .job_id = 10,
+        .settings = s_no_parent,
+        .name = "solo",
+        .has_parents = false,
+    }};
+
+    // A job that references the vars asset AND declares parents on the source.
+    var s_child: std.ArrayList(SettingPair) = .empty;
+    defer s_child.deinit(allocator);
+    try s_child.append(allocator, .{ .key = "UEFI_PFLASH_VARS", .value = "vars.qcow2" });
+    const child = [_]JobEntry{.{
+        .job_id = 20,
+        .settings = s_child,
+        .name = "child",
+        .has_parents = true,
+    }};
+
+    // Not a vars asset at all → never our concern (download it).
+    try std.testing.expect(!shouldSkipUefiVarsAsset("other.qcow2", &child, true));
+
+    // Vars asset, parents NOT skipped → skip (parent regenerates it).
+    try std.testing.expect(shouldSkipUefiVarsAsset("vars.qcow2", &child, false));
+
+    // Vars asset, parents skipped but requesting job has no parents → skip.
+    try std.testing.expect(shouldSkipUefiVarsAsset("vars.qcow2", &no_parent, true));
+
+    // Vars asset, parents skipped AND requesting job has parents → self-heal (download).
+    try std.testing.expect(!shouldSkipUefiVarsAsset("vars.qcow2", &child, true));
 }
 
 test "injectReproduceSettings: injects all four mappings" {

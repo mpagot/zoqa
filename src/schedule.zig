@@ -597,7 +597,7 @@ test "extractJobIds: negative integer is rejected" {
 }
 
 // ---------------------------------------------------------------------------
-// asyncPollAndMonitor — cancelled-mid-poll unit test (B1, see SPEC §15.6)
+// asyncPollAndMonitor — cancelled-mid-poll unit test
 // ---------------------------------------------------------------------------
 //
 // Why a unit test: provoking a `cancelled` status mid-poll against the live

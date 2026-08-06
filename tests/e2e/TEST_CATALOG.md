@@ -22,6 +22,7 @@ of the harness and how to run it, see [README.md](README.md).
 | `tests_clone_single.sh` | K | Clone-job: single-job flags (--reproduce, --repeat, assets, …) | CLO-12–CLO-83, CLO-RK-1, CLO-84–CLO-89 |
 | `tests_clone_topology.sh` | K | Clone-job: graph topologies (chained, fan-out, diamond, parallel) | CLO-20–M42 |
 | `tests_clone_maxdepth.sh` | K | Clone-job: --max-depth traversal limits | CLO-90–CLO-97 |
+| `tests_clone_uefi.sh` | K | Clone-job: UEFI vars asset filtering | CLO-110–CLO-112 |
 | `tests_stress.sh` | L | Large response stress and gzip negotiation tests | STRESS-1–STRESS-3 |
 
 
@@ -238,7 +239,7 @@ of the harness and how to run it, see [README.md](README.md).
 | SCH-RK-2 | `OPENQA_CLI_RETRIES=abc` | Invalid retry env var falls back gracefully. |
 | SCH-RK-3 | `--retries 0` CLI flag | Perl rejects (exit 255); Zig accepts (exit 1). |
 
-### Clone-Job Subcommand (`tests_clone_smoke.sh`, `tests_clone_single.sh`, `tests_clone_topology.sh`, `tests_clone_maxdepth.sh`)
+### Clone-Job Subcommand (`tests_clone_smoke.sh`, `tests_clone_single.sh`, `tests_clone_topology.sh`, `tests_clone_maxdepth.sh`, `tests_clone_uefi.sh`)
 | # | Test | Verification |
 |---|---|---|
 | CLO-1 | `--help` exits 0 | Both `openqa-clone-job --help` and `zoqa-clone-job --help` exit 0. |
@@ -306,6 +307,9 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-98b | Perl mid-transfer drop WITH Content-Length | Proxy sends 200 + 64 bytes then RST (partial_cl mode) with Content-Length; curl sees CURLE_PARTIAL_FILE (18) and fails; Perl exits non-zero (cannot retry length-bearing drop). |
 | CLO-99 | Zig mid-transfer TCP drop | Same partial fault scenario as CLO-98; Zig currently exits non-zero; exactly 1 proxy hit; no partial file must remain. |
 | CLO-99b | Zig mid-transfer drop WITH Content-Length | Same partial_cl scenario as CLO-98b; Zig currently exits 0 with truncated files. |
+| CLO-110 | Skip unpublished UEFI vars asset | No cloned job publishes the UEFI variables; asset download is skipped. |
+| CLO-111 | Skip generated UEFI vars asset | Cloned parent job publishes the UEFI variables; asset download is skipped since parent will regenerate. |
+| CLO-112 | Download UEFI variables when parent is skipped | Child depends on parent that publishes UEFI variables, but parent is skipped via --skip-deps; asset download is required. |
 
 ### Stress Tests (`tests_stress.sh`)
 | # | Test | Verification |

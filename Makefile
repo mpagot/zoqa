@@ -152,6 +152,7 @@ E2E_SCRIPTS := \
 	tests/e2e/tests_clone_single.sh \
 	tests/e2e/tests_clone_topology.sh \
 	tests/e2e/tests_clone_maxdepth.sh \
+	tests/e2e/tests_clone_uefi.sh \
 	tests/e2e/tests_help.sh \
 	tests/e2e/tests_perf.sh \
 	tests/e2e/tests_stress.sh
