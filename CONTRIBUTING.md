@@ -171,7 +171,11 @@ git checkout main
 git pull
 ```
 
-**2. Create and push the tag**
+**2. Bump the version in `build.zig.zon`**
+
+Update the `.version` field to match the new release version, commit, and push to `main`. The release workflow pre-flight check enforces that this version matches the pushed tag — the build is aborted if they differ.
+
+**3. Create and push the tag**
 
 Use [Semantic Versioning](https://semver.org/). Pre-release versions use a hyphen
 suffix (e.g. `-rc1`, `-beta.1`); these are automatically marked as pre-releases on
@@ -194,14 +198,14 @@ git push origin v1.2.3-rc1
 > workflow run for each one. The workflow has a guard that skips tags whose
 > releases already exist, but it still wastes runner time.
 
-**3. Monitor the workflow**
+**4. Monitor the workflow**
 
 ```sh
 gh run list --repo mpagot/zoqa --workflow release.yml --limit 5
 gh run watch <run-id>
 ```
 
-**4. Verify the release**
+**5. Verify the release**
 
 ```sh
 gh release view v1.2.3-rc1 --repo mpagot/zoqa
