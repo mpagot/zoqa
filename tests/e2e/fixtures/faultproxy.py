@@ -81,10 +81,22 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
     def _handle(self, method):
         path = self.path
 
+        if self.fault_mode.lower() == "partial_no_meta" and path.startswith("/api/v1/assets"):
+            self._handle_assets_no_meta(method)
+            return
+
+        if self.fault_mode.lower() == "partial_no_meta_502" and path.startswith("/api/v1/assets"):
+            self.send_response(502)
+            self.end_headers()
+            self.wfile.write(b"502 Bad Gateway - faultproxy injection\n")
+            sys.stderr.write("[proxy] 502 injected for assets metadata\n")
+            sys.stderr.flush()
+            return
+
         # partial mode only faults GET (body-streaming) requests.
         # HEAD requests always pass through so they do not consume the fault
         # budget — we want the asset GETs to be the ones that get the RST.
-        skip_fault = method == "HEAD" and self.fault_mode.lower() == "partial"
+        skip_fault = method == "HEAD" and self.fault_mode.lower() in ("partial", "partial_no_meta", "partial_no_meta_502")
         if not skip_fault and path.startswith(self.fault_path):
             attempt = self._record(path, "?")
             if attempt <= self.fail_times:
@@ -93,6 +105,48 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # Forward to backend
         self._forward(method, path)
+
+    def _handle_assets_no_meta(self, method):
+        url = self.backend + self.path
+        try:
+            req = urllib.request.Request(url, method=method)
+            for k, v in self.headers.items():
+                if k.lower() not in ("host", "accept-encoding"):
+                    req.add_header(k, v)
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                body = resp.read()
+                if resp.status == 200 and "application/json" in resp.headers.get("content-type", ""):
+                    try:
+                        import json
+                        data = json.loads(body.decode("utf-8"))
+                        if isinstance(data, dict) and "assets" in data:
+                            for asset in data["assets"]:
+                                if isinstance(asset, dict) and "size" in asset:
+                                    del asset["size"]
+                        body = json.dumps(data).encode("utf-8")
+                    except Exception as e:
+                        sys.stderr.write("[proxy] json parse/manipulation error: %s\n" % e)
+                        sys.stderr.flush()
+
+                self.send_response(resp.status)
+                for k, v in resp.headers.items():
+                    if k.lower() in ("content-type", "x-api-microtime", "x-api-key", "x-api-hash"):
+                        self.send_header(k, v)
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                sys.stderr.write("[proxy] 200 forwarded assets metadata (stripped size, %dB)\n" % len(body))
+                sys.stderr.flush()
+        except urllib.error.HTTPError as exc:
+            self.send_response(exc.code)
+            self.end_headers()
+            sys.stderr.write("[proxy] %d forward-assets-error\n" % exc.code)
+            sys.stderr.flush()
+        except Exception as exc:
+            self.send_response(502)
+            self.end_headers()
+            sys.stderr.write("[proxy] 502 forward-assets-exception: %s\n" % exc)
+            sys.stderr.flush()
 
     def _inject_fault(self, path, attempt):
         mode = self.fault_mode.lower()
@@ -109,7 +163,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
                 pass
             # Don't send any response — just close
             return
-        elif mode in ("partial", "partial_cl"):
+        elif mode in ("partial", "partial_cl", "partial_no_meta"):
             self._inject_partial_reset(path, attempt, preserve_cl=(mode == "partial_cl"))
             return
         elif mode == "404":
@@ -248,6 +302,13 @@ if __name__ == "__main__":
            streams partial-bytes of the body, then abruptly closes via SO_LINGER (RST).
            Used by: CLO-98 (Perl length-less drop), CLO-99 (Zig length-less drop).
            Verifies: Silent truncation behavior when a length-less body is unexpectedly terminated.
+
+- partial_no_meta: Simulates an abrupt mid-transfer TCP drop on a LENGTH-LESS body with size metadata stripped.
+                  Like partial mode, but also intercepts /api/v1/assets GET requests and strips "size" from JSON.
+                  Used by: CLO-102 (Strict Mode), CLO-103 (Permissive Mode).
+
+- partial_no_meta_502: Simulates an abrupt mid-transfer TCP drop on a LENGTH-LESS body, but returns HTTP 502 for the metadata endpoint.
+                       Used by: CLO-104 (API Unreachable).
 
 - partial_cl: Simulates an abrupt mid-transfer TCP drop on a LENGTH-BEARING body.
               Forwards the GET, returns HTTP 200 headers WITH Content-Length preserved,

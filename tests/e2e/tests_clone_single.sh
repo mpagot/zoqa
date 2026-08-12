@@ -1546,25 +1546,24 @@ _ZIG_EXIT=$_LAST_EXIT
 stop_faultproxy
 
 if [[ "$_ZIG_EXIT" -eq 0 ]]; then
-        echo "PASS: CLO-99 Zig exited 0 (expected under current Gap 8 bug)"
+        echo "PASS: CLO-99 Zig exited 0 (successfully retried and completed via out-of-band size)"
 else
-        echo "FAIL: CLO-99 Zig exited $_ZIG_EXIT (unexpected non-zero exit for length-less drop)"
+        echo "FAIL: CLO-99 Zig exited $_ZIG_EXIT (expected 0)"
         failed_tests=$((failed_tests + 1))
 fi
 
-# Due to Gap 8, Zig did NOT retry and made exactly 1 attempt per asset (2 total hits).
+# Due to out-of-band size checking, Zig retries the transient drops (3 attempts per asset = 6 total hits).
 _CLO99_HITS=$(get_faultproxy_hits "/tests/${PARTIAL_JOB_ID}/asset/")
-if [[ "$_CLO99_HITS" -eq 2 ]]; then
-        echo "PASS: CLO-99 Zig made exactly $_CLO99_HITS proxy hits (no retry due to Gap 8 — expected)"
+if [[ "$_CLO99_HITS" -ge 6 ]]; then
+        echo "PASS: CLO-99 Zig made $_CLO99_HITS proxy hits (retried both assets correctly using out-of-band size)"
 else
-        echo "FAIL: CLO-99 Zig made $_CLO99_HITS proxy hit(s) (expected 2 hits)"
+        echo "FAIL: CLO-99 Zig made $_CLO99_HITS proxy hit(s) (expected >= 6)"
         dump_faultproxy_logs
         failed_tests=$((failed_tests + 1))
 fi
 
-# The key failure for Gap 8 is that the downloaded file is truncated (64 bytes)
-# instead of complete. We assert that there are partial files as a failing condition.
-assert_no_partial_files "$ASSET_DIR_CLO_99" "CLO-99 Zig"
+# Verify the asset was written successfully and is complete (correct MD5)
+assert_downloaded_assets_md5 "$ASSET_DIR_CLO_99" "CLO-99 Zig"
 container_exec rm -rf "$ASSET_DIR_CLO_99"
 
 # -----------------------------------------------------------------------------
@@ -1614,5 +1613,104 @@ fi
 # Verify the asset was written successfully and is complete (correct MD5)
 assert_downloaded_assets_md5 "$ASSET_DIR_CLO_99B" "CLO-99b Zig"
 container_exec rm -rf "$ASSET_DIR_CLO_99B"
+
+# -----------------------------------------------------------------------------
+# CLO-102: Missing Size, Strict Mode (Default)
+#
+# Server omits Content-Length, out-of-band assets metadata lacks "size",
+# and ZOQA_ALLOW_LENGTHLESS is unset. Zig should fail securely with
+# LengthRequired and exit 1, leaving no partial files.
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-102: Zig missing size strict mode (Default) ---"
+tag="clo-102"
+ASSET_DIR_CLO_102="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_102"
+start_faultproxy 2 partial_no_meta /tests/ 64
+
+run_capture "${tag}" zig \
+        "env ZOQA_ALLOW_LENGTHLESS= $ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+         --host http://localhost --skip-deps \
+         ${PARTIAL_JOB_ID} --dir ${ASSET_DIR_CLO_102}"
+_ZIG_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+        echo "PASS: CLO-102 Zig exited non-zero on lengthless response in strict mode"
+else
+        echo "FAIL: CLO-102 Zig exited $_ZIG_EXIT (expected non-zero)"
+        failed_tests=$((failed_tests + 1))
+fi
+
+assert_no_partial_files "$ASSET_DIR_CLO_102" "CLO-102 Zig"
+container_exec rm -rf "$ASSET_DIR_CLO_102"
+
+# -----------------------------------------------------------------------------
+# CLO-103: Missing Size, Permissive Mode
+#
+# Same as CLO-102, but ZOQA_ALLOW_LENGTHLESS=1. Zig allows the stream to complete
+# despite the missing size, exiting 0 but leaving a truncated file on disk
+# (just like legacy Perl/curl).
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-103: Zig missing size permissive mode ---"
+tag="clo-103"
+ASSET_DIR_CLO_103="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_103"
+start_faultproxy 2 partial_no_meta /tests/ 64
+
+run_capture "${tag}" zig \
+        "env ZOQA_ALLOW_LENGTHLESS=1 $ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+         --host http://localhost --skip-deps \
+         ${PARTIAL_JOB_ID} --dir ${ASSET_DIR_CLO_103}"
+_ZIG_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+if [[ "$_ZIG_EXIT" -eq 0 ]]; then
+        echo "PASS: CLO-103 Zig exited 0 on lengthless response in permissive mode"
+else
+        echo "FAIL: CLO-103 Zig exited $_ZIG_EXIT (expected 0)"
+        failed_tests=$((failed_tests + 1))
+fi
+
+# Due to permissive mode, the truncated file is written to disk.
+if container_exec find "$ASSET_DIR_CLO_103" -type f | grep -q .; then
+        echo "PASS: CLO-103 Zig wrote asset file(s) to disk"
+else
+        echo "FAIL: CLO-103 Zig wrote no files to disk"
+        failed_tests=$((failed_tests + 1))
+fi
+
+container_exec rm -rf "$ASSET_DIR_CLO_103"
+
+# -----------------------------------------------------------------------------
+# CLO-104: API Unreachable, Strict Mode
+#
+# Simulates a metadata endpoint outage (HTTP 502) in strict mode. Zig must fail
+# with a clear orchestrator-level error before attempting the download.
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-104: Zig API unreachable strict mode ---"
+tag="clo-104"
+ASSET_DIR_CLO_104="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO_104"
+start_faultproxy 2 partial_no_meta_502 /tests/ 64
+
+run_capture "${tag}" zig \
+        "$ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+         --host http://localhost --skip-deps \
+         ${PARTIAL_JOB_ID} --dir ${ASSET_DIR_CLO_104}"
+_ZIG_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+        echo "PASS: CLO-104 Zig exited non-zero on API outage in strict mode"
+else
+        echo "FAIL: CLO-104 Zig exited $_ZIG_EXIT (expected non-zero)"
+        failed_tests=$((failed_tests + 1))
+fi
+
+assert_no_partial_files "$ASSET_DIR_CLO_104" "CLO-104 Zig"
+container_exec rm -rf "$ASSET_DIR_CLO_104"
 
 set +x  # end of CLO-98–99 trace
