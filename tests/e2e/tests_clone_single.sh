@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
 # test_clone_single.sh — Single-job clone tests (CLO-12 to CLO-17, M43–M44, CLO-50 to CLO-83,
-#                         CLO-84 to CLO-89, CLO-98 to CLO-99).
+#                         CLO-84 to CLO-89, CLO-98 to CLO-104, CLO-105 to CLO-108).
 # CLO-72–76: OPENQA_SHAREDIR env var tests.
 #
 # All tests in this file operate on a single base job ($JOB_ID) produced by
@@ -1743,5 +1743,109 @@ fi
 
 assert_no_partial_files "$ASSET_DIR_CLO_104" "CLO-104 Zig"
 container_exec rm -rf "$ASSET_DIR_CLO_104"
+
+# =============================================================================
+# CLO-105 to CLO-108: Exit code for argument errors (Gap 7 — §18.11)
+#
+# §18.11 is explicit on three points:
+#   1. Zig MUST exit 1 for all argument-parsing and JOBREF-resolution errors
+#      (UnknownFlag, MissingValue, InvalidNumber, ConflictingOptions,
+#       MissingJobId, MissingFromHost, InvalidUrl, UrlTooLong).
+#   2. Perl exits 255 for these cases: `die` propagates out of Getopt::Long /
+#      pod2usage and Perl converts any unhandled die into exit(255).
+#   3. The spec deliberately does not replicate Perl's 255:
+#      "Tier A emits only 0 or 1. The Perl reference's 255 (Perl die) is not
+#       modelled; all error conditions collapse to 1."
+#
+# Each test runs both implementations side by side.  Perl's 255 is asserted as
+# the oracle (documenting the upstream behaviour); Zig's 1 is asserted as the
+# spec-compliant target.  No live API or faultproxy is needed — every command
+# fails before any network call.
+# =============================================================================
+echo "--- Tests CLO-105 to CLO-108: exit codes on argument errors (Perl=255, Zig=1) ---"
+
+# CLO-105: Unknown flag → parseCloneArgs error path.
+echo "--- Test CLO-105: unknown flag ---"
+tag="clo-105"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --no-such-flag 42" \
+	"$ZIG_CLONE_EXE --no-such-flag 42"
+if [[ "$_PERL_EXIT" -eq 255 ]]; then
+	echo "PASS: CLO-105 Perl exits 255 for unknown flag (oracle)"
+else
+	echo "FAIL: CLO-105 Perl exits $_PERL_EXIT (expected 255)"
+	cat "$LOG_DIR/${tag}_perl_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+if [[ "$_ZIG_EXIT" -eq 1 ]]; then
+	echo "PASS: CLO-105 Zig exits 1 for unknown flag"
+else
+	echo "FAIL: CLO-105 Zig exits $_ZIG_EXIT (expected 1)"
+	cat "$LOG_DIR/${tag}_zig_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# CLO-106: Flag missing its required value → parseCloneArgs error path.
+echo "--- Test CLO-106: flag missing its value ---"
+tag="clo-106"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --from" \
+	"$ZIG_CLONE_EXE --from"
+if [[ "$_PERL_EXIT" -eq 255 ]]; then
+	echo "PASS: CLO-106 Perl exits 255 for flag missing its value (oracle)"
+else
+	echo "FAIL: CLO-106 Perl exits $_PERL_EXIT (expected 255)"
+	cat "$LOG_DIR/${tag}_perl_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+if [[ "$_ZIG_EXIT" -eq 1 ]]; then
+	echo "PASS: CLO-106 Zig exits 1 for flag missing its value"
+else
+	echo "FAIL: CLO-106 Zig exits $_ZIG_EXIT (expected 1)"
+	cat "$LOG_DIR/${tag}_zig_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# CLO-107: Conflicting --within-instance + --from → resolveJobRef error path.
+echo "--- Test CLO-107: conflicting --within-instance and --from ---"
+tag="clo-107"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --within-instance http://localhost --from http://localhost 42" \
+	"$ZIG_CLONE_EXE --within-instance http://localhost --from http://localhost 42"
+if [[ "$_PERL_EXIT" -eq 255 ]]; then
+	echo "PASS: CLO-107 Perl exits 255 for conflicting options (oracle)"
+else
+	echo "FAIL: CLO-107 Perl exits $_PERL_EXIT (expected 255)"
+	cat "$LOG_DIR/${tag}_perl_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+if [[ "$_ZIG_EXIT" -eq 1 ]]; then
+	echo "PASS: CLO-107 Zig exits 1 for conflicting --within-instance and --from"
+else
+	echo "FAIL: CLO-107 Zig exits $_ZIG_EXIT (expected 1)"
+	cat "$LOG_DIR/${tag}_zig_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# CLO-108: No JOBREF positional → resolveJobRef MissingJobId error path.
+echo "--- Test CLO-108: missing JOBREF ---"
+tag="clo-108"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --within-instance http://localhost" \
+	"$ZIG_CLONE_EXE --within-instance http://localhost"
+if [[ "$_PERL_EXIT" -eq 255 ]]; then
+	echo "PASS: CLO-108 Perl exits 255 for missing JOBREF (oracle)"
+else
+	echo "FAIL: CLO-108 Perl exits $_PERL_EXIT (expected 255)"
+	cat "$LOG_DIR/${tag}_perl_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+if [[ "$_ZIG_EXIT" -eq 1 ]]; then
+	echo "PASS: CLO-108 Zig exits 1 for missing JOBREF"
+else
+	echo "FAIL: CLO-108 Zig exits $_ZIG_EXIT (expected 1)"
+	cat "$LOG_DIR/${tag}_zig_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
 
 set +x  # end of CLO-98–99 trace

@@ -1217,7 +1217,7 @@ fn downloadAssets(
 ///
 /// Errors: Returns an error union only for fatal I/O failures writing to
 ///   stdout; all other errors are handled internally and result in
-///   `std.process.exit(1)` or `std.process.exit(255)`.
+///   `std.process.exit(1)` (emits only 0 or 1).
 pub fn main() !void {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();
@@ -1235,7 +1235,7 @@ pub fn main() !void {
             printStderr("Error: flag value is not a valid number\n", .{});
         }
         printHelp(true);
-        std.process.exit(255);
+        std.process.exit(1);
     };
     defer args.deinit(gpa);
 
@@ -1278,7 +1278,7 @@ pub fn main() !void {
                 printStderr("Error: unexpected failure while resolving job reference: {s}\n", .{@errorName(err)});
             },
         }
-        std.process.exit(255);
+        std.process.exit(1);
     };
     defer resolved.deinit(gpa);
 
