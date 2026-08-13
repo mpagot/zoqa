@@ -116,6 +116,8 @@ pub const Request = struct {
     retry_sleep_s: f64 = 3.0,
     retry_factor: f64 = 1.0,
     size_limit: ?u64 = null,
+    expected_size: ?u64 = null,
+    allow_lengthless: bool = false,
 };
 
 /// Result returned by `executeStream()`. Result type for executeStream()
@@ -568,6 +570,12 @@ pub fn executeStream(
             }
         }
 
+        if (response.head.status == .ok or response.head.status == .partial_content) {
+            if (content_length == null and req.expected_size == null and !req.allow_lengthless) {
+                return error.LengthRequired;
+            }
+        }
+
         // Past this point bytes may reach `writer`; a mid-stream failure is
         // returned rather than retried (see the doc comment above).
         var transfer_buf: [65536]u8 = undefined;
@@ -577,6 +585,17 @@ pub fn executeStream(
         if (content_length) |cl| {
             if (bytes_written < cl) {
                 return error.HttpTransferTruncated;
+            }
+        } else if (response.head.status == .ok or response.head.status == .partial_content) {
+            // expected_size validation only applies when the response status indicates
+            // a successful asset download. On non-2xx status codes (e.g. 404 Not Found),
+            // the response body is an error page rather than the asset payload; comparing
+            // the error page length against expected_size would misclassify the 404 as a
+            // truncated asset download instead of returning the status to the caller.
+            if (req.expected_size) |es| {
+                if (bytes_written < es) {
+                    return error.HttpTransferTruncated;
+                }
             }
         }
 
@@ -754,6 +773,8 @@ pub const RawGetOptions = struct {
     size_limit: ?u64 = null,
     quiet: bool = false,
     verbose: bool = false,
+    expected_size: ?u64 = null,
+    allow_lengthless: bool = false,
 
     /// Number of automatic retries on transient pre-stream failures
     /// (connection errors and HTTP 502/503). Defaults to 0. See
@@ -817,6 +838,7 @@ pub fn openQARawGet(
         .retry_sleep_s = opts.retry_sleep_s,
         .retry_factor = opts.retry_factor,
         .size_limit = opts.size_limit,
+        .allow_lengthless = true,
     };
 
     return executeStream(req, client, writer, content_length_out);
@@ -978,6 +1000,8 @@ pub fn openQADownloadToFile(
         .quiet = opts.quiet,
         .verbose = opts.verbose,
         .size_limit = opts.size_limit,
+        .expected_size = opts.expected_size,
+        .allow_lengthless = opts.allow_lengthless,
     };
 
     const Outcome = union(enum) {
@@ -997,6 +1021,10 @@ pub fn openQADownloadToFile(
             var file_writer = file.writer(&file_buf);
 
             const result = executeStream(req, client, &file_writer.interface, null) catch |err| {
+                // LengthRequired is a policy violation (strict mode rejects
+                // responses without Content-Length or expected_size). Retrying
+                // would defeat the policy when the fault is transient.
+                if (err == error.LengthRequired) break :blk .{ .failed = err };
                 // Connection error or mid-stream reset, retry if budget remains.
                 break :blk if (attempt < opts.retries) .retry else .{ .failed = err };
             };
@@ -1560,6 +1588,7 @@ test "openQADownloadToFile: successful download and mtime touch" {
         .credentials = null,
         .quiet = true,
         .retries = 0,
+        .allow_lengthless = true,
     }, &mock);
 
     try testing.expect(res.status == .ok);
@@ -1746,6 +1775,7 @@ test "openQADownloadToFile: re-downloads when source does not report complete" {
         .credentials = null,
         .quiet = true,
         .retries = 0,
+        .allow_lengthless = true,
     }, &mock);
 
     try testing.expect(res.status == .ok);
@@ -1910,4 +1940,274 @@ test "openQADownloadToFile: retries on error.HttpTransferTruncated and deletes p
 
     // Verified that no partial file remains on disk after terminal failure.
     try testing.expectError(error.FileNotFound, std.fs.cwd().access(dest_path, .{}));
+}
+
+test "executeStream: fails with LengthRequired if lengthless and not allowed" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const LengthlessMockClient = struct {
+        const Self = @This();
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_type: ?[]const u8 = "application/json",
+            content_length: ?u64 = null, // Missing Content-Length
+
+            const HeaderIterator = struct {
+                done: bool = false,
+                pub fn next(self: *HeaderIterator) ?std.http.Header {
+                    if (self.done) return null;
+                    self.done = true;
+                    return .{ .name = "Content-Type", .value = "application/json" };
+                }
+            };
+
+            pub fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            pub fn streamRemaining(_: *MockReader, _: anytype) anyerror!usize {
+                return 0;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        response: MockResponse = .{},
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            return &self.response;
+        }
+    };
+
+    var mock: LengthlessMockClient = .{};
+    const req = Request{
+        .allocator = allocator,
+        .method = .GET,
+        .url = "http://localhost/api/v1/jobs",
+        .headers = &.{},
+        .body = null,
+        .credentials = null,
+        .retries = 0,
+        .quiet = true,
+        .expected_size = null,
+        .allow_lengthless = false, // strict mode
+    };
+
+    var discarding: std.Io.Writer.Discarding = .init(&.{});
+    const result = executeStream(req, &mock, &discarding.writer, null);
+    try testing.expectError(error.LengthRequired, result);
+}
+
+test "executeStream: succeeds when lengthless and allowed" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const LengthlessMockClient = struct {
+        const Self = @This();
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_type: ?[]const u8 = "application/json",
+            content_length: ?u64 = null,
+
+            const HeaderIterator = struct {
+                done: bool = false,
+                pub fn next(self: *HeaderIterator) ?std.http.Header {
+                    if (self.done) return null;
+                    self.done = true;
+                    return .{ .name = "Content-Type", .value = "application/json" };
+                }
+            };
+
+            pub fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            pub fn streamRemaining(_: *MockReader, _: anytype) anyerror!usize {
+                return 10;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        response: MockResponse = .{},
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            return &self.response;
+        }
+    };
+
+    var mock: LengthlessMockClient = .{};
+    const req = Request{
+        .allocator = allocator,
+        .method = .GET,
+        .url = "http://localhost/api/v1/jobs",
+        .headers = &.{},
+        .body = null,
+        .credentials = null,
+        .retries = 0,
+        .quiet = true,
+        .expected_size = null,
+        .allow_lengthless = true,
+    };
+
+    var discarding: std.Io.Writer.Discarding = .init(&.{});
+    const res = try executeStream(req, &mock, &discarding.writer, null);
+    try testing.expectEqual(std.http.Status.ok, res.status);
+}
+
+test "executeStream: fails with HttpTransferTruncated when bytes written < expected_size" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const TruncatedMockClient = struct {
+        const Self = @This();
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_length: ?u64 = null,
+
+            const HeaderIterator = struct {
+                pub fn next(_: *HeaderIterator) ?std.http.Header {
+                    return null;
+                }
+            };
+
+            pub fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            pub fn streamRemaining(_: *MockReader, _: anytype) anyerror!usize {
+                return 50; // Returns 50 bytes, but expected 100
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        response: MockResponse = .{},
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            return &self.response;
+        }
+    };
+
+    var mock: TruncatedMockClient = .{};
+    const req = Request{
+        .allocator = allocator,
+        .method = .GET,
+        .url = "http://localhost/tests/1/asset/iso/test.iso",
+        .headers = &.{},
+        .body = null,
+        .credentials = null,
+        .retries = 0,
+        .quiet = true,
+        .expected_size = 100, // Expected 100 bytes
+        .allow_lengthless = false,
+    };
+
+    var discarding: std.Io.Writer.Discarding = .init(&.{});
+    const result = executeStream(req, &mock, &discarding.writer, null);
+    try testing.expectError(error.HttpTransferTruncated, result);
+}
+
+test "executeStream: lengthless 404 response with expected_size set returns not_found status" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const NotFoundMockClient = struct {
+        const Self = @This();
+        const MockHead = struct {
+            status: std.http.Status = .not_found,
+            content_length: ?u64 = null,
+
+            const HeaderIterator = struct {
+                pub fn next(_: *HeaderIterator) ?std.http.Header {
+                    return null;
+                }
+            };
+
+            pub fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            pub fn streamRemaining(_: *MockReader, w: anytype) anyerror!usize {
+                const body = "404 Not Found";
+                try w.writeAll(body);
+                return body.len;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        response: MockResponse = .{},
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            return &self.response;
+        }
+    };
+
+    var mock: NotFoundMockClient = .{};
+    const req = Request{
+        .allocator = allocator,
+        .method = .GET,
+        .url = "http://localhost/tests/1/asset/iso/missing.iso",
+        .headers = &.{},
+        .body = null,
+        .credentials = null,
+        .retries = 0,
+        .quiet = true,
+        .expected_size = 1000,
+        .allow_lengthless = false,
+    };
+
+    var discarding: std.Io.Writer.Discarding = .init(&.{});
+    const res = try executeStream(req, &mock, &discarding.writer, null);
+    try testing.expectEqual(std.http.Status.not_found, res.status);
 }

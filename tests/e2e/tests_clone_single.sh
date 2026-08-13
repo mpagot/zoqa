@@ -753,13 +753,16 @@ _PERL_EXIT=$_LAST_EXIT
 if [[ "$_PERL_EXIT" -eq 0 ]]; then
 	echo "PASS: CLO-75 Perl exits 0 without --dir (uses default path)"
 else
-	echo "FAIL: CLO-75 Perl exits 0 without --dir (uses default path, got $_PERL_EXIT)"
+	echo "FAIL: CLO-75 Perl exits $_PERL_EXIT expected 0 without --dir (uses default path)"
+	# Perl exit code 23 is internal culr error
+	#   23     Write error. curl could not write data to a local file system or similar.
 	failed_tests=$((failed_tests + 1))
 fi
 if container_exec test -f "$_CLO75_ASSET_PATH"; then
 	echo "PASS: CLO-75 Perl re-downloaded asset to default factory path"
 else
 	echo "FAIL: CLO-75 Perl re-downloaded asset to default factory path"
+	container_exec ls -lai "$_CLO7X_FACTORY"
 	failed_tests=$((failed_tests + 1))
 fi
 
@@ -861,6 +864,21 @@ container_exec rm -rf "$_CLO7X_BACKUP"
 # CLO-82: With the flag, stderr contains a warning about the missing asset (Perl).
 # CLO-83: With the flag, stdout contains "has been created" (job POST succeeded).
 # =============================================================================
+
+# Diagnostic helper for CLO-80–83: dump asset API state on failure.
+# Usage: _dump_asset_api_state <job_id>
+_dump_asset_api_state() {
+	local job_id="$1"
+	echo "  [diag] Assets list (first 5):"
+	container_exec openqa-cli api --host http://localhost assets 2>/dev/null \
+		| jq -c '.assets[:5][] | {id, type, name, size}' 2>/dev/null || echo "  [diag] (assets list failed)"
+	echo "  [diag] Asset lookup for phantom ISO:"
+	container_exec curl -s http://localhost/api/v1/assets/iso/phantom-nonexist-e2e.iso 2>/dev/null \
+		| jq -c '{id, type, name, size}' 2>/dev/null || echo "  [diag] (asset lookup failed)"
+	echo "  [diag] Job $job_id settings:"
+	container_exec openqa-cli api --host http://localhost "jobs/$job_id" 2>/dev/null \
+		| jq -c '.job.settings | {ISO_1, DISTRI, VERSION}' 2>/dev/null || echo "  [diag] (job settings failed)"
+}
 echo "--- Test CLO-80 to CLO-83: --ignore-missing-assets ---"
 
 # Fixture: create a job that references a non-existent ISO.
@@ -902,6 +920,9 @@ else
 		echo "PASS: Perl exits non-zero without --ignore-missing-assets"
 	else
 		echo "FAIL: Perl exits non-zero without --ignore-missing-assets (got $_PERL_EXIT)"
+		cat "$LOG_DIR/${tag}_perl_stderr.log"
+		cat "$LOG_DIR/${tag}_perl_stdout.log"
+		_dump_asset_api_state "$MISSING_ASSET_JOB_ID"
 		failed_tests=$((failed_tests + 1))
 	fi
 	# CLO-80 Perl: failed download must not leave a partial file behind.
@@ -911,6 +932,9 @@ else
 		echo "PASS: Zig exits non-zero without --ignore-missing-assets"
 	else
 		echo "FAIL: Zig exits non-zero without --ignore-missing-assets (got $_ZIG_EXIT)"
+		cat "$LOG_DIR/${tag}_zig_stderr.log"
+		cat "$LOG_DIR/${tag}_zig_stdout.log"
+		_dump_asset_api_state "$MISSING_ASSET_JOB_ID"
 		failed_tests=$((failed_tests + 1))
 	fi
 	# CLO-80 Zig: same cleanup requirement.
@@ -933,6 +957,8 @@ else
 	else
 		echo "FAIL: Perl exits 0 with --ignore-missing-assets (got $_PERL_EXIT)"
 		cat "$LOG_DIR/${tag}_perl_stderr.log"
+		cat "$LOG_DIR/${tag}_perl_stdout.log"
+		_dump_asset_api_state "$MISSING_ASSET_JOB_ID"
 		failed_tests=$((failed_tests + 1))
 	fi
 	if [[ "$_ZIG_EXIT" -eq 0 ]]; then
@@ -940,6 +966,8 @@ else
 	else
 		echo "FAIL: Zig exits 0 with --ignore-missing-assets (got $_ZIG_EXIT)"
 		cat "$LOG_DIR/${tag}_zig_stderr.log"
+		cat "$LOG_DIR/${tag}_zig_stdout.log"
+		_dump_asset_api_state "$MISSING_ASSET_JOB_ID"
 		failed_tests=$((failed_tests + 1))
 	fi
 
@@ -1639,6 +1667,9 @@ if [[ "$_ZIG_EXIT" -ne 0 ]]; then
         echo "PASS: CLO-102 Zig exited non-zero on lengthless response in strict mode"
 else
         echo "FAIL: CLO-102 Zig exited $_ZIG_EXIT (expected non-zero)"
+        cat "$LOG_DIR/${tag}_zig_stderr.log"
+        cat "$LOG_DIR/${tag}_zig_stdout.log"
+        dump_faultproxy_logs
         failed_tests=$((failed_tests + 1))
 fi
 

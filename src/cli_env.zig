@@ -31,11 +31,14 @@ pub const OsEnv = struct {
 
     // Clone-job specific
     openqa_sharedir: ?[]const u8 = null, // $OPENQA_SHAREDIR
+    openqa_allow_lengthless: bool = false, // $ZOQA_ALLOW_LENGTHLESS
 
     /// Free all owned allocations. Safe to call on a default-initialised instance.
     pub fn deinit(self: *OsEnv, allocator: std.mem.Allocator) void {
         inline for (std.meta.fields(OsEnv)) |f| {
-            if (@field(self, f.name)) |s| allocator.free(s);
+            if (f.type == ?[]const u8) {
+                if (@field(self, f.name)) |s| allocator.free(s);
+            }
         }
         self.* = .{};
     }
@@ -102,6 +105,15 @@ pub fn resolve(allocator: std.mem.Allocator, env: *OsEnv) !void {
     env.openqa_cli_retry_sleep_time_s = try readEnv(allocator, "OPENQA_CLI_RETRY_SLEEP_TIME_S");
     env.openqa_cli_retry_factor = try readEnv(allocator, "OPENQA_CLI_RETRY_FACTOR");
     env.openqa_sharedir = try readEnv(allocator, "OPENQA_SHAREDIR");
+
+    const allow_lengthless_str = try readEnv(allocator, "ZOQA_ALLOW_LENGTHLESS");
+    defer if (allow_lengthless_str) |s| allocator.free(s);
+    env.openqa_allow_lengthless = false;
+    if (allow_lengthless_str) |str| {
+        if (std.mem.eql(u8, str, "1") or std.mem.eql(u8, str, "true") or std.mem.eql(u8, str, "yes")) {
+            env.openqa_allow_lengthless = true;
+        }
+    }
 }
 
 /// Read a single environment variable by name.

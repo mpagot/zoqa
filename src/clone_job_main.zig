@@ -3,10 +3,6 @@ const arg_match = @import("arg_match");
 const cli_env = @import("cli_env");
 const zoqa = @import("zoqa");
 
-// ---------------------------------------------------------------------------
-// URL / JOBREF helpers
-// ---------------------------------------------------------------------------
-
 /// Returns true when every byte of `s` is an ASCII digit and `s` is non-empty.
 ///
 /// Parameters:
@@ -53,15 +49,15 @@ test "hasHttpScheme: detection" {
 /// Extract a numeric job ID from an openQA URL path.
 ///
 /// Recognised path patterns:
-///   /t{digits}              — shortcut form (e.g. /t42)
-///   /tests/{digits}[/...]   — canonical form (e.g. /tests/42)
+///   /t{digits}              : shortcut form (e.g. /t42)
+///   /tests/{digits}[/...]   : canonical form (e.g. /tests/42)
 ///
 /// Parameters:
 /// - `path`: The URL path component to parse (e.g. "/tests/42/details").
 ///
 /// Returns: The extracted job ID, or `null` if the path does not match either pattern.
 fn extractJobIdFromPath(path: []const u8) ?u64 {
-    // /tests/{id}[/...] — check longer prefix first (avoids false match on /t)
+    // /tests/{id}[/...] : check longer prefix first (avoids false match on /t)
     const tests_pfx = "/tests/";
     if (std.mem.startsWith(u8, path, tests_pfx)) {
         const after = path[tests_pfx.len..];
@@ -72,7 +68,7 @@ fn extractJobIdFromPath(path: []const u8) ?u64 {
         }
     }
 
-    // /t{id}[/...] — short alias (only reached if /tests/ didn't match)
+    // /t{id}[/...] : short alias (only reached if /tests/ didn't match)
     if (std.mem.startsWith(u8, path, "/t")) {
         const after_t = path[2..];
         const end = std.mem.indexOfScalar(u8, after_t, '/') orelse after_t.len;
@@ -108,10 +104,6 @@ test "extractJobIdFromPath: no match" {
     try std.testing.expectEqual(@as(?u64, null), extractJobIdFromPath("/jobs/42"));
 }
 
-// ---------------------------------------------------------------------------
-// JOBREF parsing — mirrors CloneJob.pm split_jobid()
-// ---------------------------------------------------------------------------
-
 const SplitJobRefResult = struct {
     /// Allocated host URL (scheme://authority). Null when the input was a bare integer.
     host: ?[]u8,
@@ -143,8 +135,8 @@ const SplitJobRefResult = struct {
 /// Returns: A `SplitJobRefResult` with an optional owned host URL and optional job ID.
 ///
 /// Errors:
-///   error.InvalidUrl — the string is neither a numeric ID nor a parseable URL.
-///   error.UrlTooLong — the URL (after prepending a scheme) exceeds an internal limit.
+///   error.InvalidUrl : the string is neither a numeric ID nor a parseable URL.
+///   error.UrlTooLong : the URL (after prepending a scheme) exceeds an internal limit.
 fn splitJobRef(allocator: std.mem.Allocator, input: []const u8) !SplitJobRefResult {
     // Case 1: bare integer
     if (isNumericId(input)) {
@@ -154,7 +146,7 @@ fn splitJobRef(allocator: std.mem.Allocator, input: []const u8) !SplitJobRefResu
         };
     }
 
-    // Case 2: URL — prepend "http://" when no scheme is present (matching Perl behaviour)
+    // Case 2: URL prepend "http://" when no scheme is present (matching Perl behavior)
     var url_buf: [4096]u8 = undefined;
     const url_str: []const u8 = if (hasHttpScheme(input))
         input
@@ -242,11 +234,7 @@ test "splitJobRef: URL with port" {
     try std.testing.expectEqual(@as(?u64, 99), r.job_id);
 }
 
-// ---------------------------------------------------------------------------
-// Host URL normalisation for --host
-// ---------------------------------------------------------------------------
-
-/// Normalise a hostname string from --host into a full URL.
+/// Normalize a hostname string from --host into a full URL.
 ///
 /// Mirrors `OpenQA::Client::url_from_host()` (Client.pm:22–28):
 ///   - If the string already has a scheme (http/https), return a copy unchanged.
@@ -262,7 +250,7 @@ test "splitJobRef: URL with port" {
 /// Returns: A newly allocated URL string with a guaranteed scheme prefix.
 ///
 /// Errors:
-///   error.OutOfMemory — allocation failed.
+///   error.OutOfMemory : allocation failed.
 fn normalizeHostUrl(allocator: std.mem.Allocator, host: []const u8) ![]u8 {
     if (hasHttpScheme(host)) return try allocator.dupe(u8, host);
     const scheme: []const u8 = if (std.mem.indexOf(u8, host, "localhost") != null)
@@ -299,14 +287,6 @@ test "normalizeHostUrl: bare non-localhost uses https" {
     defer allocator.free(r);
     try std.testing.expectEqualStrings("https://openqa.opensuse.org", r);
 }
-
-// ---------------------------------------------------------------------------
-// Settings helpers
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// JOBREF resolution
-// ---------------------------------------------------------------------------
 
 const ResolvedJobRef = struct {
     /// Source openQA instance URL (scheme://host). Owned.
@@ -349,11 +329,11 @@ const ResolvedJobRef = struct {
 /// Returns: A `ResolvedJobRef` with owned from/host URLs, job ID, and flags.
 ///
 /// Errors:
-///   error.ConflictingOptions — both --within-instance and --from were supplied.
-///   error.MissingFromHost    — no source host could be determined.
-///   error.MissingJobId       — no job ID could be determined.
-///   error.InvalidUrl         — a URL argument could not be parsed.
-///   error.UrlTooLong         — a URL exceeded an internal buffer limit.
+///   error.ConflictingOptions : both --within-instance and --from were supplied.
+///   error.MissingFromHost    : no source host could be determined.
+///   error.MissingJobId       : no job ID could be determined.
+///   error.InvalidUrl         : a URL argument could not be parsed.
+///   error.UrlTooLong         : a URL exceeded an internal buffer limit.
 fn resolveJobRef(allocator: std.mem.Allocator, args: *const CloneArgs) !ResolvedJobRef {
     // Conflicting options guard
     if (args.within_instance != null and args.from != null) {
@@ -476,7 +456,7 @@ const CloneArgs = struct {
     retry: ?u32 = null,
 
     // Positional: JOBREF and KEY=[VALUE] overrides
-    // All slices borrow directly from argv — no copies are made during parsing.
+    // All slices borrow directly from argv, no copies are made during parsing.
     positionals: std.ArrayList([]const u8),
 
     pub fn deinit(self: *CloneArgs, allocator: std.mem.Allocator) void {
@@ -493,10 +473,10 @@ const CloneArgs = struct {
 /// Returns: A populated `CloneArgs` struct. The caller must call `deinit` when done.
 ///
 /// Errors:
-///   - `error.MissingJobRef` — no positional JOBREF argument found.
-///   - `error.MissingValue` — a value-taking flag has no following token.
-///   - `error.UnknownFlag` — unrecognised flag.
-///   - `error.InvalidNumber` — a numeric flag has a non-numeric value.
+///   - `error.MissingJobRef` : no positional JOBREF argument found.
+///   - `error.MissingValue` : a value-taking flag has no following token.
+///   - `error.UnknownFlag` : unrecognised flag.
+///   - `error.InvalidNumber` : a numeric flag has a non-numeric value.
 fn parseCloneArgs(allocator: std.mem.Allocator, argv: []const []const u8) !CloneArgs {
     var args = CloneArgs{
         .positionals = .empty,
@@ -815,10 +795,6 @@ fn walkDependencyGraph(
     return .{ .walker = walker, .assets = all_assets, .missing_asset_filenames = all_missing_assets };
 }
 
-// ---------------------------------------------------------------------------
-// Phase 2: Encode dependencies and apply overrides
-// ---------------------------------------------------------------------------
-
 /// Encode inter-job dependencies (filtering to only collected IDs) and apply
 /// user overrides to each job's settings. Returns the final job list and the
 /// encoded POST body.
@@ -923,10 +899,6 @@ fn encodeDepsAndApplyOverrides(
 
     return .{ .final_jobs = final_jobs, .post_body = post_body };
 }
-
-// ---------------------------------------------------------------------------
-// Phase 3: POST to destination and format output
-// ---------------------------------------------------------------------------
 
 /// Output formatting mode for clone results.
 const OutputMode = enum {
@@ -1050,6 +1022,73 @@ fn postAndFormatOutput(
 ///   immediately (or is skipped when `ignore_missing_assets` is set).
 /// - `verbose`: When `true`, logs skipped assets to stderr.
 /// - `ignore_missing_assets`: When `true`, skips 404 responses instead of aborting.
+/// Query the assets metadata API to retrieve the expected size of an asset.
+///
+/// Returns the size in bytes on success, `null` if the asset was not found or
+/// the metadata lacks size info, or an error on a transport or parsing failure.
+fn fetchAssetSize(
+    gpa: std.mem.Allocator,
+    client: *std.http.Client,
+    from_url: []const u8,
+    from_creds: ?zoqa.config.Credentials,
+    asset_type: []const u8,
+    filename: []const u8,
+    retry_cfg: cli_env.RetryConfig,
+    verbose: bool,
+) !?u64 {
+    // Use the by-name endpoint: GET /api/v1/assets/{type}/{name}
+    // This returns a single asset object (not a list), filtered server-side.
+    // Form-encode the filename: asset names in openQA can contain characters
+    // like '+' (e.g. Current+1.iso), spaces, or slashes that must be
+    // percent-encoded so the openQA API matches the name accurately.
+    // asset_type is guaranteed to be a plain hardcoded string ("iso", "hdd", or "other").
+    var path_buf: std.ArrayList(u8) = .empty;
+    defer path_buf.deinit(gpa);
+    try std.fmt.format(path_buf.writer(gpa), "/api/v1/assets/{s}/", .{asset_type});
+    try zoqa.url.formEncodeAppend(gpa, &path_buf, filename);
+
+    var body_aw = std.Io.Writer.Allocating.init(gpa);
+    defer body_aw.deinit();
+
+    const stream_result = try zoqa.openQARawGet(from_url, path_buf.items, .{
+        .allocator = gpa,
+        .credentials = from_creds,
+        .quiet = !verbose,
+        .retries = retry_cfg.retries,
+        .retry_sleep_s = retry_cfg.retry_sleep_s,
+        .retry_factor = retry_cfg.retry_factor,
+    }, client, &body_aw.writer, null);
+
+    if (stream_result.status == .not_found) {
+        return null;
+    }
+    if (stream_result.status != .ok) {
+        return error.UnexpectedStatus;
+    }
+
+    const body_bytes = try body_aw.toOwnedSlice();
+    defer gpa.free(body_bytes);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, body_bytes, .{});
+    defer parsed.deinit();
+
+    const obj = switch (parsed.value) {
+        .object => |o| o,
+        else => return error.InvalidJson,
+    };
+
+    // The by-name endpoint returns a flat asset object with a "size" field.
+    // "size" is null when the asset is registered but has no file on disk.
+    const size_val = obj.get("size") orelse return null;
+    const size = switch (size_val) {
+        .integer => |i| @as(u64, @intCast(i)),
+        .float => |f| @as(u64, @intFromFloat(f)),
+        else => return null,
+    };
+
+    return size;
+}
+
 fn downloadAssets(
     gpa: std.mem.Allocator,
     client: *std.http.Client,
@@ -1062,6 +1101,7 @@ fn downloadAssets(
     verbose: bool,
     ignore_missing_assets: bool,
     clone_opts: zoqa.clone_job.CloneOptions,
+    allow_lengthless: bool,
 ) void {
     for (assets) |asset| {
         // Skip assets generated by cloned jobs
@@ -1121,10 +1161,22 @@ fn downloadAssets(
             std.process.exit(1);
         };
 
+        var expected_size: ?u64 = null;
+        if (fetchAssetSize(gpa, client, from_url, from_creds, type_str, asset.filename, retry_cfg, verbose)) |size| {
+            expected_size = size;
+        } else |err| {
+            if (!allow_lengthless and !ignore_missing_assets) {
+                printStderr("Error: failed to fetch size metadata for asset '{s}': {s}. To skip strict size validation, set ZOQA_ALLOW_LENGTHLESS=1\n", .{ asset.filename, @errorName(err) });
+                std.process.exit(1);
+            } else {
+                printStderr("Warning: failed to fetch size metadata for asset '{s}': {s}. Proceeding without size validation.\n", .{ asset.filename, @errorName(err) });
+            }
+        }
+
         // Download to disk with retry. openQADownloadToFile owns the file
-        // lifecycle so it can re-create (truncate) the file on each attempt —
-        // required to retry a mid-transfer TCP reset without concatenating
-        // partial bodies (e2e CLO-98/99) — and it deletes the file on any
+        // lifecycle so it can re-create (truncate) the file on each attempt.
+        // Required to retry a mid-transfer TCP reset without concatenating
+        // partial bodies (e2e CLO-98/99) and it deletes the file on any
         // terminal failure, so no partial/leftover file is left behind.
         const stream_result = zoqa.openQADownloadToFile(from_url, dl_path, dest_path, .{
             .allocator = gpa,
@@ -1133,6 +1185,8 @@ fn downloadAssets(
             .retries = retry_cfg.retries,
             .retry_sleep_s = retry_cfg.retry_sleep_s,
             .retry_factor = retry_cfg.retry_factor,
+            .expected_size = expected_size,
+            .allow_lengthless = allow_lengthless,
         }, client) catch |err| {
             // Connection error or mid-stream reset that survived all retries;
             // the helper has already removed any partial file.
@@ -1320,7 +1374,7 @@ pub fn main() !void {
         .from_url = resolved.from_url,
     };
 
-    // Phase 1: Walk dependency graph, fetch all reachable jobs.
+    // Walk dependency graph, fetch all reachable jobs.
     const walk_result = walkDependencyGraph(
         gpa,
         arena_alloc,
@@ -1333,7 +1387,7 @@ pub fn main() !void {
         &client,
     );
 
-    // Phase 1.5: --reproduce — fetch vars.json and inject versioning settings.
+    // --reproduce fetch vars.json and inject versioning settings.
     if (args.reproduce) {
         for (walk_result.walker.collected.items) |*entry| {
             const vars_path = std.fmt.allocPrint(gpa, "/tests/{d}/file/vars.json", .{entry.job_id}) catch |err| {
@@ -1354,7 +1408,7 @@ pub fn main() !void {
                 .retry_sleep_s = retry_cfg.retry_sleep_s,
                 .retry_factor = retry_cfg.retry_factor,
             }, &client, &body_aw.writer, null) catch {
-                // vars.json fetch failed — warn and continue without injecting
+                // vars.json fetch failed, warn and continue without injecting
                 printStderr("Warning: could not fetch vars.json for job {d}, skipping reproduce injection\n", .{entry.job_id});
                 continue;
             };
@@ -1388,7 +1442,7 @@ pub fn main() !void {
         }
     }
 
-    // Phase 2: Encode dependencies and apply overrides.
+    // Encode dependencies and apply overrides.
     const phase2 = encodeDepsAndApplyOverrides(
         gpa,
         arena_alloc,
@@ -1426,7 +1480,7 @@ pub fn main() !void {
                     path_str;
                 if (!zoqa.clone_job.isAssetGeneratedByClonedJobs(basename, phase2.final_jobs.items)) {
                     // A UEFI vars asset we would skip anyway being missing
-                    // on the source is fine — same policy as the download path.
+                    // on the source is fine. Same policy as the download path.
                     const skipped_parents = clone_opts.skip_deps or clone_opts.skip_chained_deps;
                     if (zoqa.clone_job.shouldSkipUefiVarsAsset(basename, phase2.final_jobs.items, skipped_parents)) {
                         continue;
@@ -1465,10 +1519,11 @@ pub fn main() !void {
             args.verbose,
             args.ignore_missing_assets,
             clone_opts,
+            env.openqa_allow_lengthless,
         );
     }
 
-    // Phase 3: POST to destination and format output.
+    // POST to destination and format output.
     const output_mode: OutputMode = if (args.json_output) .json else if (args.badge) .badge else .default;
     const repeat_count: u32 = args.repeat orelse 1;
 

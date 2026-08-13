@@ -120,9 +120,13 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
                         import json
                         data = json.loads(body.decode("utf-8"))
                         if isinstance(data, dict) and "assets" in data:
+                            # List endpoint: GET /api/v1/assets
                             for asset in data["assets"]:
                                 if isinstance(asset, dict) and "size" in asset:
                                     del asset["size"]
+                        elif isinstance(data, dict) and "size" in data:
+                            # By-name endpoint: GET /api/v1/assets/{type}/{name}
+                            del data["size"]
                         body = json.dumps(data).encode("utf-8")
                     except Exception as e:
                         sys.stderr.write("[proxy] json parse/manipulation error: %s\n" % e)
