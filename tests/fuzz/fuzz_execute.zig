@@ -1,13 +1,13 @@
 // Fuzz harness for the full openQA request execution pipeline
-// (src/http_client.zig: execute, normalizePathQuery, sleepForRetry;
-//  src/auth.zig: buildAuthHeaders, hmacSha1Hex)
-// via zoqa.openQAReq with a ProgrammableMockClient.
+// (src/http_client.zig: execute, executeStream, normalizePathQuery,
+//  sleepForRetry; src/auth.zig: buildAuthHeaders, hmacSha1Hex)
+// via zoqa.openQAReq and zoqa.openQARawGet with a ProgrammableMockClient.
 //
 // ---------------------------------------------------------------------------
 // Corpus format
 // ---------------------------------------------------------------------------
 //
-// Four sections separated by "\n---\n":
+// Five sections separated by "\n---\n":
 //
 //   Section 1: credentials + path
 //   <api_key>\n<api_secret>\n<path_query>
@@ -21,6 +21,9 @@
 //   Section 4: optional raw gzip bytes
 //   <raw_gzip_bytes>
 //
+//   Section 5: optional Link header value / streaming control
+//   <stream_ctrl_byte><content_length_hi><content_length_lo><partial_body_byte><link_header_value>
+//
 // Field encoding:
 //
 //   method_byte:
@@ -33,20 +36,37 @@
 //     bit 2 (0x04):    use_gzip — if set, mock returns Content-Encoding: gzip
 //                      header and the section 4 bytes as body.
 //     bit 3 (0x08):    emit_link_header — if set, mock emits a Link header
-//                      whose value is section 5 content (Gap 9).
+//                      whose value is section 5 content after stream_ctrl bytes.
 //     bit 4 (0x10):    use_structured_ct — if CLEAR, the mock's head.content_type
 //                      is set to null, exercising the structured-field fallback
-//                      path in http_client.zig (Gap 11).
+//                      path in http_client.zig.
 //     bit 5 (0x20):    inject_read_failed — if set, streamRemaining returns
-//                      error.ReadFailed on first call (Gap 10).
+//                      error.ReadFailed on first call.
 //     bit 6 (0x40):    include_accept_header — if set, an Accept header is
 //                      added to extra_headers, exercising the "Accept already
-//                      present" check in buildHeaders (Gap 7).
+//                      present" check in buildHeaders.
+//     bit 7 (0x80):    use_streaming — if set, also exercise the streaming
+//                      path (openQARawGet → executeStream). Section 5 bytes
+//                      control content_length and partial delivery.
 //
 //   status_hi, status_lo: u16 HTTP status code (big-endian). If both are 0,
 //   defaults to 200. Values outside 100–599 are clamped to 200.
 //
-//   Section 5 (optional): Link header value (only used when ctrl bit 3 is set).
+//   stream_ctrl_byte (section 5, byte 0 — only when ctrl bit 7 set):
+//     bits 0-1 (0x03): content_length mode:
+//                      0 = null (no Content-Length)
+//                      1 = exact match (body.len)
+//                      2 = larger than body (triggers HttpTransferTruncated)
+//                      3 = from section 5 bytes 1-2 (big-endian u16)
+//     bit 2 (0x04):    enable partial delivery (partial_body_len = half of body)
+//     bit 3 (0x08):    set size_limit to 100 (exercises FileTooLarge path)
+//
+//   content_length_hi, content_length_lo (section 5, bytes 1-2):
+//     Raw u16 content_length value, only used when stream_ctrl mode == 3.
+//
+//   partial_body_byte (section 5, byte 3):
+//     When stream_ctrl bit 2 is set, this byte controls partial_body_len:
+//     0 = half of body length, non-zero = use this byte value directly.
 //
 // If fewer than 5 sections are present, missing sections use safe defaults
 // (empty strings, zero bytes).
@@ -121,7 +141,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     const s4_end = std.mem.indexOf(u8, rest3, sep) orelse rest3.len;
     const section4 = rest3[0..s4_end];
 
-    // Section 5: optional Link header value
+    // Section 5: streaming control + optional Link header value
     const section5 = if (s4_end + sep.len <= rest3.len) rest3[s4_end + sep.len ..] else "";
 
     // ------------------------------------------------------------------
@@ -167,6 +187,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     const use_structured_ct: bool = (ctrl & 0x10) == 0; // bit CLEAR = use structured
     const inject_read_failed: bool = (ctrl & 0x20) != 0;
     const include_accept: bool = (ctrl & 0x40) != 0;
+    const use_streaming: bool = (ctrl & 0x80) != 0;
 
     var status_code: u16 = 200;
     if (section3.len >= 3) {
@@ -178,6 +199,42 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     // Body: gzip path uses section 4 bytes; plain path uses bytes after ctrl+status.
     const plain_body: []const u8 = if (section3.len > 3) section3[3..] else "{}";
     const response_body: []const u8 = if (use_gzip) section4 else plain_body;
+
+    // ------------------------------------------------------------------
+    // Decode section 5: streaming control + Link header value
+    // ------------------------------------------------------------------
+    // When streaming is enabled (ctrl bit 7), the first 4 bytes of section 5
+    // encode streaming parameters; the remainder is the Link header value.
+    // When streaming is disabled, all of section 5 is the Link header value.
+    const stream_ctrl: u8 = if (use_streaming and section5.len > 0) section5[0] else 0;
+    const link_header_start: usize = if (use_streaming) @min(@as(usize, 4), section5.len) else 0;
+    const link_value: []const u8 = if (section5.len > link_header_start) section5[link_header_start..] else "";
+
+    // Streaming: content_length mode
+    const content_length_mode: u8 = stream_ctrl & 0x03;
+    const response_content_length: ?u64 = if (!use_streaming) null else switch (content_length_mode) {
+        0 => null, // no Content-Length
+        1 => response_body.len, // exact match
+        2 => response_body.len + 100, // larger → triggers HttpTransferTruncated
+        3 => if (section5.len >= 3) // raw u16 from section 5 bytes 1-2
+            (@as(u64, section5[1]) << 8) | @as(u64, section5[2])
+        else
+            null,
+        else => unreachable,
+    };
+
+    // Streaming: partial delivery
+    const enable_partial: bool = use_streaming and (stream_ctrl & 0x04) != 0;
+    const partial_body_len: ?usize = if (!enable_partial) null else blk: {
+        const explicit: u8 = if (section5.len >= 4) section5[3] else 0;
+        break :blk if (explicit > 0)
+            @as(usize, explicit)
+        else
+            response_body.len / 2;
+    };
+
+    // Streaming: size_limit
+    const size_limit: ?u64 = if (use_streaming and (stream_ctrl & 0x08) != 0) 100 else null;
 
     // ------------------------------------------------------------------
     // Run openQAReq with the programmable mock
@@ -192,7 +249,9 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         .response_status = http_status,
         .response_gzip = use_gzip,
         .response_body = response_body,
-        .link_header = if (emit_link and section5.len > 0) section5 else null,
+        .response_content_length = response_content_length,
+        .partial_body_len = partial_body_len,
+        .link_header = if (emit_link and link_value.len > 0) link_value else null,
         .use_structured_ct = use_structured_ct,
         .inject_read_failed = inject_read_failed,
     };
@@ -222,4 +281,40 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         &mock,
     ) catch return;
     resp.deinit();
+
+    // ------------------------------------------------------------------
+    // Streaming path: openQARawGet → executeStream
+    // ------------------------------------------------------------------
+    // When ctrl bit 7 is set, also exercise the streaming execution path.
+    // This covers: Content-Length validation, HttpTransferTruncated,
+    // LengthRequired, FileTooLarge, and the pre-stream retry loop in
+    // executeStream — none of which are reachable via openQAReq/execute.
+    if (use_streaming) {
+        // Reset mock state for the second call (attempt counter, scripted index).
+        mock.attempt = 0;
+        mock.response = undefined;
+        // Disable gzip for streaming (executeStream sets accept_gzip=false).
+        mock.response_gzip = false;
+        // Keep inject_read_failed for the streaming path too.
+
+        var discard_buf: [4096]u8 = undefined;
+        var stream_writer: std.Io.Writer = .fixed(&discard_buf);
+        var cl_out: ?u64 = null;
+
+        _ = zoqa.openQARawGet(
+            "http://localhost",
+            raw_path_query,
+            .{
+                .allocator = allocator,
+                .credentials = creds,
+                .size_limit = size_limit,
+                .quiet = true,
+                .retries = 3,
+                .retry_sleep_s = 0,
+            },
+            &mock,
+            &stream_writer,
+            &cl_out,
+        ) catch return;
+    }
 }

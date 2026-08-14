@@ -228,6 +228,46 @@ pub fn findCredentials(
     openqa_config_dir: ?[]const u8,
     home_dir: ?[]const u8,
 ) !?Credentials {
+    return findCredentialsWith(allocator, hostname, openqa_config_dir, home_dir, readFileFromFs);
+}
+
+/// Read a file from the real filesystem (default reader for `findCredentialsWith`).
+fn readFileFromFs(allocator: std.mem.Allocator, path: []const u8) anyerror![]u8 {
+    return std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+}
+
+/// Signature for a function that reads a file's contents given its path.
+/// The returned slice is owned by the caller (must be freed with `allocator`).
+/// Used by `findCredentialsWith` to abstract filesystem access for testing.
+pub const ReadFileFn = *const fn (std.mem.Allocator, []const u8) anyerror![]u8;
+
+/// Like `findCredentials`, but accepts a custom file-reading function.
+///
+/// Production code calls `findCredentials` (which passes `readFileFromFs`).
+/// Fuzz harnesses pass a function that returns INI content from an in-memory
+/// buffer, avoiding filesystem I/O in the AFL++ persistent-mode hot loop.
+///
+/// Parameters:
+///   - `allocator`: Used for path construction, file I/O, and result allocation.
+///   - `hostname`: The INI section name to look up (e.g. `"openqa.opensuse.org"`).
+///   - `openqa_config_dir`: Value of `$OPENQA_CONFIG`, or `null` if unset.
+///   - `home_dir`: Value of `$HOME`/`$USERPROFILE`, or `null` if unset.
+///   - `read_file`: Function to read a file given its path. Called for each
+///     candidate config path in search order; errors are silently skipped
+///     (matching the file-not-found behavior of the default reader).
+///
+/// Returns: A `Credentials` struct with owned key/secret (caller must call
+///   `.deinit()`), or `null` if no config file contains a matching section.
+///
+/// Errors:
+///   - `OutOfMemory` — allocator failure.
+pub fn findCredentialsWith(
+    allocator: std.mem.Allocator,
+    hostname: []const u8,
+    openqa_config_dir: ?[]const u8,
+    home_dir: ?[]const u8,
+    read_file: ReadFileFn,
+) !?Credentials {
     const env_config = if (openqa_config_dir) |p|
         try std.fs.path.join(allocator, &.{ p, "client.conf" })
     else
@@ -249,7 +289,7 @@ pub fn findCredentials(
 
     for (search_paths) |path_opt| {
         if (path_opt) |path| {
-            const content = std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024) catch continue;
+            const content = read_file(allocator, path) catch continue;
             defer allocator.free(content);
 
             if (try parseIni(allocator, content, hostname)) |creds| {
