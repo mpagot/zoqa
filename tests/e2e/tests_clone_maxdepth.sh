@@ -49,8 +49,10 @@ _cancel_cloned_jobs() {
 	for impl in perl zig; do
 		local id
 		for id in $(grep -oP '(?<=tests/)\d+' "$LOG_DIR/${tag}_${impl}_stdout.log" 2>/dev/null || true); do
-			[[ -n "$id" ]] && container_exec openqa-cli api --host http://localhost \
-				-X POST "jobs/$id/cancel" >/dev/null 2>&1 || true
+			if [[ -n "$id" ]]; then
+				container_exec openqa-cli api --host http://localhost \
+					-X POST "jobs/$id/cancel" >/dev/null 2>&1 || true
+			fi
 		done
 	done
 }

@@ -94,6 +94,9 @@ fi
 echo "--- Test CLO-111: Skip generated UEFI variables asset (cloned with parent) ---"
 
 # Seeding linked parent (publishes) and child (consumes) jobs
+if [[ "${DRY_RUN:-false}" == "true" ]]; then
+	echo "[DRY-RUN] Skipping CLO-111 fixture seeding and assertions (requires live container)"
+else
 YAML_111="---
 products:
   example:
@@ -180,6 +183,7 @@ else
 
 	container_exec rm -rf "$ASSET_DIR_111_PERL" "$ASSET_DIR_111_ZIG"
 fi
+fi # DRY_RUN guard
 
 
 # -----------------------------------------------------------------------------
