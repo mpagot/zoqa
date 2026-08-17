@@ -1,0 +1,68 @@
+# D3 — User interaction: terminal user driving the two executables and their subcommands.
+# Use-case map style: the user picks a tool and a subcommand; everything else is plumbing.
+
+direction: right
+
+user: "Operator" {
+  shape: person
+  style.fill: "#f3e5f5"
+}
+
+term: "Terminal (zsh/bash)" {
+  shape: rectangle
+  style.fill: "#ede7f6"
+}
+
+env: "Environment\n(OPENQA_HOST, KEY, SECRET,\nOPENQA_RETRY_*, OPENQA_TIMEOUT)" {
+  shape: page
+  style.fill: "#f3e5f5"
+}
+
+conf: "~/.config/openqa/client.conf" {
+  shape: document
+  style.fill: "#f3e5f5"
+}
+
+zoqa: "zoqa" {
+  shape: rectangle
+  style.fill: "#ce93d8"
+
+  api: "api\nGET/POST any path"
+  archive: "archive\ndownload job assets"
+  monitor: "monitor\nwait for job results"
+  schedule: "schedule\nPOST /api/v1/isos"
+}
+
+clone: "zoqa-clone-job" {
+  shape: rectangle
+  style.fill: "#ce93d8"
+  body: "Walks dependency graph\nand reposts job(s) to target host"
+}
+
+stdout: "stdout / stderr\nexit code" {
+  shape: page
+  style.fill: "#e8f5e9"
+}
+
+server: "openQA REST API" {
+  shape: cylinder
+  style.fill: "#ffe082"
+}
+
+user -> term: "types command"
+term -> zoqa: "argv"
+term -> clone: "argv"
+env -> zoqa: "read via std.process"
+env -> clone: "read via std.process"
+conf -> zoqa: "read on startup"
+conf -> clone: "read on startup"
+
+zoqa.api -> server: "openQAReq"
+zoqa.archive -> server: "openQARawGet + openQAReq"
+zoqa.monitor -> server: "polling GET"
+zoqa.schedule -> server: "POST + optional poll"
+clone.body -> server: "GET deps,\nPOST cloned jobs"
+
+zoqa -> stdout: "results / errors"
+clone -> stdout: "cloned ids / errors"
+stdout -> user: "human reads"

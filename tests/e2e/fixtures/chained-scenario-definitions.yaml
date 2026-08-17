@@ -1,0 +1,21 @@
+---
+# Two-job chained dependency: chain_child waits for chain_parent.
+# Both run the default boot.pm test (cirros-distri dispatch).
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  chain_parent:
+    product: "example"
+    machine: "64bit"
+  chain_child:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "chain_parent"

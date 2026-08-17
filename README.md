@@ -9,7 +9,7 @@
 <p align="center">
   A fast, statically linked reimplementation of
   <a href="https://github.com/os-autoinst/openQA"><code>openqa-cli</code></a>
-  and its companion scripts — written in Zig.
+  and friends, written in Zig.
 </p>
 
 <p align="center">

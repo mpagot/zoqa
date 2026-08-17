@@ -1,0 +1,93 @@
+products:
+  example:
+    distri: "example"
+    flavor: "DVD"
+    arch: "x86_64"
+    version: '0'
+machines:
+  64bit:
+    backend: "qemu"
+job_templates:
+  layer_a:
+    product: "example"
+    machine: "64bit"
+  layer_b:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_a"
+  layer_c:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_b"
+  layer_d:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_c"
+  layer_e:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_d"
+  layer_f:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_e"
+  layer_g:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_f"
+  layer_h:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_g"
+  layer_i:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_h"
+  layer_l:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_i"
+  layer_m:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_l"
+  layer_n:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_m"
+  layer_o:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_n"
+  layer_p:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_o"
+  layer_q:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_p"
+  layer_r:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_q"
+  layer_s:
+    product: "example"
+    machine: "64bit"
+    settings:
+      START_AFTER_TEST: "layer_r"

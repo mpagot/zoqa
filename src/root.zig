@@ -27,6 +27,13 @@ const std = @import("std");
 const testing = std.testing;
 
 // ---------------------------------------------------------------------------
+// Tier 0 : Pure utilities (no I/O, no deps beyond stdlib)
+// ---------------------------------------------------------------------------
+
+pub const url = @import("url.zig");
+pub const clone_job = @import("clone_job.zig");
+
+// ---------------------------------------------------------------------------
 // Tier 1 : Configuration & auth
 // ---------------------------------------------------------------------------
 
@@ -45,6 +52,7 @@ pub const CallOptions = http_client.CallOptions;
 pub const RawGetOptions = http_client.RawGetOptions;
 pub const openQAReq = http_client.openQAReq;
 pub const openQARawGet = http_client.openQARawGet;
+pub const openQADownloadToFile = http_client.openQADownloadToFile;
 
 // ---------------------------------------------------------------------------
 // Tier 3 : Response parsers (defined here; pure stdlib, no zoqa-internal deps)
@@ -230,6 +238,8 @@ test "re-exports: APIResponse accessible via zoqa" {
 // See https://github.com/ziglang/zig/issues/10018.
 // ---------------------------------------------------------------------------
 test {
+    _ = @import("url.zig");
+    _ = @import("clone_job.zig");
     _ = @import("auth.zig");
     _ = @import("config.zig");
     _ = @import("http_client.zig");

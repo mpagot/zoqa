@@ -1,5 +1,5 @@
 // Fuzz harness for the INI config parser and host resolver
-// (src/config.zig: parseIni, resolveHost).
+// (src/config.zig: findCredentialsWith → parseIni, resolveHost).
 //
 // ---------------------------------------------------------------------------
 // Corpus format
@@ -17,7 +17,9 @@
 //   bit 2 (0x04): flag_odn  → resolves to "https://openqa.debian.net"
 //   remaining bytes: hostname string passed to resolveHost as host_arg
 //
-// Section 2: INI content fed verbatim to parseIni.
+// Section 2: INI content exercised through the full findCredentials path.
+//   A custom in-memory ReadFileFn returns the INI content directly,
+//   avoiding filesystem I/O in the AFL++ persistent-mode hot loop.
 //
 // If no "---" separator is found, the entire input is used as INI content
 // with an empty hostname (exercises the null host_arg / localhost-default branch).
@@ -39,6 +41,24 @@
 //
 const std = @import("std");
 const config = @import("zoqa").config;
+
+// ---------------------------------------------------------------------------
+// In-memory ReadFileFn for findCredentialsWith
+// ---------------------------------------------------------------------------
+//
+// The fuzz input's INI content is stored in a global slice (set per
+// iteration in zig_fuzz_test). The readFile function returns a copy
+// of it for any path, simulating a filesystem where every config file
+// has the same fuzzed content. This exercises the parseIni code path
+// at full speed without disk I/O.
+
+var fuzz_ini_content: []const u8 = "";
+
+fn readFileFromFuzzInput(allocator: std.mem.Allocator, _: []const u8) anyerror![]u8 {
+    const copy = try allocator.alloc(u8, fuzz_ini_content.len);
+    @memcpy(copy, fuzz_ini_content);
+    return copy;
+}
 
 pub export fn zig_fuzz_init() void {}
 
@@ -71,17 +91,28 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     } else |_| {}
 
     // ---------------------------------------------------------------------------
-    // Target 2: parseIni — exercises section parsing, key/value extraction,
-    //           comment handling, and hostname matching
+    // Target 2: findCredentialsWith — exercises the full credential lookup
+    //           pipeline: path construction → file reading (mocked) → parseIni
+    //           → section matching → key/value extraction → Credentials.
+    //
+    // Uses an in-memory ReadFileFn that returns the fuzz INI content for any
+    // path, keeping the persistent-mode loop free of filesystem I/O.
     //
     // When host_arg is null, use "localhost" as the lookup hostname so the
     // section-matching logic is still exercised.
     // ---------------------------------------------------------------------------
     const lookup_host = host_arg orelse "localhost";
-    if (config.parseIni(allocator, ini_content, lookup_host)) |creds_opt| {
+    fuzz_ini_content = ini_content;
+
+    if (config.findCredentialsWith(
+        allocator,
+        lookup_host,
+        "/fuzz/config", // non-null so the OPENQA_CONFIG search path is exercised
+        "/fuzz/home", // non-null so the HOME search path is exercised
+        readFileFromFuzzInput,
+    )) |creds_opt| {
         if (creds_opt) |creds| {
-            allocator.free(creds.key);
-            allocator.free(creds.secret);
+            creds.deinit();
         }
     } else |_| {}
 }

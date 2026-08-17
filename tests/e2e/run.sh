@@ -45,8 +45,9 @@ OPTIONS:
   --suites NAMES      Comma-separated list of suite names to run (no .sh
                       extension). Valid names: core, auth, data, output,
                       robustness, retry_knobs, archive, monitor, schedule,
-                      help, stress, perf. Omit or use 'all' to run all suites.
-                      Pass an empty string to skip all tests (e.g. --suites "").
+                      help, clone_smoke, clone_single, clone_topology,
+                      clone_maxdepth, stress, perf. Omit or use 'all' to run
+                      all suites. Pass an empty string to skip all tests.
 
 ENVIRONMENT VARIABLES:
   E2E_STORAGE_KEEP_FREE_RATIO   isotovideo disk-space check threshold.
@@ -110,8 +111,7 @@ TEARDOWN_ARGS=()
 # -----------------------------------------------------------------------------
 # Preflight Check
 # -----------------------------------------------------------------------------
-# shellcheck disable=SC2043
-for _bin in "zig-out/bin/zoqa" ; do
+for _bin in "zig-out/bin/zoqa" "zig-out/bin/zoqa-clone-job"; do
 	if [[ ! -f "$_bin" ]]; then
 		echo "Error: $_bin not found. Please run 'zig build' first." >&2
 		exit 1
@@ -158,6 +158,7 @@ _print_bin_info() {
 }
 
 _print_bin_info "zoqa          " "zig-out/bin/zoqa"
+_print_bin_info "zoqa-clone-job" "zig-out/bin/zoqa-clone-job"
 unset -f _print_bin_info
 
 # Podman sanity check — verify podman is usable before spending time on the

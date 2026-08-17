@@ -331,3 +331,82 @@ register_deletable_asset() {
 		echo "$asset_id"
 	fi
 }
+
+# ===========================================================================
+# Fault Proxy Helpers (Stateful Reverse Proxy for testing retry logic)
+# ===========================================================================
+FAULTPROXY_PORT="9797"
+FAULTPROXY_COUNT_FILE="/tmp/faultproxy_counts.txt"
+FAULTPROXY_LOG="/tmp/faultproxy_proxy.log"
+FAULTPROXY_SCRIPT="/app/tests/e2e/fixtures/faultproxy.py"
+
+# Usage: start_faultproxy [FAIL_TIMES] [FAULT_MODE] [FAULT_PATH] [PARTIAL_BYTES]
+# Defaults: FAIL_TIMES=2, FAULT_MODE=503, FAULT_PATH=/tests/, PARTIAL_BYTES=64
+start_faultproxy() {
+	local fail_times="${1:-2}"
+	local mode="${2:-503}"
+	local fault_path="${3:-/tests/}"
+	local partial_bytes="${4:-64}"
+
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] start_faultproxy $fail_times $mode $fault_path $partial_bytes"
+		return 0
+	fi
+
+	# Kill any leftover proxy from a previous sub-test.
+	# Pattern anchored to ^python3 so pkill never matches the bash -c process
+	# that runs this very pkill command (which would otherwise exit 137).
+	container_exec bash -c 'pkill -9 -f "^python3 .*faultproxy" 2>/dev/null || true'
+	container_exec bash -c "truncate -s 0 ${FAULTPROXY_COUNT_FILE} 2>/dev/null || true"
+
+	# Use podman exec -d (detached) so this call returns immediately.
+	# container_exec blocks until all descendants exit on cgroup-v2 systems.
+	podman exec -d "$CONTAINER_NAME" bash -c \
+		"python3 ${FAULTPROXY_SCRIPT} \
+		 --port ${FAULTPROXY_PORT} \
+		 --backend http://127.0.0.1:80 \
+		 --fault-path ${fault_path} \
+		 --fault-mode ${mode} \
+		 --fail-times ${fail_times} \
+		 --partial-bytes ${partial_bytes} \
+		 --count-file ${FAULTPROXY_COUNT_FILE} \
+		 >${FAULTPROXY_LOG} 2>&1"
+	sleep 1 # wait for the proxy socket to be ready
+}
+
+# Stop the proxy process.
+stop_faultproxy() {
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] stop_faultproxy"
+		return 0
+	fi
+	container_exec bash -c 'pkill -9 -f "^python3 .*faultproxy" 2>/dev/null || true'
+}
+
+# Get proxy hit count for the given path pattern.
+get_faultproxy_hits() {
+	local pattern=$1
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "0"
+		return 0
+	fi
+	container_exec bash -c \
+		"grep -c '${pattern}' ${FAULTPROXY_COUNT_FILE} 2>/dev/null || echo 0"
+}
+
+# Dump the fault proxy log file for troubleshooting in case of test failures.
+dump_faultproxy_logs() {
+	echo "=== FAULT PROXY LOGS (${FAULTPROXY_LOG}) ===" >&2
+	container_exec cat "${FAULTPROXY_LOG}" 2>/dev/null || echo "(no proxy log found)" >&2
+	echo "============================================" >&2
+}
+
+# Reset the proxy in-memory hit counts by truncating its log file.
+# Works via the self-resetting file check, avoiding slow and flaky process restarts.
+reset_faultproxy() {
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] reset_faultproxy"
+		return 0
+	fi
+	container_exec bash -c "truncate -s 0 ${FAULTPROXY_COUNT_FILE} 2>/dev/null || true"
+}

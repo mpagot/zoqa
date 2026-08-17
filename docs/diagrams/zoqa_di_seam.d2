@@ -1,0 +1,55 @@
+# D4 — Dependency injection seam: one comptime-typed `client: anytype` parameter,
+# three concrete callers. Workflows never name a concrete HTTP type, so the same
+# code path drives production, deterministic unit tests, and AFL fuzz harnesses.
+
+direction: right
+
+callers: "Callers — each binds client to a different concrete type" {
+  style.fill: "#fff8e1"
+
+  prod: "main.zig / clone_job_main.zig\nstd.http.Client\n(real TCP + TLS)" {
+    style.fill: "#ede7f6"
+    style.stroke: "#7b1fa2"
+  }
+  tests: "unit tests\nMockClient (sequenced responses)\nno sockets" {
+    style.fill: "#ede7f6"
+    style.stroke: "#7b1fa2"
+  }
+  fuzz: "AFL harnesses\nzoqa-fuzz-request / -execute / -schedule\n(malformed bodies + headers)" {
+    style.fill: "#ede7f6"
+    style.stroke: "#7b1fa2"
+  }
+}
+
+seam: "Library workflow API — comptime-generic over `client`" {
+  style.fill: "#fff8e1"
+
+  api: "runSchedule(alloc, client, host, params, opts)\nrunMonitor (alloc, client, host, ids, opts)\nrunArchive (alloc, client, host, job_id, opts)\nopenQAReq  (host, path, opts, client)" {
+    style.fill: "#fff3cd"
+    style.stroke: "#b08800"
+  }
+}
+
+contract: "Duck-typed client contract" {
+  style.fill: "#fff8e1"
+
+  c1: "client.execute(request)\n→ Response" {
+    style.fill: "#e3f2fd"
+    style.stroke: "#1976d2"
+  }
+  c2: "client.fetch(...)\nfor streaming bodies" {
+    style.fill: "#e3f2fd"
+    style.stroke: "#1976d2"
+  }
+  c3: "client.deinit()\ncalled via defer in caller" {
+    style.fill: "#e3f2fd"
+    style.stroke: "#1976d2"
+  }
+}
+
+callers.prod  -> seam.api
+callers.tests -> seam.api
+callers.fuzz  -> seam.api
+seam.api -> contract.c1
+seam.api -> contract.c2
+seam.api -> contract.c3

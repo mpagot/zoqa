@@ -2,7 +2,7 @@
   "JobGroups": [
     {
       "group_name": "example",
-      "template": "scenarios:\n  x86_64:\n    example-DVD-0:\n      - simple_boot:\n          machine: 64bit\n          priority: 50\nproducts:\n  example-DVD-0:\n    distri: example\n    flavor: DVD\n    version: \"0\"\n"
+      "template": "scenarios:\n  x86_64:\n    example-DVD-0:\n      - simple_boot:\n          machine: 64bit\n          priority: 50\n      - chain_parent:\n          machine: 64bit\n      - chain_child:\n          machine: 64bit\n      - fanout_parent:\n          machine: 64bit\n      - fanout_child_a:\n          machine: 64bit\n      - fanout_child_b:\n          machine: 64bit\n      - fanout_child_c:\n          machine: 64bit\n      - layer_grandparent:\n          machine: 64bit\n      - layer_parent:\n          machine: 64bit\n      - layer_child:\n          machine: 64bit\n      - diamond_root:\n          machine: 64bit\n      - diamond_left:\n          machine: 64bit\n      - diamond_right:\n          machine: 64bit\n      - diamond_merge:\n          machine: 64bit\n      - parallel_parent:\n          machine: 64bit\n      - parallel_child:\n          machine: 64bit\nproducts:\n  example-DVD-0:\n    distri: example\n    flavor: DVD\n    version: \"0\"\n"
     }
   ],
   "Machines": [
@@ -41,6 +41,66 @@
       "settings": [
         { "key": "DESKTOP", "value": "gnome" }
       ]
+    },
+    {
+      "name": "chain_parent",
+      "settings": []
+    },
+    {
+      "name": "chain_child",
+      "settings": []
+    },
+    {
+      "name": "fanout_parent",
+      "settings": []
+    },
+    {
+      "name": "fanout_child_a",
+      "settings": []
+    },
+    {
+      "name": "fanout_child_b",
+      "settings": []
+    },
+    {
+      "name": "fanout_child_c",
+      "settings": []
+    },
+    {
+      "name": "layer_grandparent",
+      "settings": []
+    },
+    {
+      "name": "layer_parent",
+      "settings": []
+    },
+    {
+      "name": "layer_child",
+      "settings": []
+    },
+    {
+      "name": "diamond_root",
+      "settings": []
+    },
+    {
+      "name": "diamond_left",
+      "settings": []
+    },
+    {
+      "name": "diamond_right",
+      "settings": []
+    },
+    {
+      "name": "diamond_merge",
+      "settings": []
+    },
+    {
+      "name": "parallel_parent",
+      "settings": []
+    },
+    {
+      "name": "parallel_child",
+      "settings": []
     }
   ],
   "Products": [

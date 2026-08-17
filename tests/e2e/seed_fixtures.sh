@@ -162,15 +162,45 @@ fi
 
 # ---------------------------------------------------------------------------
 # 6. Cache scenario-definitions.yaml for use by lib.sh schedule_job()
+#
+# In openQA, scheduling a set of tests isn't just about scheduling single standalone jobs;
+# it involves orchestrating complex multi-job   dependencies (topologies) such as:
+#   * Chained Jobs: Job B starts only after Job A finishes successfully (_START_AFTER).
+#   * Fan-out: A parent job triggers multiple parallel sibling child jobs.
+#   * Multi-layer (Ancestral): Multi-depth dependency chains (Grandparent → Parent → Child).
+#   * Diamond / Merge Topologies: Two independent branch jobs (Left and Right)
+#     merging back into a single terminal synchronization point (Merge).
+#   * Parallel clusters: Simultaneous multi-worker execution.
+#
+#  To schedule these configurations via openQA’s ISO-triggering endpoint (POST /api/v1/isos),
+#  you must feed the API a YAML payload containing the
+#  Scenario Definitions (representing your test templates and structures).
+#
+#  Copied scenarios will be used to trigger groups of jobs by schedule_topology_jobs
 # ---------------------------------------------------------------------------
-log "Caching scenario-definitions.yaml to $_SCENARIO_YAML_PATH..."
-if [[ "$DRY_RUN" == "false" ]]; then
-	[[ -f "$FIXTURE_DIR/scenario-definitions.yaml" ]] ||
-		die "scenario-definitions.yaml not found at $FIXTURE_DIR"
-	cp "$FIXTURE_DIR/scenario-definitions.yaml" "$_SCENARIO_YAML_PATH"
-else
-	echo "[DRY-RUN] cp $FIXTURE_DIR/scenario-definitions.yaml $_SCENARIO_YAML_PATH"
-fi
+log "Caching scenario-definitions to container storage..."
+[[ "$DRY_RUN" == "true" ]] || [[ -f "$FIXTURE_DIR/scenario-definitions.yaml" ]] || \
+	die "scenario-definitions.yaml not found at $FIXTURE_DIR"
+
+for src_path in "$FIXTURE_DIR"/*scenario-definitions.yaml; do
+	[[ -f "$src_path" ]] || continue
+	filename=$(basename "$src_path")
+
+	# Determine destination path
+	if [[ "$filename" == "scenario-definitions.yaml" ]]; then
+		dest_path="$_SCENARIO_YAML_PATH"
+	else
+		# Map e.g. chained-scenario-definitions.yaml -> /tmp/chained-scenario.yaml
+		base_name="${filename%-definitions.yaml}"
+		dest_path="/tmp/${base_name}.yaml"
+	fi
+
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] cp $src_path $dest_path"
+	else
+		cp "$src_path" "$dest_path"
+	fi
+done
 
 # ---------------------------------------------------------------------------
 # 7. Write seeded IDs to env file
@@ -182,6 +212,25 @@ else
 	cat >"$IDS_FILE" <<EOF
 GROUP_ID=$GROUP_ID
 EOF
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Setup Additional Workers
+# ---------------------------------------------------------------------------
+log "Setting up additional openQA worker (instance 2)..."
+if [[ "$DRY_RUN" == "false" ]]; then
+	cat <<EOF >> /etc/openqa/workers.ini
+
+[2]
+WORKER_CLASS = qemu_x86_64,qemu_i686,qemu_i586
+EOF
+	install -d -m 0755 -o _openqa-worker /var/lib/openqa/pool/2
+	su _openqa-worker -c "/usr/share/openqa/script/worker --instance 2 &"
+else
+	echo "[DRY-RUN] Setting up worker instance 2..."
+fi
+
+if [[ "$DRY_RUN" == "false" ]]; then
 	log "Seeding complete."
 	cat "$IDS_FILE"
 fi
