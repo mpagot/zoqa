@@ -71,6 +71,18 @@ to look for are:
 # Produces all the test binaries in zig-out/
 ```
 
+#### Custom AFL++ Directory Override
+
+By default, the build script looks for AFL++ under `vendor/aflplusplus`. If you have AFL++ built in another directory, you can specify its path via the `AFL_DIR` environment or `make` variable:
+
+```sh
+# Using the make target:
+make fuzz-build AFL_DIR=/path/to/aflplusplus
+
+# Or running the build script directly:
+AFL_DIR=/path/to/aflplusplus ./tests/fuzz/build.sh
+```
+
 ## Workflow
 
 ### Minimise the seed corpora
@@ -264,6 +276,18 @@ The `distill.sh` script automates the full post-fuzzing promotion cycle:
 ./tests/fuzz/distill.sh --no-backup
 ```
 
+#### Controlling Step 2 Timeout Options
+
+Individual file size minimisation with `afl-tmin` (Step 2) can take a long time on dense/complex files. You can constrain execution times using two options:
+
+- **Global timeout (`--timeout=<seconds>`):** Derives a per-file timeout by dividing the total budget by the number of files to process (minimum 10s per file limit).
+- **Direct per-file timeout (`--tmin-timeout=<seconds>`):** Enforces a strict, direct timeout of exactly $N$ seconds on every individual file. Files taking less than $N$ seconds finish early without delay, while files taking longer than $N$ seconds are gracefully interrupted (the current unminimized file is kept in the distilled corpus to preserve its coverage path).
+
+```sh
+# Direct 30s limit per file (recommended for schedule)
+./tests/fuzz/distill.sh --tmin-timeout=30 schedule
+```
+
 For each target, `distill.sh` performs five steps:
 
 1. **Distillation (`afl-cmin`):** Extract the smallest subset of queue
@@ -283,6 +307,22 @@ For each target, `distill.sh` performs five steps:
 After promotion, the updated `corpus_<target>/` should be committed to
 Git so that other developers and CI benefit from the machine-discovered
 seeds.
+
+#### Skipping Minimisation (`SKIP_TMIN`)
+
+For complex targets (such as `schedule`), individual file size minimisation with `afl-tmin` can be slow or prone to timeouts if mutated inputs easily cause infinite loops or very long executions. You can bypass this step completely using the `SKIP_TMIN=1` environment variable while still running the initial distillation (`afl-cmin`) and minimized corpus regeneration (`cmin.sh`):
+
+```sh
+SKIP_TMIN=1 ./tests/fuzz/distill.sh schedule
+```
+
+#### Custom AFL++ Directory Override
+
+By default, `distill.sh` and `cmin.sh` look for AFL++ under `vendor/aflplusplus`. If you have AFL++ built in another directory, you can specify its path via the `AFL_DIR` environment variable:
+
+```sh
+AFL_DIR=/path/to/aflplusplus ./tests/fuzz/distill.sh config
+```
 
 ---
 

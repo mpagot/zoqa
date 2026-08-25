@@ -195,7 +195,7 @@ manual-lint:
 # Fuzz
 # -----------------------------------------------------------------------------
 fuzz-build:
-	./tests/fuzz/build.sh
+	AFL_DIR="$(AFL_DIR)" ./tests/fuzz/build.sh
 
 fuzz-sanitize:
 	./tests/fuzz/sanitize_corpus.sh

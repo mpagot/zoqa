@@ -31,7 +31,8 @@ if [[ ! -f "$ROOT/build.zig" ]]; then
 	exit 1
 fi
 
-AFL_DIR="$ROOT/vendor/aflplusplus"
+# Use the AFL_DIR environment variable if provided, otherwise default to vendor/
+AFL_DIR="${AFL_DIR:-$ROOT/vendor/aflplusplus}"
 
 if [[ ! -f "$AFL_DIR/afl-cc" ]]; then
 	echo "error: $AFL_DIR/afl-cc not found." >&2

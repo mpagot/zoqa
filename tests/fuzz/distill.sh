@@ -91,7 +91,7 @@ if [[ ! -f "$ROOT/build.zig" ]]; then
 fi
 
 FUZZ_DIR="$ROOT/tests/fuzz"
-AFL_DIR="$ROOT/vendor/aflplusplus"
+AFL_DIR="${AFL_DIR:-$ROOT/vendor/aflplusplus}"
 
 for tool in afl-cmin afl-tmin; do
 	if [[ ! -f "$AFL_DIR/$tool" ]]; then
@@ -125,6 +125,7 @@ ALL_TARGETS=(config request execute schedule)
 # ---------------------------------------------------------------------------
 NO_BACKUP=0
 GLOBAL_TIMEOUT="" # empty = no timeout
+TMIN_TIMEOUT=""   # empty = no direct per-file timeout
 TMIN_FILES=()     # empty = minimise all files in distilled corpus
 TARGETS=()
 
@@ -141,6 +142,14 @@ for arg in "$@"; do
 		fi
 		GLOBAL_TIMEOUT="$val"
 		;;
+	--tmin-timeout=*)
+		val="${arg#--tmin-timeout=}"
+		if [[ ! "$val" =~ ^[1-9][0-9]*$ ]]; then
+			echo "error: --tmin-timeout requires a positive integer (seconds), got '$val'." >&2
+			exit 1
+		fi
+		TMIN_TIMEOUT="$val"
+		;;
 	--tmin-files=*)
 		tmin_list_file="${arg#--tmin-files=}"
 		if [[ ! -f "$tmin_list_file" ]]; then
@@ -151,7 +160,7 @@ for arg in "$@"; do
 		;;
 	--*)
 		echo "error: unknown option '$arg'." >&2
-		echo "       Usage: $0 [--no-backup] [--timeout=<s>] [--tmin-files=<file>] [targets...]" >&2
+		echo "       Usage: $0 [--no-backup] [--timeout=<s>] [--tmin-timeout=<s>] [--tmin-files=<file>] [targets...]" >&2
 		exit 1
 		;;
 	*)
@@ -195,7 +204,8 @@ fi
 #                              pass the same value as $1 when no promotion occurs)
 #   $3  binary path
 #   $4  global timeout in seconds, or "" for no timeout
-#   $5+ absolute paths of files to minimise
+#   $5  direct per-file timeout in seconds, or "" for no direct timeout
+#   $6+ absolute paths of files to minimise
 #
 # Files that time out are appended to $1/.tmin_timeouts (one path per line).
 # The re-run hint shown to the user references $2 (the final location after
@@ -206,7 +216,8 @@ run_tmin_loop() {
 	local final_corpus_dir="$2"
 	local binary="$3"
 	local budget="$4"
-	shift 4
+	local direct_timeout="$5"
+	shift 5
 	local files=("$@")
 	local total=${#files[@]}
 	local timeouts_file="$corpus_distilled/.tmin_timeouts"
@@ -216,9 +227,14 @@ run_tmin_loop() {
 		return 0
 	fi
 
-	# Derive per-file limit from the global budget.
+	# Derive per-file limit from the direct timeout or global budget.
 	local per_file_timeout=""
-	if [[ -n "$budget" ]]; then
+	if [[ -n "$direct_timeout" ]]; then
+		per_file_timeout="$direct_timeout"
+		echo "    Per-file limit    : ${per_file_timeout}s  (direct --tmin-timeout)"
+		echo "    Files to minimise : ${total}"
+		echo "    Timeout log       : $timeouts_file"
+	elif [[ -n "$budget" ]]; then
 		# Integer division; minimum 10s so afl-tmin has a chance to start.
 		per_file_timeout=$((budget / total))
 		if [[ $per_file_timeout -lt 10 ]]; then
@@ -353,7 +369,7 @@ for target in "${TARGETS[@]}"; do
 
 		echo "--- Step 2 (tmin-files): File minimisation (afl-tmin) ---"
 		# No promotion step in this mode, so final_corpus_dir == corpus_distilled.
-		run_tmin_loop "$corpus_distilled" "$corpus_distilled" "$binary" "$GLOBAL_TIMEOUT" "${resolved_files[@]}" || true
+		run_tmin_loop "$corpus_distilled" "$corpus_distilled" "$binary" "$GLOBAL_TIMEOUT" "$TMIN_TIMEOUT" "${resolved_files[@]}" || true
 		echo ""
 		if [[ $STOP_REQUESTED -eq 1 ]]; then
 			echo "==> Interrupted — skipping remaining target(s)." >&2
@@ -416,7 +432,11 @@ for target in "${TARGETS[@]}"; do
 		tmin_input_files+=("$f")
 	done
 
-	run_tmin_loop "$corpus_distilled" "$corpus_dst" "$binary" "$GLOBAL_TIMEOUT" "${tmin_input_files[@]}" || true
+	if [[ "${SKIP_TMIN:-0}" -ne 1 ]]; then
+		run_tmin_loop "$corpus_distilled" "$corpus_dst" "$binary" "$GLOBAL_TIMEOUT" "$TMIN_TIMEOUT" "${tmin_input_files[@]}" || true
+	else
+		echo "    Skipping individual file minimisation (afl-tmin) as SKIP_TMIN=1 is set."
+	fi
 	echo ""
 
 	if [[ $STOP_REQUESTED -eq 1 ]]; then
