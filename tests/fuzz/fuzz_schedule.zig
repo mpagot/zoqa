@@ -7,13 +7,11 @@
 // Corpus format
 // ---------------------------------------------------------------------------
 //
-// Sections separated by "\x00" (null byte):
+// Sections separated by "\x00" (null byte). Strictly requires at least 2 sections:
 //
 //   Byte 0: option byte (controls scenario mode and HTTP knobs)
-//   Section 0: POST response body (the initial /api/v1/isos response)
-//   Section 1: poll/monitor response body 1 (optional)
-//   Section 2: poll/monitor response body 2 (optional)
-//   ...
+//   Section 0..N-2: scripted POST/poll response bodies (at least 1, the POST response)
+//   Section N-1: fallback response body (always returned after scripted bodies are exhausted)
 //
 // option byte bits:
 //   bit 0 (0x01): enable_monitor — if set, monitor_jobs=true. Exercises
@@ -26,25 +24,23 @@
 //                 to exercise HMAC-SHA1 auth header construction.
 //
 // When monitor_jobs=true and the POST response contains sync IDs, the
-// harness uses scripted bodies: section 1+ become successive responses
-// to the monitor's status-polling requests. Each poll response should
-// be a JSON object like {"state":"done","result":"passed"}.
+// harness uses scripted bodies: Section 0 is the initial POST response,
+// Sections 1..N-2 become successive responses to the monitor's status-polling requests.
+// Each poll response should be a JSON object like {"state":"done","result":"passed"}.
+// The last section (Section N-1) is the fallback response body.
 //
 // When the POST response contains a scheduled_product_id (async path),
-// the harness enters asyncPollAndMonitor. Sections 1+ become poll
-// responses. The last section should produce a terminal state to exit
-// the loop; if sections are exhausted the fallback response_body
-// provides a cancellation exit.
+// the harness enters asyncPollAndMonitor. Sections 1..N-2 become poll
+// responses. The last section (Section N-1) is the fallback response body.
 //
 // ---------------------------------------------------------------------------
 // Safety
 // ---------------------------------------------------------------------------
 //
 // The harness uses poll_interval=0 to eliminate sleep between poll
-// iterations. To prevent infinite loops when the async poll state
-// machine receives non-terminal states indefinitely, the fallback
-// response_body is set to {"status":"cancelled"} — this forces
-// asyncPollAndMonitor to exit after exhausting the scripted sequence.
+// iterations. To prevent infinite loops when the state machine receives non-terminal
+// states indefinitely, the final section (Section N-1) must be a terminal fallback
+// response body (e.g. {"status":"cancelled","state":"cancelled"}).
 //
 // All output goes to a fixed-buffer writer (not stdout) to avoid
 // non-deterministic I/O that would reduce AFL++ stability.
@@ -112,10 +108,13 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         sections[section_count] = payload[start..];
         section_count += 1;
     }
-    if (section_count == 0) return;
+    // Must have at least 2 sections: 1 or more scripted response(s) + 1 fallback response body.
+    if (section_count <= 1) return;
 
-    // sections[0] = POST response body; sections[1..N] = poll/monitor bodies.
-    // All are passed to the mock via next_bodies below.
+    // sections[0..N-1] are the scripted POST/poll response bodies; sections[N-1] is the fallback response body.
+    const fallback_body = sections[section_count - 1];
+    const bodies_count = section_count - 1;
+    const next_bodies_slice = sections[0..bodies_count];
 
     // ------------------------------------------------------------------
     // Configure mock
@@ -129,16 +128,16 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     // If non_200_status, the POST returns 500 (exercises non-2xx path).
     var scripted_statuses: [MAX_SCRIPTED_BODIES + 1]std.http.Status = undefined;
     scripted_statuses[0] = if (non_200_status) .internal_server_error else .ok;
-    for (1..section_count) |i| {
+    for (1..bodies_count) |i| {
         scripted_statuses[i] = .ok;
     }
 
     var mock = ProgrammableMockClient{
         .fail_attempts = if (enable_retries) 1 else 0,
         .response_status = .ok,
-        .response_body = "{\"status\":\"cancelled\"}", // fallback: forces async loop exit
-        .next_bodies = if (section_count > 0) sections[0..section_count] else null,
-        .next_statuses = if (section_count > 0) scripted_statuses[0..section_count] else null,
+        .response_body = fallback_body,
+        .next_bodies = if (bodies_count > 0) next_bodies_slice else null,
+        .next_statuses = if (bodies_count > 0) scripted_statuses[0..bodies_count] else null,
     };
     // Use a fixed-buffer writer to avoid non-deterministic I/O.
     var null_buf: [4096]u8 = undefined;

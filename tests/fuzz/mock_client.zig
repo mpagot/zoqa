@@ -152,7 +152,7 @@ pub const ProgrammableMockClient = struct {
     next_statuses: ?[]const std.http.Status = null,
 
     // Internal state — reset by each call to request().
-    attempt: u8 = 0,
+    attempt: usize = 0,
     scripted_index: usize = 0,
     response: MockResponse = undefined,
 
@@ -161,7 +161,9 @@ pub const ProgrammableMockClient = struct {
             self.attempt += 1;
             return error.ConnectionRefused;
         }
-        self.attempt += 1;
+        // Do not increment self.attempt further once it has reached fail_attempts.
+        // This avoids any integer overflow in infinite loops while ensuring all
+        // subsequent requests succeed on their first try.
 
         // Select body and status: scripted sequence takes precedence.
         const body = if (self.next_bodies) |nb| blk: {
@@ -180,9 +182,11 @@ pub const ProgrammableMockClient = struct {
             break :blk self.response_status;
         } else self.response_status;
 
-        // Advance scripted index after selecting.
-        if (self.next_bodies != null) {
-            self.scripted_index += 1;
+        // Advance scripted index after selecting, but clamp to prevent integer overflow.
+        if (self.next_bodies) |nb| {
+            if (self.scripted_index < nb.len) {
+                self.scripted_index += 1;
+            }
         }
 
         self.response = .{
