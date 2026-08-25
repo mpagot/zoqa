@@ -900,6 +900,100 @@ fn encodeDepsAndApplyOverrides(
     return .{ .final_jobs = final_jobs, .post_body = post_body };
 }
 
+// ---------------------------------------------------------------------------
+// --check-repos: validate maintenance repo reachability
+// ---------------------------------------------------------------------------
+
+/// Validate maintenance repository reachability for --check-repos.
+///
+/// Extracts `INCIDENT_REPO` and `SCC_ADDONS`-derived `*_TEST_REPOS` URLs
+/// from the origin job's settings, issues HTTP GET to each, and aborts
+/// (exit 1) if any returns a non-2xx status or fails to connect.
+///
+/// Matches the Perl `detect_maintenance_update()` behaviour:
+/// - `SKIP_MAINTENANCE_UPDATES=1` → silent bypass.
+/// - URLs with unexpanded `%VAR%` → warn on stderr, skip that URL.
+/// - No retries (single attempt per URL, matching Perl's Mojo::UA default).
+/// - Any non-2xx → abort with list of failing URLs.
+fn checkRepos(
+    allocator: std.mem.Allocator,
+    client: *std.http.Client,
+    settings: []const zoqa.clone_job.SettingPair,
+    verbose: bool,
+) void {
+    const repo_check = zoqa.clone_job.collectRepoUrls(allocator, settings) catch |err| {
+        printStderr("Error: failed to collect repo URLs: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    if (repo_check.skip) {
+        if (verbose) {
+            printStderr("[check-repos] SKIP_MAINTENANCE_UPDATES is set, skipping.\n", .{});
+        }
+        return;
+    }
+
+    // Print warnings for URLs with unexpanded variables
+    for (repo_check.warnings.items) |warning| {
+        printStderr("{s}\n", .{warning});
+    }
+
+    if (repo_check.urls_to_check.items.len == 0) {
+        if (verbose) {
+            printStderr("[check-repos] No repo URLs to check.\n", .{});
+        }
+        return;
+    }
+
+    // Check each URL via HTTP GET (no auth, no retries).
+    // Uses std.http.Client directly — no zoqa library wrappers needed,
+    // since these are external repo URLs (not openQA API endpoints).
+    var failed_urls: std.ArrayList([]const u8) = .empty;
+    for (repo_check.urls_to_check.items) |repo_url| {
+        if (verbose) {
+            printStderr("[check-repos] Checking: {s}\n", .{repo_url});
+        }
+
+        const reachable = isUrlReachable(client, repo_url);
+        if (!reachable) {
+            failed_urls.append(allocator, repo_url) catch {
+                printStderr("Error: allocation failed in checkRepos\n", .{});
+                std.process.exit(1);
+            };
+        }
+    }
+
+    if (failed_urls.items.len > 0) {
+        printStderr("Current job will fail, because the repositories for the below updates are unavailable:\n", .{});
+        for (failed_urls.items) |u| {
+            printStderr("  {s}\n", .{u});
+        }
+        std.process.exit(1);
+    }
+}
+
+/// Issue a single HTTP GET to `url` and return true if the response is 2xx.
+/// Returns false on connection errors or non-2xx status.
+/// No authentication, no retries — matches Perl Mojo::UA default for repo checks.
+///
+/// `client` is duck-typed: production callers pass `*std.http.Client`; tests
+/// can pass a mock exposing the same `request`/`sendBodiless`/`receiveHead`
+/// surface (see the mock clients in http_client.zig / schedule.zig).
+fn isUrlReachable(client: anytype, url_str: []const u8) bool {
+    const uri = std.Uri.parse(url_str) catch return false;
+
+    var req = client.request(.GET, uri, .{}) catch return false;
+    defer req.deinit();
+
+    req.sendBodiless() catch return false;
+
+    var redirect_buf: [4096]u8 = undefined;
+    const response = req.receiveHead(&redirect_buf) catch return false;
+
+    const status_int = @intFromEnum(response.head.status);
+    return (status_int >= 200 and status_int < 300);
+}
+
 /// Output formatting mode for clone results.
 const OutputMode = enum {
     default,
@@ -1451,6 +1545,17 @@ pub fn main() !void {
         clone_opts,
     );
     defer gpa.free(phase2.post_body);
+
+    // --check-repos: validate maintenance repo reachability before proceeding.
+    // Uses the origin job's settings (first entry = the user-specified job,
+    // with CLI overrides applied). Must run after overrides are applied, before
+    // asset download, matching Perl's detect_maintenance_update() call site.
+    if (args.check_repos) {
+        // Use the settings arena: the collected URL/warning lists are ephemeral
+        // and freed as a unit when the arena is torn down, so checkRepos needs
+        // no cleanup of its own.
+        checkRepos(arena_alloc, &client, phase2.final_jobs.items[0].settings.items, args.verbose);
+    }
 
     // --export-command: print the equivalent zoqa api command and exit.
     if (args.export_command) {
