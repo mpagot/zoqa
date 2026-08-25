@@ -1891,4 +1891,104 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-set +x  # end of CLO-98–99 trace
+# =============================================================================
+# CLO-115 to CLO-120: --check-repos tests
+# =============================================================================
+echo "--- Tests CLO-115 to CLO-120: --check-repos verification ---"
+
+# Ensure a basic job exists
+ensure_basic_job
+
+# Helper for TDD-phase non-zero assertions: Perl is the strict oracle (failure counted),
+# Zig is informational until --check-repos is implemented.
+assert_oracle_nonzero() {
+	local t="$1" desc="$2"
+	if [[ "$_PERL_EXIT" -ne 0 ]]; then
+		echo "PASS: ${desc} Perl exits non-zero (oracle)"
+	else
+		echo "FAIL: ${desc} Perl exited 0 (expected non-zero)"
+		cat "$LOG_DIR/${t}_perl_stderr.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+	if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+		echo "PASS: ${desc} Zig exits non-zero"
+	else
+		echo "INFO: ${desc} Zig exited 0 (TDD phase, will pass once implemented)"
+	fi
+}
+
+# =============================================================================
+# WORKAROUND: Fix upstream openQA Perl openqa-clone-job issue poo#206076
+# where the SUSE-specific detect_maintenance_update check crashes because:
+#   1. It tries to call get() on $url_handler->{ua} (which is undefined), while
+#      the actual client object is stored under the $url_handler->{remote} key.
+#   2. It tries to call ->is_success directly on the Mojo::Transaction::HTTP
+#      transaction object returned by get(), which lacks that method (it resides
+#      on the response object, i.e., ->res->is_success).
+# =============================================================================
+if [[ "$DRY_RUN" != "true" ]]; then
+	echo "  [workaround] Patching upstream openQA CloneJobSUSE.pm in container to prevent ua get crash..."
+	container_exec sed -i "s/my \$ua = \$url_handler->{ua};/my \$ua = \$url_handler->{remote};/" /usr/share/openqa/lib/OpenQA/Script/CloneJobSUSE.pm
+	container_exec sed -i "s/unless \$ua->get(\$incident)->is_success/unless \$ua->get(\$incident)->res->is_success/" /usr/share/openqa/lib/OpenQA/Script/CloneJobSUSE.pm
+fi
+
+# CLO-115 + CLO-116 share a single faultproxy instance: /repo/bad/ always returns 404,
+# all other /repo/ and /ibs/ paths serve a static 200 via the proxy's mock handler.
+start_faultproxy 99 404 /repo/bad/
+
+# CLO-115: All repos reachable
+echo "--- Test CLO-115: --check-repos all repos reachable ---"
+tag="clo-115"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} INCIDENT_REPO=http://127.0.0.1:${FAULTPROXY_PORT}/repo/good/,http://127.0.0.1:${FAULTPROXY_PORT}/ibs/SUSE:/Maintenance:/12345/repo/" \
+	"$ZIG_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} INCIDENT_REPO=http://127.0.0.1:${FAULTPROXY_PORT}/repo/good/,http://127.0.0.1:${FAULTPROXY_PORT}/ibs/SUSE:/Maintenance:/12345/repo/"
+assert_capture_exits "$tag" 0
+
+# CLO-116: One repo unreachable (404)
+echo "--- Test CLO-116: --check-repos with unreachable (404) repo ---"
+tag="clo-116"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} INCIDENT_REPO=http://127.0.0.1:${FAULTPROXY_PORT}/repo/good/,http://127.0.0.1:${FAULTPROXY_PORT}/repo/bad/" \
+	"$ZIG_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} INCIDENT_REPO=http://127.0.0.1:${FAULTPROXY_PORT}/repo/good/,http://127.0.0.1:${FAULTPROXY_PORT}/repo/bad/"
+stop_faultproxy
+assert_impl_log_pattern "$tag" "perl" "stderr" "will fail, because the repositories for the below updates are unavailable" "Perl lists unavailable repos in stderr"
+assert_oracle_nonzero "$tag" "CLO-116 --check-repos with 404 repo:"
+
+# CLO-117: SKIP_MAINTENANCE_UPDATES=1 bypasses check
+echo "--- Test CLO-117: SKIP_MAINTENANCE_UPDATES=1 bypasses check ---"
+tag="clo-117"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} SKIP_MAINTENANCE_UPDATES=1 INCIDENT_REPO=http://127.0.0.1:1/dead/" \
+	"$ZIG_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} SKIP_MAINTENANCE_UPDATES=1 INCIDENT_REPO=http://127.0.0.1:1/dead/"
+assert_capture_exits "$tag" 0
+
+# CLO-118: Unexpanded variables are warned and skipped
+echo "--- Test CLO-118: unexpanded variable warns and skips check ---"
+tag="clo-118"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} INCIDENT_REPO=http://%MY_UNRESOLVED_VAR%/repo/" \
+	"$ZIG_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} INCIDENT_REPO=http://%MY_UNRESOLVED_VAR%/repo/"
+assert_capture_exits "$tag" 0
+assert_impl_log_pattern "$tag" "perl" "stderr" "contains unexpanded variables: MY_UNRESOLVED_VAR" "Perl warns about unexpanded variable"
+
+# CLO-119 + CLO-120 share a single faultproxy instance: same config as CLO-115/116.
+start_faultproxy 99 404 /repo/bad/
+
+# CLO-119: SCC_ADDONS with multiple reachable test repos
+echo "--- Test CLO-119: SCC_ADDONS multiple reachable test repos ---"
+tag="clo-119"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} SCC_ADDONS=we,sdk WE_TEST_REPOS=http://127.0.0.1:${FAULTPROXY_PORT}/repo/good/ SDK_TEST_REPOS=http://127.0.0.1:${FAULTPROXY_PORT}/ibs/SUSE:/Maintenance:/12345/repo/" \
+	"$ZIG_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} SCC_ADDONS=we,sdk WE_TEST_REPOS=http://127.0.0.1:${FAULTPROXY_PORT}/repo/good/ SDK_TEST_REPOS=http://127.0.0.1:${FAULTPROXY_PORT}/ibs/SUSE:/Maintenance:/12345/repo/"
+assert_capture_exits "$tag" 0
+
+# CLO-120: SCC_ADDONS with an unreachable test repo
+echo "--- Test CLO-120: SCC_ADDONS with unreachable test repo ---"
+tag="clo-120"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} SCC_ADDONS=we,sdk WE_TEST_REPOS=http://127.0.0.1:${FAULTPROXY_PORT}/repo/good/ SDK_TEST_REPOS=http://127.0.0.1:${FAULTPROXY_PORT}/repo/bad/" \
+	"$ZIG_CLONE_EXE --check-repos --from http://localhost --skip-download ${JOB_ID} SCC_ADDONS=we,sdk WE_TEST_REPOS=http://127.0.0.1:${FAULTPROXY_PORT}/repo/good/ SDK_TEST_REPOS=http://127.0.0.1:${FAULTPROXY_PORT}/repo/bad/"
+stop_faultproxy
+assert_oracle_nonzero "$tag" "CLO-120 SCC_ADDONS with unreachable test repo:"
+
+set +x  # end of CLO-115–120

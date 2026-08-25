@@ -103,6 +103,17 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._inject_fault(path, attempt)
                 return
 
+        # Serve static mock repository content for /ibs/ or /repo/ paths
+        if path.startswith("/ibs/") or path.startswith("/repo/"):
+            self.send_response(200)
+            self.send_header("content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"mock repo content\n")
+            self.wfile.flush()
+            sys.stderr.write("[proxy] static 200 for repo: %s\n" % path)
+            sys.stderr.flush()
+            return
+
         # Forward to backend
         self._forward(method, path)
 
