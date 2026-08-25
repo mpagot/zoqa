@@ -48,7 +48,7 @@ if [[ ! -f "$ROOT/build.zig" ]]; then
 fi
 
 FUZZ_DIR="$ROOT/tests/fuzz"
-AFL_DIR="$ROOT/vendor/aflplusplus"
+AFL_DIR="${AFL_DIR:-$ROOT/vendor/aflplusplus}"
 
 if [[ ! -f "$AFL_DIR/afl-fuzz" ]]; then
 	echo "error: $AFL_DIR/afl-fuzz not found." >&2
