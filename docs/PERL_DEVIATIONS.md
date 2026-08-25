@@ -135,6 +135,11 @@ scheme, matching Perl.
 - **Source:** `src/http_client.zig` (`isRemoteComplete`, `openQADownloadToFile`);
   e2e CLO-75 (`tests_clone_single.sh`); `ideas/CLONE_JOB_TODO.md` (Gap 9).
 
+### 4.10 Omission of deprecated `--skip-checks` option
+- **Perl:** `openqa-clone-job` accepts `--skip-checks`, but marks it as a deprecated no-op in `--help` ("Deprecated option. The logic was inverted, so currently the check is skipped by default. If you were using it, just remove it and the behavior will remain the same.").
+- **Zig:** `zoqa-clone-job` omits `--skip-checks` entirely; passing `--skip-checks` produces an `Unknown flag: --skip-checks` error (exit 1). Users are expected to follow upstream's advice and remove `--skip-checks`.
+- **Source:** `openqa-clone-job --help`; SPEC §18.12.
+
 ---
 
 ## 5. `schedule` (vs `openqa-cli schedule`)

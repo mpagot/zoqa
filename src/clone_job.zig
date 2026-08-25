@@ -326,12 +326,7 @@ pub fn applySettings(
     }
 
     // Find the TEST setting for scope matching
-    const test_val: []const u8 = blk: {
-        for (settings.items) |s| {
-            if (std.mem.eql(u8, s.key, "TEST")) break :blk s.value;
-        }
-        break :blk "";
-    };
+    const test_val: []const u8 = findSettingValue(settings.items, "TEST") orelse "";
 
     for (overrides) |ov| {
         // Scoped: skip unless TEST matches
@@ -1340,6 +1335,173 @@ pub const DependencyWalker = struct {
 };
 
 // ---------------------------------------------------------------------------
+// --check-repos: maintenance repository validation
+// ---------------------------------------------------------------------------
+
+/// Find the value of a setting by exact key name, or null if not present.
+/// Settings are stored as a flat ArrayList(SettingPair); lookup is linear.
+pub fn findSettingValue(settings: []const SettingPair, key: []const u8) ?[]const u8 {
+    for (settings) |pair| {
+        if (std.mem.eql(u8, pair.key, key)) return pair.value;
+    }
+    return null;
+}
+
+/// Result of collecting repository URLs from job settings for --check-repos.
+pub const RepoCheckResult = struct {
+    /// URLs to HTTP-check (fully expanded, no unexpanded placeholders).
+    urls_to_check: std.ArrayList([]const u8),
+    /// Warning messages for URLs containing unexpanded %VAR% placeholders.
+    warnings: std.ArrayList([]const u8),
+    /// Whether the check should be skipped entirely (SKIP_MAINTENANCE_UPDATES is set).
+    skip: bool,
+};
+
+/// Extract maintenance repo URLs from job settings for --check-repos.
+///
+/// Implements the logic of Perl's `collect_incident_repos()` +
+/// `verify_incident_repos()` unexpanded-variable detection
+/// (CloneJobSUSE.pm).
+///
+/// Algorithm:
+/// 1. If SKIP_MAINTENANCE_UPDATES setting is truthy → return skip=true.
+/// 2. Extract INCIDENT_REPO value → split by comma → list of URLs.
+/// 3. Extract SCC_ADDONS → split by comma → for each addon, look up
+///    {ADDON_UPPER}_TEST_REPOS → split by comma → append to URL list.
+/// 4. For each URL: if it contains a `%WORD%` pattern → add a warning
+///    message and skip that URL. Otherwise → add to urls_to_check.
+///
+/// This function is I/O-free — it only inspects settings data.
+/// The caller (executable layer) performs the actual HTTP checks.
+pub fn collectRepoUrls(
+    allocator: std.mem.Allocator,
+    settings: []const SettingPair,
+) !RepoCheckResult {
+    var result = RepoCheckResult{
+        .urls_to_check = .empty,
+        .warnings = .empty,
+        .skip = false,
+    };
+
+    // 1. SKIP_MAINTENANCE_UPDATES bypass
+    if (findSettingValue(settings, "SKIP_MAINTENANCE_UPDATES")) |val| {
+        if (val.len > 0 and !std.mem.eql(u8, val, "0")) {
+            result.skip = true;
+            return result;
+        }
+    }
+
+    // Collect all raw URLs from INCIDENT_REPO and SCC_ADDONS-derived keys
+    var raw_urls: std.ArrayList([]const u8) = .empty;
+
+    // 2. INCIDENT_REPO — comma-separated list of repo URLs
+    if (findSettingValue(settings, "INCIDENT_REPO")) |incident_repo| {
+        var it = std.mem.splitScalar(u8, incident_repo, ',');
+        while (it.next()) |segment| {
+            const trimmed = std.mem.trim(u8, segment, " ");
+            if (trimmed.len > 0) {
+                try raw_urls.append(allocator, trimmed);
+            }
+        }
+    }
+
+    // 3. SCC_ADDONS → derive {ADDON_UPPER}_TEST_REPOS keys
+    if (findSettingValue(settings, "SCC_ADDONS")) |scc_addons| {
+        var addon_it = std.mem.splitScalar(u8, scc_addons, ',');
+        while (addon_it.next()) |addon_raw| {
+            const addon = std.mem.trim(u8, addon_raw, " ");
+            if (addon.len == 0) continue;
+
+            // Build key: uppercase addon + "_TEST_REPOS"
+            // e.g. "we" → "WE_TEST_REPOS"
+            var key_buf: [256]u8 = undefined;
+            if (addon.len + "_TEST_REPOS".len > key_buf.len) continue; // skip absurdly long addon names
+            _ = std.ascii.upperString(key_buf[0..addon.len], addon);
+            const suffix = "_TEST_REPOS";
+            @memcpy(key_buf[addon.len .. addon.len + suffix.len], suffix);
+            const full_key = key_buf[0 .. addon.len + suffix.len];
+
+            if (findSettingValue(settings, full_key)) |repos_val| {
+                var repo_it = std.mem.splitScalar(u8, repos_val, ',');
+                while (repo_it.next()) |repo_seg| {
+                    const repo_trimmed = std.mem.trim(u8, repo_seg, " ");
+                    if (repo_trimmed.len > 0) {
+                        try raw_urls.append(allocator, repo_trimmed);
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Filter: detect unexpanded %VAR% placeholders in each URL
+    for (raw_urls.items) |u| {
+        var vars = try extractUnexpandedVars(allocator, u);
+        defer vars.deinit(allocator);
+        if (vars.items.len > 0) {
+            // Build warning message listing the unexpanded variable names
+            const names = try std.mem.join(allocator, ", ", vars.items);
+            const msg = try std.fmt.allocPrint(
+                allocator,
+                "URL '{s}' contains unexpanded variables: {s}. Skipping verification.",
+                .{ u, names },
+            );
+            try result.warnings.append(allocator, msg);
+        } else {
+            try result.urls_to_check.append(allocator, u);
+        }
+    }
+
+    return result;
+}
+
+/// Scan a string for `%WORD%` patterns (unexpanded variable placeholders).
+/// Returns the list of distinct variable names found (borrowed slices into
+/// `input`); the list is empty when there are none. The caller owns the
+/// returned list and must `deinit` it; the name slices themselves borrow
+/// from `input` and must not outlive it.
+///
+/// Matches the Perl regex `/%+(\w+)%+/` but simplified: looks for
+/// `%` + one or more `[A-Za-z0-9_]` + `%`.
+fn extractUnexpandedVars(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList([]const u8) {
+    var names: std.ArrayList([]const u8) = .empty;
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == '%') {
+            const start = i + 1;
+            if (start >= input.len) break;
+            // Scan for word characters
+            var end = start;
+            while (end < input.len and isWordChar(input[end])) : (end += 1) {}
+            // Must have at least one word char and a closing %
+            if (end > start and end < input.len and input[end] == '%') {
+                const var_name = input[start..end];
+                // Avoid duplicates
+                var already = false;
+                for (names.items) |existing| {
+                    if (std.mem.eql(u8, existing, var_name)) {
+                        already = true;
+                        break;
+                    }
+                }
+                if (!already) {
+                    try names.append(allocator, var_name);
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    return names;
+}
+
+/// Returns true for ASCII word characters: [A-Za-z0-9_].
+fn isWordChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -2299,4 +2461,144 @@ test "DependencyWalker: clone_children enables chained child traversal" {
     const item2 = walker.next().?;
     try std.testing.expectEqual(@as(u64, 5), item2.job_id);
     try std.testing.expectEqual(Relation.children, item2.relation);
+}
+
+// ---------------------------------------------------------------------------
+// Tests: collectRepoUrls / findSettingValue / extractUnexpandedVars
+// ---------------------------------------------------------------------------
+
+test "findSettingValue: found" {
+    const settings = [_]SettingPair{
+        .{ .key = "FOO", .value = "bar" },
+        .{ .key = "INCIDENT_REPO", .value = "http://example.com/repo/" },
+    };
+    try std.testing.expectEqualStrings("http://example.com/repo/", findSettingValue(&settings, "INCIDENT_REPO").?);
+}
+
+test "findSettingValue: not found" {
+    const settings = [_]SettingPair{
+        .{ .key = "FOO", .value = "bar" },
+    };
+    try std.testing.expect(findSettingValue(&settings, "INCIDENT_REPO") == null);
+}
+
+test "collectRepoUrls: SKIP_MAINTENANCE_UPDATES bypasses check" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const settings = [_]SettingPair{
+        .{ .key = "SKIP_MAINTENANCE_UPDATES", .value = "1" },
+        .{ .key = "INCIDENT_REPO", .value = "http://dead.host/repo/" },
+    };
+    const result = try collectRepoUrls(a, &settings);
+    try std.testing.expect(result.skip);
+    try std.testing.expectEqual(@as(usize, 0), result.urls_to_check.items.len);
+}
+
+test "collectRepoUrls: SKIP_MAINTENANCE_UPDATES=0 does not bypass" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const settings = [_]SettingPair{
+        .{ .key = "SKIP_MAINTENANCE_UPDATES", .value = "0" },
+        .{ .key = "INCIDENT_REPO", .value = "http://good.host/repo/" },
+    };
+    const result = try collectRepoUrls(a, &settings);
+    try std.testing.expect(!result.skip);
+    try std.testing.expectEqual(@as(usize, 1), result.urls_to_check.items.len);
+    try std.testing.expectEqualStrings("http://good.host/repo/", result.urls_to_check.items[0]);
+}
+
+test "collectRepoUrls: INCIDENT_REPO comma-separated" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const settings = [_]SettingPair{
+        .{ .key = "INCIDENT_REPO", .value = "http://a.com/repo/,http://b.com/repo/" },
+    };
+    const result = try collectRepoUrls(a, &settings);
+    try std.testing.expectEqual(@as(usize, 2), result.urls_to_check.items.len);
+    try std.testing.expectEqualStrings("http://a.com/repo/", result.urls_to_check.items[0]);
+    try std.testing.expectEqualStrings("http://b.com/repo/", result.urls_to_check.items[1]);
+}
+
+test "collectRepoUrls: SCC_ADDONS derives TEST_REPOS keys" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const settings = [_]SettingPair{
+        .{ .key = "SCC_ADDONS", .value = "we,sdk" },
+        .{ .key = "WE_TEST_REPOS", .value = "http://we.example.com/" },
+        .{ .key = "SDK_TEST_REPOS", .value = "http://sdk.example.com/" },
+    };
+    const result = try collectRepoUrls(a, &settings);
+    try std.testing.expectEqual(@as(usize, 2), result.urls_to_check.items.len);
+    try std.testing.expectEqualStrings("http://we.example.com/", result.urls_to_check.items[0]);
+    try std.testing.expectEqualStrings("http://sdk.example.com/", result.urls_to_check.items[1]);
+}
+
+test "collectRepoUrls: unexpanded %VAR% generates warning and is skipped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const settings = [_]SettingPair{
+        .{ .key = "INCIDENT_REPO", .value = "http://%REPO_MIRROR_HOST%/ibs/repo/" },
+    };
+    const result = try collectRepoUrls(a, &settings);
+    try std.testing.expectEqual(@as(usize, 0), result.urls_to_check.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.warnings.items.len);
+    // Warning should mention the variable name
+    try std.testing.expect(std.mem.indexOf(u8, result.warnings.items[0], "REPO_MIRROR_HOST") != null);
+}
+
+test "collectRepoUrls: no INCIDENT_REPO and no SCC_ADDONS returns empty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const settings = [_]SettingPair{
+        .{ .key = "TEST", .value = "boot_to_desktop" },
+        .{ .key = "BUILD", .value = "42" },
+    };
+    const result = try collectRepoUrls(a, &settings);
+    try std.testing.expect(!result.skip);
+    try std.testing.expectEqual(@as(usize, 0), result.urls_to_check.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.warnings.items.len);
+}
+
+test "collectRepoUrls: mixed expanded and unexpanded URLs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const settings = [_]SettingPair{
+        .{ .key = "INCIDENT_REPO", .value = "http://good.host/repo/,http://%UNRESOLVED%/repo/" },
+    };
+    const result = try collectRepoUrls(a, &settings);
+    try std.testing.expectEqual(@as(usize, 1), result.urls_to_check.items.len);
+    try std.testing.expectEqualStrings("http://good.host/repo/", result.urls_to_check.items[0]);
+    try std.testing.expectEqual(@as(usize, 1), result.warnings.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, result.warnings.items[0], "UNRESOLVED") != null);
+}
+
+test "extractUnexpandedVars: no placeholders" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const result = try extractUnexpandedVars(arena.allocator(), "http://example.com/repo/");
+    try std.testing.expectEqual(@as(usize, 0), result.items.len);
+}
+
+test "extractUnexpandedVars: single placeholder" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const result = try extractUnexpandedVars(arena.allocator(), "http://%HOST%/repo/");
+    try std.testing.expectEqual(@as(usize, 1), result.items.len);
+    try std.testing.expectEqualStrings("HOST", result.items[0]);
+}
+
+test "extractUnexpandedVars: multiple placeholders" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const result = try extractUnexpandedVars(arena.allocator(), "http://%HOST%/%PATH%/repo/");
+    try std.testing.expectEqual(@as(usize, 2), result.items.len);
+    try std.testing.expectEqualStrings("HOST", result.items[0]);
+    try std.testing.expectEqualStrings("PATH", result.items[1]);
 }
