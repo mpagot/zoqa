@@ -34,3 +34,6 @@ client.conf.e2e
 # Python cache
 __pycache__/
 tools/__pycache__/
+
+# Generated knowledge graph output
+graphify-out/
