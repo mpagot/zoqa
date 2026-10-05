@@ -160,6 +160,19 @@ sed -i "/install.*pkgs/a $SPLIT_INSTALL" "$BOOTSTRAP"
 mkdir -p /etc/openqa/openqa.ini.d
 echo -e "[auth]\nmethod = Fake" > /etc/openqa/openqa.ini.d/99-force-fake-auth.ini
 
+# ---------------------------------------------------------------------------
+# Create tmpfiles.d directories (Apache DocumentRoot workaround).
+#
+# WHY: Since apache2 2.4.67 /srv/www/htdocs is a %ghost entry created by
+# systemd-tmpfiles. The container has no systemd, so nothing creates it and
+# openqa-bootstrap's `start_apache2` fails with "AH00526 DocumentRoot
+# '/srv/www/htdocs' is not a directory", which stops the container.
+# See poo#207960 and ISSUE_APACHE_DOCUMENTROOT.md. Remove once
+# openqa-bootstrap runs systemd-tmpfiles itself.
+# ---------------------------------------------------------------------------
+systemd-tmpfiles --create || true
+mkdir -p /srv/www/htdocs
+
 exec "$BOOTSTRAP" "$@"
 WRAPPER_EOF
 	chmod +x "$WRAPPER_TMP"
