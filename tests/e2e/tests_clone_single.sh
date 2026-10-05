@@ -1992,3 +1992,205 @@ stop_faultproxy
 assert_oracle_nonzero "$tag" "CLO-120 SCC_ADDONS with unreachable test repo:"
 
 set +x  # end of CLO-115–120
+
+# =============================================================================
+# CLO-121 to CLO-125: --show-progress
+#
+# Give --show-progress a real effect: a progress meter during asset
+# downloads.  Perl's curl prints its classic meter (a header line containing
+# "% Total") to stderr when --show-progress is passed (make_curl_arguments()
+# in CloneJob.pm omits --no-progress-meter in that case); it stays silent
+# otherwise.
+#
+# Zig's native meter format is `Downloading {basename}: {pct}% (...)` on
+# stderr -- not byte-identical to curl's meter (see docs/PERL_DEVIATIONS.md),
+# but it exercises the same on/off semantics and reaches 100% on success.
+#
+# TDD: --show-progress is currently parsed but has no effect in
+# zoqa-clone-job (CloneArgs.show_progress is read nowhere yet). The Zig
+# assertions below are expected to FAIL until the feature lands; see
+# conductor/plan-show-progress.md.
+# =============================================================================
+echo ""
+echo "==> [clone_job/single] CLO-121-125: --show-progress"
+
+ensure_basic_job
+
+# -----------------------------------------------------------------------------
+# CLO-121: --show-progress shows a progress meter on stderr while downloading.
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-121: --show-progress shows a progress meter on stderr (assets downloaded) ---"
+tag="clo-121"
+ASSET_DIR_121_PERL="/tmp/e2e-${tag}-perl-$$"
+ASSET_DIR_121_ZIG="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_121_PERL" "$ASSET_DIR_121_ZIG"
+
+run_capture "${tag}" perl \
+	"$PERL_CLONE_EXE --from http://localhost --host localhost --show-progress $JOB_ID --dir ${ASSET_DIR_121_PERL}"
+_PERL_EXIT=$_LAST_EXIT
+run_capture "${tag}" zig \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost --show-progress $JOB_ID --dir ${ASSET_DIR_121_ZIG}"
+_ZIG_EXIT=$_LAST_EXIT
+
+assert_capture_exits "${tag}" 0
+
+# Perl oracle: curl's classic progress-meter header appears on stderr.
+assert_impl_log_pattern "${tag}" perl stderr "% Total" \
+	"CLO-121 Perl stderr shows curl's progress-meter header with --show-progress"
+
+# Zig (TDD): native meter prints "Downloading <name>: ...100%" on stderr.
+assert_impl_log_pattern "${tag}" zig stderr "Downloading.*100%" \
+	"CLO-121 Zig stderr shows a 'Downloading ...: 100%' line with --show-progress"
+
+assert_downloaded_assets_md5 "$ASSET_DIR_121_PERL" "CLO-121 Perl"
+assert_downloaded_assets_md5 "$ASSET_DIR_121_ZIG" "CLO-121 Zig"
+
+# -----------------------------------------------------------------------------
+# CLO-125 (optional, Zig only): re-cloning into the same (now complete) asset
+# dir with --show-progress prints a skip message instead of silently doing
+# nothing. Reuses ASSET_DIR_121_ZIG populated by CLO-121 above, so the
+# skip-if-complete (416) path is what is being exercised. Perl is not
+# included: curl's own "Resuming transfer" + zero-byte meter output differs
+# from Zig's message by design (plan's open question 1).
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-125: --show-progress on an already-complete asset prints a skip message (Zig only) ---"
+tag="clo-125"
+run_capture "${tag}" zig \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost --show-progress $JOB_ID --dir ${ASSET_DIR_121_ZIG}"
+_ZIG_EXIT=$_LAST_EXIT
+if [[ "$_ZIG_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-125 Zig exits 0 re-cloning into an already-populated asset dir"
+else
+	echo "FAIL: CLO-125 Zig exited $_ZIG_EXIT (expected 0)"
+	cat "$LOG_DIR/${tag}_zig_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+assert_impl_log_pattern "${tag}" zig stderr "already complete" \
+	"CLO-125 Zig stderr prints an 'already complete' skip message with --show-progress"
+
+container_exec rm -rf "$ASSET_DIR_121_PERL" "$ASSET_DIR_121_ZIG"
+
+# -----------------------------------------------------------------------------
+# CLO-122: default (no --show-progress) stays silent -- same as curl's
+# --no-progress-meter.
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-122: default (no --show-progress) produces no progress meter ---"
+tag="clo-122"
+ASSET_DIR_122_PERL="/tmp/e2e-${tag}-perl-$$"
+ASSET_DIR_122_ZIG="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_122_PERL" "$ASSET_DIR_122_ZIG"
+
+run_capture "${tag}" perl \
+	"$PERL_CLONE_EXE --from http://localhost --host localhost $JOB_ID --dir ${ASSET_DIR_122_PERL}"
+_PERL_EXIT=$_LAST_EXIT
+run_capture "${tag}" zig \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost $JOB_ID --dir ${ASSET_DIR_122_ZIG}"
+_ZIG_EXIT=$_LAST_EXIT
+
+assert_capture_exits "${tag}" 0
+
+if grep -q "% Total" "$LOG_DIR/${tag}_perl_stderr.log" 2>/dev/null; then
+	echo "FAIL: CLO-122 Perl stderr unexpectedly shows curl's progress meter without --show-progress"
+	failed_tests=$((failed_tests + 1))
+else
+	echo "PASS: CLO-122 Perl stderr has no progress meter without --show-progress"
+fi
+
+if grep -q "Downloading " "$LOG_DIR/${tag}_zig_stderr.log" 2>/dev/null; then
+	echo "FAIL: CLO-122 Zig stderr unexpectedly shows a progress meter without --show-progress"
+	failed_tests=$((failed_tests + 1))
+else
+	echo "PASS: CLO-122 Zig stderr has no progress meter without --show-progress"
+fi
+
+container_exec rm -rf "$ASSET_DIR_122_PERL" "$ASSET_DIR_122_ZIG"
+
+# -----------------------------------------------------------------------------
+# CLO-123: --show-progress must not change stdout (progress goes to stderr
+# only; stdout still carries "has been created" / job URLs / --json-output
+# that scripts parse). Compares Zig's own stdout with and without the flag,
+# normalizing the cloned job ID (which differs between the two runs).
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-123: --show-progress does not change stdout content ---"
+tag="clo-123"
+ASSET_DIR_123A="/tmp/e2e-${tag}-a-$$"
+ASSET_DIR_123B="/tmp/e2e-${tag}-b-$$"
+container_exec mkdir -p "$ASSET_DIR_123A" "$ASSET_DIR_123B"
+
+run_capture "${tag}_noflag" zig \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost $JOB_ID --dir ${ASSET_DIR_123A}"
+if [[ "$_LAST_EXIT" -ne 0 ]]; then
+	echo "FAIL: CLO-123 Zig (no flag) exited $_LAST_EXIT (expected 0)"
+	failed_tests=$((failed_tests + 1))
+fi
+
+run_capture "${tag}_flag" zig \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost --show-progress $JOB_ID --dir ${ASSET_DIR_123B}"
+if [[ "$_LAST_EXIT" -ne 0 ]]; then
+	echo "FAIL: CLO-123 Zig (--show-progress) exited $_LAST_EXIT (expected 0)"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Normalize the cloned job ID (varies per run) out of both logs before diffing.
+sed -E 's#tests/[0-9]+#tests/ID#g' "$LOG_DIR/${tag}_noflag_zig_stdout.log" >"$LOG_DIR/${tag}_noflag_zig_stdout_norm.log"
+sed -E 's#tests/[0-9]+#tests/ID#g' "$LOG_DIR/${tag}_flag_zig_stdout.log" >"$LOG_DIR/${tag}_flag_zig_stdout_norm.log"
+
+if diff -u "$LOG_DIR/${tag}_noflag_zig_stdout_norm.log" "$LOG_DIR/${tag}_flag_zig_stdout_norm.log" \
+	>"$LOG_DIR/${tag}_diff.log" 2>&1; then
+	echo "PASS: CLO-123 Zig stdout is identical with and without --show-progress (job ID excluded)"
+else
+	echo "FAIL: CLO-123 Zig stdout differs with --show-progress:"
+	cat "$LOG_DIR/${tag}_diff.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+container_exec rm -rf "$ASSET_DIR_123A" "$ASSET_DIR_123B"
+
+# -----------------------------------------------------------------------------
+# CLO-124 (Zig only): --show-progress survives a mid-transfer retry.
+#
+# Reuses the same faultproxy "partial" fault mode as CLO-98/99 (200 OK
+# headers + a truncated body, then RST, Content-Length withheld). Zig's
+# out-of-band expected_size (fetchAssetSize) detects the short read and
+# retries -- CLO-99 already proves this succeeds with a correct MD5; this
+# test additionally asserts that --show-progress keeps working across that
+# retry: the mid-stream reset must restart the meter (plan: print \n, reset
+# to 0) rather than get stuck or corrupt the display, and the final line
+# must reach 100% once the retry succeeds.
+#
+# Perl is not re-tested here: CLO-98 already established that Perl's curl
+# does not retry "partial" (length-less) truncation at all (known curl
+# limitation), so --show-progress would not exercise anything new on the
+# Perl side for this fault mode.
+# -----------------------------------------------------------------------------
+echo "--- Test CLO-124: --show-progress survives a mid-transfer retry (faultproxy partial fault) ---"
+ensure_rich_job
+tag="clo-124"
+ASSET_DIR_124="/tmp/e2e-${tag}-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_124"
+start_faultproxy 1 partial /tests/ 64
+
+run_capture "${tag}" zig \
+	"$ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} \
+	 --host http://localhost --skip-deps --show-progress \
+	 ${RICH_JOB_ID} --dir ${ASSET_DIR_124}"
+_ZIG_EXIT=$_LAST_EXIT
+
+stop_faultproxy
+
+if [[ "$_ZIG_EXIT" -eq 0 ]]; then
+	echo "PASS: CLO-124 Zig exits 0 after a mid-transfer retry with --show-progress"
+else
+	echo "FAIL: CLO-124 Zig exited $_ZIG_EXIT (expected 0)"
+	cat "$LOG_DIR/${tag}_zig_stderr.log"
+	dump_faultproxy_logs
+	failed_tests=$((failed_tests + 1))
+fi
+
+assert_impl_log_pattern "${tag}" zig stderr "Downloading" \
+	"CLO-124 Zig stderr shows a Downloading line across the retry"
+assert_impl_log_pattern "${tag}" zig stderr "100%" \
+	"CLO-124 Zig stderr reaches 100% once the retry succeeds"
+
+assert_downloaded_assets_md5 "$ASSET_DIR_124" "CLO-124 Zig"
+container_exec rm -rf "$ASSET_DIR_124"

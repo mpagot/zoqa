@@ -19,7 +19,7 @@ of the harness and how to run it, see [README.md](README.md).
 | `tests_monitor.sh` | I | Monitor subcommand | MON-1–MON-51 |
 | `tests_schedule.sh` | J | Schedule subcommand | SCH-1–SCH-RK-3 |
 | `tests_clone_smoke.sh` | K | Clone-job: smoke (--help, no-args, bare integer) | CLO-1–CLO-11 |
-| `tests_clone_single.sh` | K | Clone-job: single-job flags (--reproduce, --repeat, assets, --check-repos, …) | CLO-12–CLO-89, CLO-98–CLO-108, CLO-115–CLO-120, CLO-RK-1 |
+| `tests_clone_single.sh` | K | Clone-job: single-job flags (--reproduce, --repeat, assets, --check-repos, …) | CLO-12–CLO-89, CLO-98–CLO-108, CLO-115–CLO-125, CLO-RK-1 |
 | `tests_clone_topology.sh` | K | Clone-job: graph topologies (chained, fan-out, diamond, parallel) | CLO-20–M42 |
 | `tests_clone_maxdepth.sh` | K | Clone-job: --max-depth traversal limits | CLO-90–CLO-97 |
 | `tests_clone_uefi.sh` | K | Clone-job: UEFI vars asset filtering | CLO-110–CLO-112 |
@@ -316,6 +316,11 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-118 | Unexpanded variables are warned and skipped | URL containing `%VAR%` is warned on stderr and skipped; clone proceeds and exits 0. |
 | CLO-119 | SCC_ADDONS multiple reachable test repos | Both resolve test repositories from `SCC_ADDONS` and exit 0 when reachable. |
 | CLO-120 | SCC_ADDONS with unreachable test repo | Clone is aborted and exits non-zero if any resolved addon test repository is unreachable. |
+| CLO-121 | --show-progress shows progress meter (assets downloaded) | Perl stderr shows curl's progress-meter header; Zig stderr shows `Downloading ...: 100%`. |
+| CLO-122 | Default (no --show-progress) produces no meter | Both Perl and Zig produce no progress meter on stderr without `--show-progress`. |
+| CLO-123 | --show-progress does not change stdout content | stdout is identical with and without `--show-progress` (job IDs excluded). |
+| CLO-124 | --show-progress survives mid-transfer retry | With faultproxy partial fault, Zig retries cleanly and meter reaches 100%. |
+| CLO-125 | --show-progress on already-complete asset prints skip | Re-cloning into populated asset dir prints `already complete` skip message on stderr (Zig only). |
 
 ### Stress Tests (`tests_stress.sh`)
 | # | Test | Verification |
