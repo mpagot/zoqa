@@ -159,5 +159,36 @@ jobs:
     needs: [lint, build-and-test, cross-compile, tests-check, docs-check]
     runs-on: ubuntu-latest
     steps:
-      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        run: exit 1
+      - name: Evaluate status of upstream jobs
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          echo "### CI Status Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Job | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|:---|:---:|" >> "$GITHUB_STEP_SUMMARY"
+
+          failed=0
+          while IFS="=" read -r job result; do
+            case "$result" in
+              success)
+                icon="✅"
+                ;;
+              skipped)
+                icon="⚪"
+                ;;
+              *)
+                icon="❌"
+                failed=1
+                echo "::error title=CI Gatekeeper Failure::Job '$job' failed with status: '$result'"
+                ;;
+            esac
+            echo "| \`$job\` | $icon $result |" >> "$GITHUB_STEP_SUMMARY"
+            printf "%-20s %s %s\n" "$job" "$icon" "$result"
+          done < <(echo "$NEEDS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"')
+
+          if [ "$failed" -ne 0 ]; then
+            echo ""
+            echo "ERROR: One or more required upstream jobs failed or were cancelled."
+            exit 1
+          fi
+
