@@ -766,6 +766,275 @@ pub const CallOptions = struct {
     retry_factor: f64 = 1.0,
 };
 
+/// Configuration for download progress reporting.
+///
+/// Fields:
+///   - label: Display label (e.g. filename) for the resource being transferred.
+///   - out: Destination writer for progress lines (typically stderr).
+pub const Progress = struct {
+    label: []const u8,
+    out: *std.Io.Writer,
+};
+
+/// Pure accounting engine for download progress: tracks byte counters and
+/// decides when a progress event should fire. Completely decoupled from
+/// terminal I/O and string formatting; unit-testable with simulated clocks.
+const ProgressMeter = struct {
+    /// Payload handed to the renderer when a progress event fires.
+    pub const RenderPayload = struct {
+        done: u64,
+        total: ?u64,
+        pct: ?u8,
+    };
+
+    fallback_total: ?u64,
+    content_length: ?u64 = null,
+    bytes_written: u64 = 0,
+    last_render_ms: i64 = std.math.minInt(i64),
+    last_pct: ?u8 = null,
+
+    /// Create a meter with an optional fallback total (e.g. the expected
+    /// asset size from the metadata API, used when Content-Length is absent).
+    pub fn init(fallback_total: ?u64) ProgressMeter {
+        return .{ .fallback_total = fallback_total };
+    }
+
+    /// Reset counters and timers for a fresh retry attempt.
+    pub fn reset(self: *ProgressMeter) void {
+        self.bytes_written = 0;
+        self.last_render_ms = std.math.minInt(i64);
+        self.last_pct = null;
+    }
+
+    /// Record the Content-Length header value when it arrives.
+    pub fn setTotal(self: *ProgressMeter, cl: ?u64) void {
+        self.content_length = cl;
+    }
+
+    /// The effective total: Content-Length if known, else the fallback.
+    pub fn effectiveTotal(self: *const ProgressMeter) ?u64 {
+        return self.content_length orelse self.fallback_total;
+    }
+
+    /// Overflow-safe integer percentage of `done` out of `total`.
+    pub fn computePct(done: u64, total: u64) u8 {
+        if (total == 0) return 100;
+        if (done >= total) return 100;
+        if (done < std.math.maxInt(u64) / 100) {
+            return @intCast((done * 100) / total);
+        }
+        return @intCast(done / (total / 100));
+    }
+
+    /// Record `n` newly written bytes and return a render payload when the
+    /// dual-throttling gates are satisfied:
+    ///   - known total: integer percentage changed AND >= 50 ms elapsed
+    ///   - unknown total: >= 250 ms elapsed
+    /// The returned payload is rendered by the caller (the tap), which then
+    /// calls `markRendered` so the throttle timer reflects the actual render.
+    ///
+    /// The time gate applies from the first render onward: `last_render_ms == 0`
+    /// (initial state) means the first render fires immediately; once a render
+    /// has occurred, the elapsed-time threshold must be met.
+    pub fn update(self: *ProgressMeter, n: u64, now_ms: i64) ?RenderPayload {
+        self.bytes_written += n;
+        const total = self.effectiveTotal();
+        if (total) |t| {
+            if (t == 0) return null;
+            const pct = computePct(self.bytes_written, t);
+            // Time gate: >= 50 ms since last render (first render always passes).
+            if (self.last_render_ms != std.math.minInt(i64) and now_ms - self.last_render_ms < 50) return null;
+            // Pct-change gate: skip if the integer percentage is unchanged
+            // since the last render (avoids redundant redraws at the same pct).
+            if (self.last_pct != null and pct == self.last_pct.?) return null;
+            return .{ .done = self.bytes_written, .total = t, .pct = pct };
+        }
+        if (self.last_render_ms != std.math.minInt(i64) and now_ms - self.last_render_ms < 250) return null;
+        return .{ .done = self.bytes_written, .total = null, .pct = null };
+    }
+
+    /// Record that a progress event was rendered at `now_ms`.
+    pub fn markRendered(self: *ProgressMeter, now_ms: i64, pct: ?u8) void {
+        self.last_render_ms = now_ms;
+        self.last_pct = pct;
+    }
+
+    /// Forced final 100% payload, returned regardless of the throttle gates.
+    pub fn finalRender(self: *ProgressMeter) RenderPayload {
+        const total = self.effectiveTotal();
+        const pct: ?u8 = if (total) |t| computePct(self.bytes_written, t) else null;
+        self.last_render_ms = std.math.minInt(i64);
+        self.last_pct = pct;
+        return .{ .done = self.bytes_written, .total = total, .pct = pct };
+    }
+};
+
+/// Terminal UI renderer for the download progress meter. Owns line
+/// formatting, ghost-character erasure via space padding, and the
+/// transfer-boundary newlines. Zero ANSI escapes: pure ASCII on stderr,
+/// so redirected stderr and CI logs stay clean.
+const ProgressTerminalRenderer = struct {
+    label: []const u8,
+    out: *std.Io.Writer,
+    last_line_len: usize = 0,
+    has_rendered: bool = false,
+
+    /// Create a renderer for the transfer labelled `label`, writing to `out`.
+    pub fn init(label: []const u8, out: *std.Io.Writer) ProgressTerminalRenderer {
+        return .{ .label = label, .out = out };
+    }
+
+    /// Format `bytes` as a binary-unit string (B, KiB, MiB, GiB, TiB) with
+    /// one decimal place into `buf`.
+    pub fn formatHumanSize(buf: []u8, bytes: u64) []const u8 {
+        const units = [_][]const u8{ "B", "KiB", "MiB", "GiB", "TiB" };
+        var value: f64 = @floatFromInt(bytes);
+        var unit: usize = 0;
+        while (unit + 1 < units.len and value >= 1024) {
+            value /= 1024;
+            unit += 1;
+        }
+        if (unit == 0) {
+            return std.fmt.bufPrint(buf, "{d} {s}", .{ bytes, units[unit] }) catch return "B";
+        }
+        return std.fmt.bufPrint(buf, "{d:.1} {s}", .{ value, units[unit] }) catch return "B";
+    }
+
+    /// Render one progress line: `\rDownloading {label}: {pct}% ({done} / {total})`
+    /// or `\rDownloading {label}: {done}` when the total is unknown. Shorter
+    /// lines are space-padded to the previous line length so ghost characters
+    /// are erased without ANSI codes.
+    pub fn renderProgress(self: *ProgressTerminalRenderer, done: u64, total: ?u64, pct: ?u8) std.Io.Writer.Error!void {
+        var line_buf: [128]u8 = undefined;
+        var line: []const u8 = undefined;
+        if (total) |t| {
+            const p: u8 = pct orelse ProgressMeter.computePct(done, t);
+            var done_buf: [16]u8 = undefined;
+            var total_buf: [16]u8 = undefined;
+            const done_s = formatHumanSize(&done_buf, done);
+            const total_s = formatHumanSize(&total_buf, t);
+            line = std.fmt.bufPrint(&line_buf, "\rDownloading {s}: {d}% ({s} / {s})", .{
+                self.label, p, done_s, total_s,
+            }) catch return error.WriteFailed;
+        } else {
+            var done_buf: [16]u8 = undefined;
+            const done_s = formatHumanSize(&done_buf, done);
+            line = std.fmt.bufPrint(&line_buf, "\rDownloading {s}: {s}", .{
+                self.label, done_s,
+            }) catch return error.WriteFailed;
+        }
+        if (line.len < self.last_line_len) {
+            try self.out.alignBuffer(line, self.last_line_len, .left, ' ');
+        } else {
+            try self.out.writeAll(line);
+        }
+        self.last_line_len = line.len;
+        self.has_rendered = true;
+        try self.out.flush();
+    }
+
+    /// Render the skip-if-complete (HTTP 416) message.
+    pub fn renderSkip(self: *ProgressTerminalRenderer) std.Io.Writer.Error!void {
+        try self.out.print("{s}: already complete, skipped\n", .{self.label});
+        try self.out.flush();
+    }
+
+    /// Render the final 100% line and terminate it with a newline.
+    pub fn finish(self: *ProgressTerminalRenderer, done: u64, total: ?u64) std.Io.Writer.Error!void {
+        const pct: ?u8 = if (total) |t| ProgressMeter.computePct(done, t) else null;
+        try self.renderProgress(done, total, pct);
+        try self.out.writeByte('\n');
+        try self.out.flush();
+        self.last_line_len = 0;
+    }
+
+    /// Terminate the in-progress line with a newline after a mid-stream
+    /// failure. No-op when nothing was rendered (pre-stream errors must not
+    /// emit a stray newline).
+    pub fn abort(self: *ProgressTerminalRenderer) std.Io.Writer.Error!void {
+        if (!self.has_rendered) return;
+        try self.out.writeByte('\n');
+        try self.out.flush();
+        self.has_rendered = false;
+        self.last_line_len = 0;
+    }
+};
+
+/// Byte tap: a `std.Io.Writer` that forwards every byte to an inner writer
+/// unchanged while reporting the count to a `ProgressMeter` and rendering
+/// progress events through a `ProgressTerminalRenderer`.
+///
+/// Only `drain` is overridden; the default `sendFile` returns
+/// `error.Unimplemented`, which makes `File.Reader.stream` fall back to the
+/// read-into-buffer path so every byte flows through `drain` and gets
+/// accounted.
+const ProgressStreamTap = struct {
+    inner: *std.Io.Writer,
+    meter: *ProgressMeter,
+    renderer: *ProgressTerminalRenderer,
+    w: std.Io.Writer,
+
+    /// Wrap `inner` with progress accounting. `buffer` is the tap's own
+    /// write buffer (managed by the default `rebase`/`flush`).
+    pub fn init(inner: *std.Io.Writer, meter: *ProgressMeter, renderer: *ProgressTerminalRenderer, buffer: []u8) ProgressStreamTap {
+        return .{
+            .inner = inner,
+            .meter = meter,
+            .renderer = renderer,
+            .w = .{
+                .buffer = buffer,
+                .vtable = &.{ .drain = drain },
+            },
+        };
+    }
+
+    /// Return the writer interface to hand to `executeStream`.
+    pub fn writer(self: *ProgressStreamTap) *std.Io.Writer {
+        return &self.w;
+    }
+
+    /// Forward `buffer[0..end]` + `data` (last slice splatted) to `inner`,
+    /// accounting every byte. Same memmove pattern as `Writer.Hashed.drain`.
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *ProgressStreamTap = @alignCast(@fieldParentPtr("w", w));
+        const aux = w.buffered();
+        const aux_n = try self.inner.writeSplatHeader(aux, data, splat);
+        if (aux_n < w.end) {
+            self.account(aux_n);
+            const remaining = w.buffer[aux_n..w.end];
+            @memmove(w.buffer[0..remaining.len], remaining);
+            w.end = remaining.len;
+            return 0;
+        }
+        self.account(aux.len);
+        const n = aux_n - w.end;
+        w.end = 0;
+        var remaining: usize = n;
+        for (data[0 .. data.len - 1]) |slice| {
+            if (remaining <= slice.len) {
+                self.account(remaining);
+                return n;
+            }
+            remaining -= slice.len;
+            self.account(slice.len);
+        }
+        if (remaining > 0) {
+            self.account(remaining);
+        }
+        return n;
+    }
+
+    /// Account `n` bytes and render a progress event when the meter's
+    /// throttle gates are satisfied.
+    fn account(self: *ProgressStreamTap, n: u64) void {
+        const now_ms = std.time.milliTimestamp();
+        if (self.meter.update(n, now_ms)) |payload| {
+            self.renderer.renderProgress(payload.done, payload.total, payload.pct) catch {};
+            self.meter.markRendered(now_ms, payload.pct);
+        }
+    }
+};
+
 /// Options for `openQARawGet`.
 pub const RawGetOptions = struct {
     allocator: std.mem.Allocator,
@@ -775,6 +1044,10 @@ pub const RawGetOptions = struct {
     verbose: bool = false,
     expected_size: ?u64 = null,
     allow_lengthless: bool = false,
+
+    /// When non-null, `openQADownloadToFile` renders a progress meter for the
+    /// body transfer into `progress.out`. Not owned.
+    progress: ?Progress = null,
 
     /// Number of automatic retries on transient pre-stream failures
     /// (connection errors and HTTP 502/503). Defaults to 0. See
@@ -976,6 +1249,10 @@ pub fn openQADownloadToFile(
                     // Already complete on disk: skip the body transfer and touch
                     // mtime to defer openQA's asset-cleanup cron.
                     try touchFile(dest_path);
+                    if (opts.progress) |prog| {
+                        var r = ProgressTerminalRenderer.init(prog.label, prog.out);
+                        try r.renderSkip();
+                    }
                     return StreamResult{ .status = .ok, .content_length = st.size };
                 }
             } else |_| {
@@ -1020,28 +1297,52 @@ pub fn openQADownloadToFile(
             var file_buf: [65536]u8 = undefined;
             var file_writer = file.writer(&file_buf);
 
-            const result = executeStream(req, client, &file_writer.interface, null) catch |err| {
-                // LengthRequired is a policy violation (strict mode rejects
-                // responses without Content-Length or expected_size). Retrying
-                // would defeat the policy when the fault is transient.
-                if (err == error.LengthRequired) break :blk .{ .failed = err };
-                // Connection error or mid-stream reset, retry if budget remains.
-                break :blk if (attempt < opts.retries) .retry else .{ .failed = err };
+            var cl: ?u64 = null;
+            const outcome_inner: Outcome = if (opts.progress) |prog| with_progress: {
+                var meter = ProgressMeter.init(opts.expected_size);
+                var renderer = ProgressTerminalRenderer.init(prog.label, prog.out);
+                var tap_buf: [65536]u8 = undefined;
+                var tap = ProgressStreamTap.init(&file_writer.interface, &meter, &renderer, &tap_buf);
+
+                const res = executeStream(req, client, &tap.w, &cl) catch |err| {
+                    renderer.abort() catch {};
+                    if (err == error.LengthRequired) break :blk .{ .failed = err };
+                    break :blk if (attempt < opts.retries) .retry else .{ .failed = err };
+                };
+
+                if (res.status == .ok) {
+                    meter.setTotal(cl);
+                    tap.w.flush() catch |err| break :blk .{ .failed = err };
+                    file_writer.interface.flush() catch |err| break :blk .{ .failed = err };
+                    const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
+                    file.updateTimes(now_ns, now_ns) catch |err| break :blk .{ .failed = err };
+                    const payload = meter.finalRender();
+                    renderer.finish(payload.done, payload.total) catch {};
+                    break :with_progress .{ .done = res };
+                }
+
+                renderer.abort() catch {};
+                const code = @intFromEnum(res.status);
+                if (code >= 500 and attempt < opts.retries) break :with_progress .retry;
+                break :with_progress .{ .terminal = res };
+            } else no_progress: {
+                const res = executeStream(req, client, &file_writer.interface, &cl) catch |err| {
+                    if (err == error.LengthRequired) break :blk .{ .failed = err };
+                    break :blk if (attempt < opts.retries) .retry else .{ .failed = err };
+                };
+
+                if (res.status == .ok) {
+                    file_writer.interface.flush() catch |err| break :blk .{ .failed = err };
+                    const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
+                    file.updateTimes(now_ns, now_ns) catch |err| break :blk .{ .failed = err };
+                    break :no_progress .{ .done = res };
+                }
+
+                const code = @intFromEnum(res.status);
+                if (code >= 500 and attempt < opts.retries) break :no_progress .retry;
+                break :no_progress .{ .terminal = res };
             };
-
-            if (result.status == .ok) {
-                // Flush before the deferred close so the file is complete on disk.
-                file_writer.interface.flush() catch |err| break :blk .{ .failed = err };
-                // Update file timestamps to current system time to defer openQA's asset-cleanup cron.
-                const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
-                file.updateTimes(now_ns, now_ns) catch |err| break :blk .{ .failed = err };
-                break :blk .{ .done = result };
-            }
-
-            // Non-2xx: the body just written is an error page, not the asset.
-            const code = @intFromEnum(result.status);
-            if (code >= 500 and attempt < opts.retries) break :blk .retry;
-            break :blk .{ .terminal = result };
+            break :blk outcome_inner;
         };
 
         // The file is now closed (deferred inside the block). Act on the outcome.
@@ -1344,12 +1645,12 @@ test "openQAReq: POST explicit body takes precedence over params" {
 }
 
 test "openQAReq: body on GET is rejected cleanly (no panic)" {
+    const testing = std.testing;
     // Regression test for the panic reproduced by tests_robustness.sh ROB-5:
     // `--data-file FILE` (or `--data`) attaches a body but leaves the method at
     // its GET default. std.http.Client asserts requestHasBody() in
     // sendBodyUnflushed, so a body on GET used to abort the process. execute()
     // now guards this and returns error.BodyOnBodilessMethod instead.
-    const testing = std.testing;
     const allocator = testing.allocator;
     var mock: TestMockClient = .{};
 
@@ -2210,4 +2511,299 @@ test "executeStream: lengthless 404 response with expected_size set returns not_
     var discarding: std.Io.Writer.Discarding = .init(&.{});
     const res = try executeStream(req, &mock, &discarding.writer, null);
     try testing.expectEqual(std.http.Status.not_found, res.status);
+}
+
+// ---------------------------------------------------------------------------
+// Progress meter unit tests
+// ---------------------------------------------------------------------------
+
+test "ProgressMeter: computePct basic arithmetic" {
+    const testing = std.testing;
+    try testing.expectEqual(@as(u8, 0), ProgressMeter.computePct(0, 1000));
+    try testing.expectEqual(@as(u8, 45), ProgressMeter.computePct(450, 1000));
+    try testing.expectEqual(@as(u8, 99), ProgressMeter.computePct(999, 1000));
+    try testing.expectEqual(@as(u8, 100), ProgressMeter.computePct(1000, 1000));
+    try testing.expectEqual(@as(u8, 100), ProgressMeter.computePct(2000, 1000));
+}
+
+test "ProgressMeter: computePct overflow protection" {
+    const testing = std.testing;
+    const max = std.math.maxInt(u64);
+    try testing.expectEqual(@as(u8, 100), ProgressMeter.computePct(max, max));
+    try testing.expectEqual(@as(u8, 100), ProgressMeter.computePct(max, 1));
+    // done near maxInt: (done * 100) would overflow, so the alternate
+    // division path must be taken.
+    const done = max - 100;
+    const total = max;
+    const pct = ProgressMeter.computePct(done, total);
+    try testing.expect(pct >= 99 and pct <= 100);
+}
+
+test "ProgressMeter: computePct zero total guard" {
+    const testing = std.testing;
+    try testing.expectEqual(@as(u8, 100), ProgressMeter.computePct(0, 0));
+    try testing.expectEqual(@as(u8, 100), ProgressMeter.computePct(5, 0));
+}
+
+test "ProgressMeter: update fires on first byte and pct change" {
+    const testing = std.testing;
+    var meter = ProgressMeter.init(1000);
+    meter.setTotal(1000);
+    // First render: last_render_ms == minInt, so the time gate is bypassed.
+    const p1 = meter.update(100, 0) orelse return testing.expect(false);
+    try testing.expectEqual(@as(u64, 100), p1.done);
+    try testing.expectEqual(@as(u8, 10), p1.pct.?);
+    meter.markRendered(0, p1.pct);
+
+    // bytes=150 (15%), within 50 ms: time gate blocks.
+    try testing.expect(meter.update(50, 20) == null);
+    // bytes=160 (16%), >= 50 ms, pct changed: event.
+    const p2 = meter.update(10, 80) orelse return testing.expect(false);
+    try testing.expectEqual(@as(u8, 16), p2.pct.?);
+    meter.markRendered(80, p2.pct);
+    // bytes=180 (18%), within 50 ms of t=80: time gate blocks.
+    try testing.expect(meter.update(20, 100) == null);
+    // bytes=200 (20%), >= 50 ms, pct changed: event.
+    const p3 = meter.update(20, 140) orelse return testing.expect(false);
+    try testing.expectEqual(@as(u8, 20), p3.pct.?);
+}
+
+test "ProgressMeter: update throttles within 50 ms of last render" {
+    const testing = std.testing;
+    var meter = ProgressMeter.init(1000);
+    meter.setTotal(1000);
+    // bytes=100 (10%), first render.
+    const p1 = meter.update(100, 0) orelse return testing.expect(false);
+    try testing.expectEqual(@as(u8, 10), p1.pct.?);
+    meter.markRendered(0, p1.pct);
+    // bytes=200 (20%), only 10 ms since t=0: time gate blocks.
+    try testing.expect(meter.update(100, 10) == null);
+    // bytes=300 (30%), 80 ms since t=0, pct changed: event.
+    const p2 = meter.update(100, 80) orelse return testing.expect(false);
+    try testing.expectEqual(@as(u8, 30), p2.pct.?);
+    meter.markRendered(80, p2.pct);
+    // bytes=400 (40%), only 10 ms since t=80: time gate blocks.
+    try testing.expect(meter.update(100, 90) == null);
+    // bytes=500 (50%), 60 ms since t=80, pct changed: event.
+    const p3 = meter.update(100, 150) orelse return testing.expect(false);
+    try testing.expectEqual(@as(u8, 50), p3.pct.?);
+}
+
+test "ProgressMeter: unknown total uses 250 ms gate" {
+    const testing = std.testing;
+    var meter = ProgressMeter.init(null);
+    // First render: last_render_ms == 0, so the time gate is bypassed.
+    const p1 = meter.update(100, 0) orelse return testing.expect(false);
+    try testing.expectEqual(@as(u64, 100), p1.done);
+    try testing.expect(p1.total == null);
+    try testing.expect(p1.pct == null);
+    meter.markRendered(0, null);
+    // 100 ms elapsed (< 250 ms): throttled.
+    try testing.expect(meter.update(100, 100) == null);
+    // 350 ms elapsed (>= 250 ms): event.
+    const p2 = meter.update(100, 350) orelse return testing.expect(false);
+    try testing.expectEqual(@as(u64, 300), p2.done);
+}
+
+test "ProgressMeter: setTotal prefers content_length over fallback" {
+    const testing = std.testing;
+    var meter = ProgressMeter.init(500);
+    try testing.expectEqual(@as(u64, 500), meter.effectiveTotal().?);
+    meter.setTotal(1000);
+    try testing.expectEqual(@as(u64, 1000), meter.effectiveTotal().?);
+    meter.setTotal(null);
+    try testing.expectEqual(@as(u64, 500), meter.effectiveTotal().?);
+}
+
+test "ProgressMeter: reset clears counters and timers" {
+    const testing = std.testing;
+    var meter = ProgressMeter.init(1000);
+    meter.setTotal(1000);
+    _ = meter.update(500, 1000);
+    meter.markRendered(1000, 50);
+    meter.reset();
+    try testing.expectEqual(@as(u64, 0), meter.bytes_written);
+    try testing.expect(meter.last_pct == null);
+    try testing.expectEqual(std.math.minInt(i64), meter.last_render_ms);
+    // First update after reset fires immediately (no throttle state).
+    const p = meter.update(10, 5000) orelse return testing.expect(false);
+    try testing.expectEqual(@as(u8, 1), p.pct.?);
+}
+
+test "ProgressMeter: finalRender forces completion payload" {
+    const testing = std.testing;
+    var meter = ProgressMeter.init(1000);
+    meter.setTotal(1000);
+    _ = meter.update(990, 0);
+    meter.markRendered(0, 99);
+    // Even though the 50 ms gate would block a 100% event at t=10 ms,
+    // finalRender forces it.
+    const p = meter.finalRender();
+    try testing.expectEqual(@as(u64, 990), p.done);
+    try testing.expectEqual(@as(u8, 99), p.pct.?);
+    // Unknown total: finalRender reports done with no pct.
+    var m2 = ProgressMeter.init(null);
+    _ = m2.update(42, 0);
+    const p2 = m2.finalRender();
+    try testing.expectEqual(@as(u64, 42), p2.done);
+    try testing.expect(p2.pct == null);
+}
+
+test "ProgressTerminalRenderer: formatHumanSize boundaries" {
+    const testing = std.testing;
+    var buf: [16]u8 = undefined;
+    try testing.expectEqualStrings("0 B", ProgressTerminalRenderer.formatHumanSize(&buf, 0));
+    try testing.expectEqualStrings("1023 B", ProgressTerminalRenderer.formatHumanSize(&buf, 1023));
+    try testing.expectEqualStrings("1.0 KiB", ProgressTerminalRenderer.formatHumanSize(&buf, 1024));
+    try testing.expectEqualStrings("1.5 MiB", ProgressTerminalRenderer.formatHumanSize(&buf, 1_572_864));
+    try testing.expectEqualStrings("2.0 GiB", ProgressTerminalRenderer.formatHumanSize(&buf, 2_147_483_648));
+    try testing.expectEqualStrings("3.0 TiB", ProgressTerminalRenderer.formatHumanSize(&buf, 3_298_534_883_328));
+}
+
+test "ProgressTerminalRenderer: progress line formatting" {
+    const testing = std.testing;
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var r = ProgressTerminalRenderer.init("test.iso", &aw.writer);
+
+    try r.renderProgress(450, 1000, 45);
+    var out = aw.writer.buffered();
+    try testing.expectEqualStrings("\rDownloading test.iso: 45% (450 B / 1000 B)", out);
+
+    // Unknown total: no percentage, no total.
+    var aw2: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw2.deinit();
+    var r2 = ProgressTerminalRenderer.init("test.iso", &aw2.writer);
+    try r2.renderProgress(2048, null, null);
+    out = aw2.writer.buffered();
+    try testing.expectEqualStrings("\rDownloading test.iso: 2.0 KiB", out);
+}
+
+test "ProgressTerminalRenderer: space padding erases ghost characters" {
+    const testing = std.testing;
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var r = ProgressTerminalRenderer.init("test.iso", &aw.writer);
+
+    // Long line first.
+    try r.renderProgress(999_999, 1_000_000, 99);
+    const long_line = aw.writer.buffered();
+    try testing.expect(std.mem.startsWith(u8, long_line, "\rDownloading test.iso: 99% (976.6 KiB / 976.6 KiB)"));
+
+    // Shorter line: padded with trailing spaces up to the previous length.
+    try r.renderProgress(10, 1_000_000, 0);
+    const all = aw.writer.buffered();
+    const second = all[long_line.len..];
+    try testing.expect(std.mem.startsWith(u8, second, "\rDownloading test.iso: 0% (10 B / 976.6 KiB)"));
+    // The padded line must be at least as long as the first line.
+    try testing.expect(second.len >= long_line.len);
+    for (second[long_line.len - 1 ..]) |c| {
+        try testing.expectEqual(@as(u8, ' '), c);
+    }
+}
+
+test "ProgressTerminalRenderer: finish emits final line and newline" {
+    const testing = std.testing;
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var r = ProgressTerminalRenderer.init("test.iso", &aw.writer);
+
+    try r.renderProgress(500, 1000, 50);
+    try r.finish(1000, 1000);
+    const out = aw.writer.buffered();
+    try testing.expect(std.mem.endsWith(u8, out, "\n"));
+    try testing.expect(std.mem.indexOf(u8, out, "100%") != null);
+}
+
+test "ProgressTerminalRenderer: abort emits newline only after a render" {
+    const testing = std.testing;
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var r = ProgressTerminalRenderer.init("test.iso", &aw.writer);
+
+    // Pre-stream silence: abort before any render emits nothing.
+    try r.abort();
+    try testing.expectEqual(@as(usize, 0), aw.writer.buffered().len);
+
+    // After a render, abort terminates the line with a newline.
+    try r.renderProgress(100, 1000, 10);
+    const before = aw.writer.buffered().len;
+    try r.abort();
+    const out = aw.writer.buffered();
+    try testing.expectEqual(before + 1, out.len);
+    try testing.expectEqual(@as(u8, '\n'), out[before]);
+}
+
+test "ProgressTerminalRenderer: skip message" {
+    const testing = std.testing;
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var r = ProgressTerminalRenderer.init("test.iso", &aw.writer);
+    try r.renderSkip();
+    try testing.expectEqualStrings("test.iso: already complete, skipped\n", aw.writer.buffered());
+}
+
+test "ProgressStreamTap: transparent byte passthrough" {
+    const testing = std.testing;
+    var inner: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer inner.deinit();
+    var meter = ProgressMeter.init(100);
+    var renderer = ProgressTerminalRenderer.init("t", &inner.writer);
+    var tap_buf: [64]u8 = undefined;
+    var tap = ProgressStreamTap.init(&inner.writer, &meter, &renderer, &tap_buf);
+
+    const payload = "hello world, this is a tap test";
+    try tap.writer().writeAll(payload);
+    try tap.writer().flush();
+
+    // The inner writer received the payload plus the progress lines.
+    const out = inner.writer.buffered();
+    try testing.expect(std.mem.indexOf(u8, out, payload) != null);
+    // The meter counted exactly the payload bytes.
+    try testing.expectEqual(@as(u64, payload.len), meter.bytes_written);
+}
+
+test "ProgressStreamTap: splat passthrough and accounting" {
+    const testing = std.testing;
+    var inner: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer inner.deinit();
+    var meter = ProgressMeter.init(10);
+    var renderer = ProgressTerminalRenderer.init("t", &inner.writer);
+    var tap_buf: [8]u8 = undefined;
+    var tap = ProgressStreamTap.init(&inner.writer, &meter, &renderer, &tap_buf);
+
+    // Splat write: 5 x "ab" = 10 bytes.
+    var splat_data = [_][]const u8{"ab"};
+    try tap.writer().writeSplatAll(&splat_data, 5);
+    try tap.writer().flush();
+
+    try testing.expectEqual(@as(u64, 10), meter.bytes_written);
+    const out = inner.writer.buffered();
+    // The payload bytes must appear exactly 5 times.
+    var count: usize = 0;
+    for (0..out.len - 1) |i| {
+        if (std.mem.eql(u8, out[i .. i + 2], "ab")) count += 1;
+    }
+    try testing.expectEqual(@as(usize, 5), count);
+}
+
+test "ProgressStreamTap: large write across buffer boundary" {
+    const testing = std.testing;
+    var inner: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer inner.deinit();
+    var meter = ProgressMeter.init(1024);
+    var renderer = ProgressTerminalRenderer.init("t", &inner.writer);
+    var tap_buf: [16]u8 = undefined;
+    var tap = ProgressStreamTap.init(&inner.writer, &meter, &renderer, &tap_buf);
+
+    var big: [1000]u8 = undefined;
+    @memset(&big, 0x42);
+    try tap.writer().writeAll(&big);
+    try tap.writer().flush();
+
+    try testing.expectEqual(@as(u64, 1000), meter.bytes_written);
+    const out = inner.writer.buffered();
+    // The payload (1000 x 0x42) must appear as a contiguous run; progress
+    // lines are interleaved but never contain 0x42.
+    try testing.expect(std.mem.indexOf(u8, out, &big) != null);
 }
