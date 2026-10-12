@@ -101,6 +101,34 @@ while [[ "$#" -gt 0 ]]; do
 	esac
 done
 
+# -----------------------------------------------------------------------------
+# Validate --suites value early (before any container setup).
+#
+# Accepts: "all", empty string, or a comma-separated list of known suite
+# names.  Fails loud on any unknown name so the user does not wait for a
+# full container spin-up only to discover zero tests ran.
+# -----------------------------------------------------------------------------
+if [[ -n "$E2E_SUITES" && "$E2E_SUITES" != "all" ]]; then
+	_valid_suites="core auth data output robustness retry_knobs archive monitor schedule help clone_smoke clone_single clone_topology clone_maxdepth clone_uefi stress perf"
+	IFS=',' read -ra _suite_tokens <<<"$E2E_SUITES"
+	_invalid_suites=()
+	for _token in "${_suite_tokens[@]}"; do
+		# Trim surrounding whitespace.
+		_token="${_token#"${_token%%[![:space:]]*}"}"
+		_token="${_token%"${_token##*[![:space:]]}"}"
+		[[ -z "$_token" ]] && continue
+		if ! echo " $_valid_suites " | grep -q " $_token "; then
+			_invalid_suites+=("$_token")
+		fi
+	done
+	if [[ ${#_invalid_suites[@]} -gt 0 ]]; then
+		echo "Error: unknown suite name(s): ${_invalid_suites[*]}" >&2
+		echo "Valid suite names: $_valid_suites" >&2
+		echo "Use 'all' to run every suite, or an empty string to run none." >&2
+		exit 1
+	fi
+fi
+
 # Build setup.sh / teardown.sh argument lists
 SETUP_ARGS=()
 TEARDOWN_ARGS=()
