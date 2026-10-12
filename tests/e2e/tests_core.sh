@@ -104,6 +104,7 @@ container_exec bash -c "printf 'DISTRI=example&VERSION=0&FLAVOR=DVD&ARCH=x86_64&
 run_comparison_api "--data-file POST matching product schedules a job (count:1)" "" \
 	"-X POST -a 'Content-Type: application/x-www-form-urlencoded' --data-file /tmp/body36b.txt isos" \
 	0 '"count":1'
+cancel_pending_jobs # the 2 BUILD=raw36b jobs scheduled above
 
 # Test COR-37: --form converts a JSON object body to application/x-www-form-urlencoded.
 # Perl (api.pm:26): decode_json($data) → form => $params.

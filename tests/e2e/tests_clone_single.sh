@@ -33,9 +33,11 @@ ZIG_CLONE_EXE="/app/zig-out/bin/zoqa-clone-job"
 # by run.sh.  All M12+ tests clone an existing completed job, verify the
 # clone output, and check job settings via the API.
 #
-# Single-worker constraint: clone-job itself is fast (one API call); the
-# CLONED job runs in the container queue. We wait for each batch of cloned
-# jobs to finish before scheduling more, so the worker is always free.
+# Queue constraint: clone-job itself is fast (one API call), but every
+# successful clone leaves a new job in the openQA queue. Only M15/M17 wait
+# for their clones. The other sections only check CLI output and call
+# cancel_pending_jobs at their end. Without that, ~25 clones pile up in front
+# of the 2 workers and take ~7 minutes to drain.
 
 # Ensure a completed base job exists (idempotent; sets and exports $JOB_ID).
 ensure_basic_job
@@ -329,9 +331,7 @@ for _lbl_ids in "perl:$_CLONE_PERL_IDS" "zig:$_CLONE_ZIG_IDS"; do
         fi
 
         # Clean up: cancel the stuck scheduled job so it doesn't pollute the container worker queue
-        if [[ "$DRY_RUN" != "true" ]]; then
-                container_exec openqa-cli api --host http://localhost -X POST "jobs/$_new_id/cancel" >/dev/null 2>&1 || true
-        fi
+        cancel_job "$_new_id" || true
 done
 
 if [[ "$_reproduce_pass" == "true" ]]; then
@@ -385,6 +385,8 @@ else
 	echo "FAIL: Zig json-output is valid non-empty JSON"
 	failed_tests=$((failed_tests + 1))
 fi
+
+cancel_pending_jobs # clones left by CLO-12–CLO-70
 
 echo "--- Test CLO-71 CLO-78: Asset download ---"
 # --dir path must exist inside the container (commands run via container_exec).
@@ -452,6 +454,8 @@ else
 fi
 
 container_exec rm -rf "$ASSET_DIR_PERL" "$ASSET_DIR_ZIG"
+
+cancel_pending_jobs # clones left by CLO-71–CLO-78
 
 # =============================================================================
 # CLO-100 / CLO-101: "skip if already complete" probe (curl --continue-at -)
@@ -524,6 +528,8 @@ fi
 assert_skip_if_complete "CLO-101 Zig" "$CLO100_REF" "$CLO100_ZIG" "$_clo101_start" "$_clo101_end"
 
 container_exec rm -rf "$CLO100_REF" "$CLO100_PERL" "$CLO100_ZIG"
+
+cancel_pending_jobs # clones left by CLO-100–CLO-101
 
 # =============================================================================
 # CLO-72 to CLO-76: OPENQA_SHAREDIR environment variable
@@ -894,6 +900,8 @@ container_exec rm -rf "$SHAREDIR_DECOY" "$ASSET_DIR_76_PERL" "$ASSET_DIR_76_ZIG"
 restore_factory
 container_exec rm -rf "$_CLO7X_BACKUP"
 
+cancel_pending_jobs # clones left by CLO-72–CLO-76
+
 # =============================================================================
 # CLO-80 to CLO-83: --ignore-missing-assets
 #
@@ -1033,6 +1041,8 @@ else
 	container_exec rm -rf "$ASSET_DIR_CLO_81_PERL" "$ASSET_DIR_CLO_81_ZIG"
 fi
 
+cancel_pending_jobs # fixture job and clones left by CLO-80–CLO-83
+
 # =============================================================================
 # CLO-RK-1: OPENQA_CLI_RETRY_SLEEP_TIME_S + OPENQA_CLI_RETRY_FACTOR smoke test
 #            for zoqa-clone-job (both Perl and Zig).
@@ -1069,6 +1079,8 @@ else
 	echo "FAIL: CLO-RK-1 Zig exited $_LAST_EXIT with retry env vars set (expected 0)"
 	failed_tests=$((failed_tests + 1))
 fi
+
+cancel_pending_jobs # clones left by CLO-RK-1
 
 # =============================================================================
 # CLO-84 to CLO-89: Asset download and BFS GET retry via fault-injecting proxy
@@ -1464,6 +1476,8 @@ fi
 # Ensure no stray proxy process is left running after this section
 stop_faultproxy
 
+cancel_pending_jobs # clones left by CLO-84–CLO-89
+
 # =============================================================================
 # CLO-98 / CLO-99: Mid-transfer TCP drop — partial fault mode
 #
@@ -1783,6 +1797,8 @@ fi
 assert_no_partial_files "$ASSET_DIR_CLO_104" "CLO-104 Zig"
 container_exec rm -rf "$ASSET_DIR_CLO_104"
 
+cancel_pending_jobs # clones left by CLO-98–CLO-104
+
 # =============================================================================
 # CLO-105 to CLO-108: Exit code for argument errors (Gap 7 — §18.11)
 #
@@ -1992,3 +2008,5 @@ stop_faultproxy
 assert_oracle_nonzero "$tag" "CLO-120 SCC_ADDONS with unreachable test repo:"
 
 set +x  # end of CLO-115–120
+
+cancel_pending_jobs # clones left by CLO-115–CLO-120

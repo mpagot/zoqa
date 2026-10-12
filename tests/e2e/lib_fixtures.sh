@@ -8,6 +8,7 @@
 #   schedule_job()          — POST /api/v1/isos, prints job ID
 #   wait_for_job()          — poll until terminal state, prints state
 #   cancel_job()            — POST cancel for a job
+#   cancel_pending_jobs()   — cancel all unfinished jobs (clone backlog cleanup)
 #   get_job_state()         — query and print a job's state
 #   _ensure_job()           — generic lazy-init for any named job variable
 #   _E2E_JOB_COMMON_ARGS   — shared schedule_job args (DISTRI/FLAVOR/ARCH/…)
@@ -126,6 +127,35 @@ cancel_job() {
 	fi
 	container_exec openqa-cli api --host http://localhost \
 		-X POST "jobs/$this_job_id/cancel" >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+# cancel_pending_jobs — cancel every not-yet-finished job
+#
+# Every successful clone-job run leaves a new job in the openQA queue. Tests
+# that only check the CLI output never wait for those jobs, so they pile up
+# in front of the 2 workers. A job that is scheduled later (e.g. by
+# _ensure_job) then waits behind the whole backlog and can time out.
+# Call this at the end of each test section that leaves clones behind, after
+# the last check that reads those jobs.
+# ---------------------------------------------------------------------------
+cancel_pending_jobs() {
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] cancel_pending_jobs" >&2
+		return 0
+	fi
+	local ids id cancelled=()
+	ids=$(container_exec openqa-cli api --host http://localhost \
+		jobs state=scheduled,assigned,setup,running 2>/dev/null |
+		jq -r '.jobs[].id // empty') || true
+	for id in $ids; do
+		cancel_job "$id" || true
+		cancelled+=("$id")
+	done
+	if [[ ${#cancelled[@]} -gt 0 ]]; then
+		echo "  [cleanup] Cancelled ${#cancelled[@]} pending job(s): ${cancelled[*]}" >&2
+	fi
+	return 0
 }
 
 # ---------------------------------------------------------------------------
