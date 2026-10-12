@@ -284,25 +284,50 @@ fi
 # the first request — but at that point /etc/openqa/client.conf does not yet
 # exist and the API key has not been inserted into the DB (that happens when
 # /login is hit, which we only did just above). The bootstrap-launched worker
-# therefore gets a 403 "no api key" on its first registration attempt and
-# exits permanently. Without this restart, /admin/workers is empty and every
-# scheduled job sits in 'scheduled' forever.
+# therefore *usually* gets a 403 "no api key" on its first registration attempt
+# and exits permanently. Without this restart, /admin/workers is empty and
+# every scheduled job sits in 'scheduled' forever.
+#
+# GUARD: that "usually" is the catch. If the bootstrap worker's registration
+# retry happens to land after /login has already created the credential, it
+# can register successfully and keep running. Unconditionally launching a
+# second `worker --instance 1` in that case produces two live processes
+# claiming the same worker identity (e.g. "<container>:1"), which makes the
+# scheduler flip-flop jobs between them and fail them as
+# "re-connected but abandoned the job" (see e2e_clone_single.log Entry 1).
+# So: check /admin/workers.json for an already-alive worker first, and only
+# launch a new one if none is registered yet.
 # -----------------------------------------------------------------------------
 if [[ "$DRY_RUN" == "true" ]]; then
 	log "[DRY-RUN] Skipping openqa-worker restart..."
 else
-	log "Starting openqa-worker (bootstrap's initial worker died before credentials existed)..."
-	# Detached exec so the worker keeps running after this command returns
-	podman exec -d "$CONTAINER_NAME" \
-		su _openqa-worker -c '/usr/share/openqa/script/worker --instance 1'
-	for i in {1..15}; do
-		if container_exec curl -sf http://localhost/admin/workers.json 2>/dev/null | grep -q '"alive":1'; then
-			log "Worker registered after ${i}s."
-			break
-		fi
-		[[ "$i" -eq 15 ]] && die "Worker failed to register within 15s — check podman logs $CONTAINER_NAME"
-		sleep 1
-	done
+	# [debug] Surface whether a worker --instance 1 process already exists.
+	# This is diagnostic only -- it does NOT drive the launch decision below,
+	# since a live process doesn't guarantee it ever registered successfully.
+	_existing_worker_procs=$(container_exec pgrep -af 'worker --instance 1' 2>/dev/null || true)
+	if [[ -n "$_existing_worker_procs" ]]; then
+		log "[debug] worker --instance 1 process(es) already present:"
+		log "[debug]   $_existing_worker_procs"
+	else
+		log "[debug] no worker --instance 1 process found yet."
+	fi
+
+	if container_exec curl -sf http://localhost/admin/workers.json 2>/dev/null | grep -q '"alive":1'; then
+		log "A worker is already alive and registered (bootstrap's worker survived), skipping relaunch."
+	else
+		log "Starting openqa-worker (bootstrap's initial worker died before credentials existed)..."
+		# Detached exec so the worker keeps running after this command returns
+		podman exec -d "$CONTAINER_NAME" \
+			su _openqa-worker -c '/usr/share/openqa/script/worker --instance 1'
+		for i in {1..15}; do
+			if container_exec curl -sf http://localhost/admin/workers.json 2>/dev/null | grep -q '"alive":1'; then
+				log "Worker registered after ${i}s."
+				break
+			fi
+			[[ "$i" -eq 15 ]] && die "Worker failed to register within 15s — check podman logs $CONTAINER_NAME"
+			sleep 1
+		done
+	fi
 fi
 
 # -----------------------------------------------------------------------------
