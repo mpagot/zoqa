@@ -39,8 +39,13 @@ ZIG_CLONE_EXE="/app/zig-out/bin/zoqa-clone-job"
 # cancel_pending_jobs at their end. Without that, ~25 clones pile up in front
 # of the 2 workers and take ~7 minutes to drain.
 
-# Ensure a completed base job exists (idempotent; sets and exports $JOB_ID).
+# Ensure completed base and rich jobs exist (idempotent; sets and exports
+# $JOB_ID and $RICH_JOB_ID). The rich job is scheduled here, while the queue
+# is still empty, so CLO-84/CLO-98/CLO-126 never wait for a free worker even
+# if a section forgets to call cancel_pending_jobs. In a full run,
+# tests_archive.sh / tests_monitor.sh have already set it.
 ensure_basic_job
+ensure_rich_job
 
 # CLO-12: --within-instance exits 0 for a known job.
 tag="CLO-12_with-instance_exit0"
