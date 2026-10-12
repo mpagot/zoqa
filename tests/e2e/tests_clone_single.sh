@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
 # test_clone_single.sh — Single-job clone tests (CLO-12 to CLO-17, M43–M44, CLO-50 to CLO-83,
-#                         CLO-84 to CLO-89, CLO-98 to CLO-104, CLO-105 to CLO-108).
+#                         CLO-84 to CLO-89, CLO-98 to CLO-104, CLO-105 to CLO-108,
+#                         CLO-115 to CLO-126).
 # CLO-72–76: OPENQA_SHAREDIR env var tests.
 #
 # All tests in this file operate on a single base job ($JOB_ID) produced by
@@ -2015,3 +2016,130 @@ assert_oracle_nonzero "$tag" "CLO-120 SCC_ADDONS with unreachable test repo:"
 set +x  # end of CLO-115–120
 
 cancel_pending_jobs # clones left by CLO-115–CLO-120
+
+# =============================================================================
+# CLO-126: Disk-full write failure must not retry (Perl vs Zig)
+# =============================================================================
+#
+# A local filesystem write failure (ENOSPC / EDQUOT) is a permanent error,
+# not a transient network condition.  Neither implementation should retry:
+#   - Perl: curl fails immediately on ENOSPC (CURLE_WRITE_ERROR 23); curl's
+#     --retry only covers transient network errors, not local write failures.
+#
+# Reproduction: mount a 1 MiB tmpfs via `unshare -m -r` inside the container.
+# The rich job's cirros qcow2 asset (~20 MiB) cannot fit, triggering ENOSPC.
+#
+# Both implementations are run inside an unshare namespace with a 1 MiB
+# tmpfs mount. We route asset downloads through the reverse proxy (with
+# fail_times=0) so hit counts verify exactly 1 download attempt was made
+# (no retry) without relying on the --show-progress feature.
+
+echo "--- Test CLO-126: disk-full write failure exits immediately without retry ---"
+ensure_rich_job
+
+if [[ "$DRY_RUN" == "true" ]]; then
+	echo "[DRY-RUN] CLO-126: disk-full write failure exits without retry (Perl vs Zig)"
+elif ! container_exec unshare -m -r true 2>/dev/null; then
+	echo "SKIP: CLO-126 unshare user/mount namespaces not supported in container"
+else
+	tag="clo-126"
+
+	# Start faultproxy with fail_times=0 so all requests pass through to the real
+	# openQA backend on :80, but every request hit is logged to FAULTPROXY_COUNT_FILE.
+	start_faultproxy 0
+
+	# Ensure log directory exists
+	mkdir -p "$LOG_DIR"
+	touch "$LOG_DIR/${tag}_perl_stdout.log" "$LOG_DIR/${tag}_zig_stdout.log"
+
+	# --- Perl ---
+	ASSET_DIR_126_PERL="/tmp/e2e-${tag}-perl-$$"
+	set +e
+	container_exec bash -c "
+		unshare -m -r bash -c '
+			mkdir -p \"${ASSET_DIR_126_PERL}\" || exit 2
+			mount -t tmpfs -o size=1M tmpfs \"${ASSET_DIR_126_PERL}\" || exit 2
+			$PERL_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} --host localhost \
+				--skip-deps --retry 2 \
+				${RICH_JOB_ID} --dir \"${ASSET_DIR_126_PERL}\" 2>&1
+			_code=\$?
+			umount \"${ASSET_DIR_126_PERL}\" 2>/dev/null || true
+			rm -rf \"${ASSET_DIR_126_PERL}\" 2>/dev/null || true
+			exit \$_code
+		'
+	" > "$LOG_DIR/${tag}_perl_stderr.log" 2>&1
+	_PERL_EXIT=$?
+	set -e
+
+	_CLO126_PERL_HITS=$(get_faultproxy_hits "/tests/${RICH_JOB_ID}/asset/hdd/cirros" | tr -d ' \r\n')
+	_CLO126_PERL_HITS="${_CLO126_PERL_HITS:-0}"
+
+	# Reset proxy hit counts before running Zig
+	reset_faultproxy
+
+	# --- Zig ---
+	ASSET_DIR_126_ZIG="/tmp/e2e-${tag}-zig-$$"
+	set +e
+	container_exec bash -c "
+		unshare -m -r bash -c '
+			mkdir -p \"${ASSET_DIR_126_ZIG}\" || exit 2
+			mount -t tmpfs -o size=1M tmpfs \"${ASSET_DIR_126_ZIG}\" || exit 2
+			$ZIG_CLONE_EXE --from http://127.0.0.1:${FAULTPROXY_PORT} --host localhost \
+				--skip-deps --retry 2 \
+				${RICH_JOB_ID} --dir \"${ASSET_DIR_126_ZIG}\" 2>&1
+			_code=\$?
+			umount \"${ASSET_DIR_126_ZIG}\" 2>/dev/null || true
+			rm -rf \"${ASSET_DIR_126_ZIG}\" 2>/dev/null || true
+			exit \$_code
+		'
+	" > "$LOG_DIR/${tag}_zig_stderr.log" 2>&1
+	_ZIG_EXIT=$?
+	set -e
+
+	_CLO126_ZIG_HITS=$(get_faultproxy_hits "/tests/${RICH_JOB_ID}/asset/hdd/cirros" | tr -d ' \r\n')
+	_CLO126_ZIG_HITS="${_CLO126_ZIG_HITS:-0}"
+
+	stop_faultproxy
+
+	# 1. Exit code: Perl exits 23 (curl CURLE_WRITE_ERROR) or 1; Zig exits 1 (SPEC §13.10)
+	if [[ "$_PERL_EXIT" -eq 1 || "$_PERL_EXIT" -eq 23 ]]; then
+		echo "PASS: CLO-126 Perl exits $_PERL_EXIT on disk-full write failure (oracle)"
+	else
+		echo "FAIL: CLO-126 Perl exited $_PERL_EXIT (expected 1 or 23)"
+		cat "$LOG_DIR/${tag}_perl_stderr.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+	if [[ "$_ZIG_EXIT" -eq 1 ]]; then
+		echo "PASS: CLO-126 Zig exits 1 on disk-full write failure"
+	else
+		echo "FAIL: CLO-126 Zig exited $_ZIG_EXIT (expected 1)"
+		cat "$LOG_DIR/${tag}_zig_stderr.log"
+		failed_tests=$((failed_tests + 1))
+	fi
+
+	# 2. Exactly 1 download attempt for the large asset (not 3 = 1 + 2 retries).
+	#    Verified via proxy hits for the cirros asset without relying on progress meter.
+	#    Perl issues HEAD + GET (<= 2 hits); Zig issues 1 GET (1 hit).
+	if [[ "$_CLO126_PERL_HITS" -ge 1 && "$_CLO126_PERL_HITS" -le 2 ]]; then
+		echo "PASS: CLO-126 Perl made 1 download attempt ($_CLO126_PERL_HITS hits: HEAD+GET, no retry — oracle)"
+	else
+		echo "FAIL: CLO-126 Perl made $_CLO126_PERL_HITS hits (expected 1 or 2, retries should not occur)"
+		dump_faultproxy_logs
+		failed_tests=$((failed_tests + 1))
+	fi
+	if [[ "$_CLO126_ZIG_HITS" -eq 1 ]]; then
+		echo "PASS: CLO-126 Zig made exactly 1 download attempt (no retry)"
+	else
+		echo "FAIL: CLO-126 Zig made $_CLO126_ZIG_HITS attempt(s) (expected 1)"
+		dump_faultproxy_logs
+		failed_tests=$((failed_tests + 1))
+	fi
+
+	# 3. Stderr must report a write/disk error (SPEC §13.9)
+	assert_impl_log_pattern "${tag}" perl stderr "WriteFailed|NoSpaceLeft|No space left|CURLE_WRITE_ERROR|Failure writing|Failed writing|write error" \
+		"CLO-126 Perl stderr reports a write/disk error (oracle)"
+	assert_impl_log_pattern "${tag}" zig stderr "WriteFailed|NoSpaceLeft|No space left" \
+		"CLO-126 Zig stderr reports a write/disk error"
+fi
+
+cancel_pending_jobs # clones left by CLO-126
