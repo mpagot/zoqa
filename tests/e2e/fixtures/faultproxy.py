@@ -152,14 +152,24 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 sys.stderr.write("[proxy] 200 forwarded assets metadata (stripped size, %dB)\n" % len(body))
                 sys.stderr.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as exc:
+            self.close_connection = True
+            sys.stderr.write("[proxy] client disconnected early (assets) %s: %s\n" % (self.path, exc))
+            sys.stderr.flush()
         except urllib.error.HTTPError as exc:
-            self.send_response(exc.code)
-            self.end_headers()
+            try:
+                self.send_response(exc.code)
+                self.end_headers()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                self.close_connection = True
             sys.stderr.write("[proxy] %d forward-assets-error\n" % exc.code)
             sys.stderr.flush()
         except Exception as exc:
-            self.send_response(502)
-            self.end_headers()
+            try:
+                self.send_response(502)
+                self.end_headers()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                self.close_connection = True
             sys.stderr.write("[proxy] 502 forward-assets-exception: %s\n" % exc)
             sys.stderr.flush()
 
@@ -269,14 +279,24 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
                     self.wfile.write(body)
                 sys.stderr.write("[proxy] %d forward %s (%dB)\n" % (resp.status, path, len(body)))
                 sys.stderr.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as exc:
+            self.close_connection = True
+            sys.stderr.write("[proxy] client disconnected early %s: %s\n" % (path, exc))
+            sys.stderr.flush()
         except urllib.error.HTTPError as exc:
-            self.send_response(exc.code)
-            self.end_headers()
+            try:
+                self.send_response(exc.code)
+                self.end_headers()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                self.close_connection = True
             sys.stderr.write("[proxy] %d forward-error %s\n" % (exc.code, path))
             sys.stderr.flush()
         except Exception as exc:
-            self.send_response(502)
-            self.end_headers()
+            try:
+                self.send_response(502)
+                self.end_headers()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                self.close_connection = True
             sys.stderr.write("[proxy] 502 forward-exception %s: %s\n" % (path, exc))
             sys.stderr.flush()
 

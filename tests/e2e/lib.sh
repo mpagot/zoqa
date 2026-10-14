@@ -166,9 +166,9 @@ cd_to_project_root() {
 # Job Management Functions — extracted to lib_fixtures.sh
 #
 # Sourced automatically below.  Provides: schedule_job, wait_for_job,
-# cancel_job, get_job_state, _ensure_job, ensure_basic_job, ensure_rich_job,
-# ensure_stress_job, dump_job_logs, register_deletable_asset,
-# _E2E_JOB_COMMON_ARGS.
+# cancel_job, cancel_pending_jobs, get_job_state, _ensure_job,
+# ensure_basic_job, ensure_rich_job, ensure_stress_job, dump_job_logs,
+# register_deletable_asset, _E2E_JOB_COMMON_ARGS.
 # ===========================================================================
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_fixtures.sh"
 

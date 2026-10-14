@@ -19,7 +19,7 @@ of the harness and how to run it, see [README.md](README.md).
 | `tests_monitor.sh` | I | Monitor subcommand | MON-1–MON-51 |
 | `tests_schedule.sh` | J | Schedule subcommand | SCH-1–SCH-RK-3 |
 | `tests_clone_smoke.sh` | K | Clone-job: smoke (--help, no-args, bare integer) | CLO-1–CLO-11 |
-| `tests_clone_single.sh` | K | Clone-job: single-job flags (--reproduce, --repeat, assets, --check-repos, …) | CLO-12–CLO-89, CLO-98–CLO-108, CLO-115–CLO-120, CLO-RK-1 |
+| `tests_clone_single.sh` | K | Clone-job: single-job flags (--reproduce, --repeat, assets, --check-repos, …) | CLO-12–CLO-89, CLO-98–CLO-108, CLO-115–CLO-126, CLO-RK-1 |
 | `tests_clone_topology.sh` | K | Clone-job: graph topologies (chained, fan-out, diamond, parallel) | CLO-20–M42 |
 | `tests_clone_maxdepth.sh` | K | Clone-job: --max-depth traversal limits | CLO-90–CLO-97 |
 | `tests_clone_uefi.sh` | K | Clone-job: UEFI vars asset filtering | CLO-110–CLO-112 |
@@ -316,6 +316,7 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-118 | Unexpanded variables are warned and skipped | URL containing `%VAR%` is warned on stderr and skipped; clone proceeds and exits 0. |
 | CLO-119 | SCC_ADDONS multiple reachable test repos | Both resolve test repositories from `SCC_ADDONS` and exit 0 when reachable. |
 | CLO-120 | SCC_ADDONS with unreachable test repo | Clone is aborted and exits non-zero if any resolved addon test repository is unreachable. |
+| CLO-126 | Disk-full write failure exits without retry | With --dir on a 1 MiB tmpfs, Perl (exit 23/1) and Zig (exit 1) fail after 1 attempt (no retry) and report a write error. |
 
 ### Stress Tests (`tests_stress.sh`)
 | # | Test | Verification |

@@ -238,3 +238,5 @@ else
 
 	container_exec rm -rf "$ASSET_DIR_112_PERL" "$ASSET_DIR_112_ZIG"
 fi
+
+cancel_pending_jobs # fixture jobs and clones left by CLO-110–CLO-112

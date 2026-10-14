@@ -1,4 +1,28 @@
-//! This module provides functions for dealing with http requests to the openQA server
+//! Functions that send HTTP requests to the openQA API.
+//!
+//! ## Streaming and retry architecture
+//!
+//! Two public streaming functions exist, split by sink ownership:
+//!
+//! - `executeStream` streams into a caller-supplied `*std.Io.Writer`. It retries
+//!   only failures that occur BEFORE the body stream begins (connection errors,
+//!   send errors, header errors, 502/503). It cannot retry a mid-stream failure
+//!   because a generic writer has no way to rewind or truncate bytes already
+//!   committed to the sink; re-streaming would concatenate a second copy onto
+//!   the first.
+//!
+//! - `openQADownloadToFile` owns its sink (a local file). It is the sole retry
+//!   authority for that sink: it re-creates (truncates) the file between
+//!   attempts, which is what makes mid-stream retry safe. It calls
+//!   `executeStream` with `retries = 0` so the inner loop does not double-retry.
+//!   This is the one place in this module that touches `std.fs`, by design.
+//!
+//! - `openQARawGet` is a thin wrapper over `executeStream` for callers that
+//!   stream into a generic writer and do not need file-ownership semantics.
+//!   It passes the caller's retry policy through to `executeStream`.
+//!
+//! `sleepForRetry` is a private implementation detail shared by `execute`,
+//! `executeStream`, and `openQADownloadToFile`. It is not exported.
 
 const std = @import("std");
 const config = @import("config.zig");
@@ -45,9 +69,8 @@ pub const APIResponse = struct {
     /// Map the response status to a process exit code.
     ///
     /// Returns: 0 for 2xx status codes, 1 otherwise. Suitable for use directly
-    /// as a process exit code. This code is not about deciding what to return
-    /// as exit code in the cli, it is more to abstract the knowledge about the
-    /// HTTP protocol.
+    /// as a process exit code. The CLI decides the final exit code; this
+    /// function only encodes the HTTP rule that 2xx means success.
     pub fn exitCode(self: APIResponse) u8 {
         const s = @intFromEnum(self.status);
         return if (s >= 200 and s < 300) 0 else 1;
@@ -56,7 +79,7 @@ pub const APIResponse = struct {
 
 /// Parameters for a single HTTP request dispatched by `execute()`.
 ///
-/// `execute()` does not own any of the slices stored here, all borrowed
+/// `execute()` does not own any of the slices stored here; all borrowed
 /// memory must remain valid for the duration of the call.
 ///
 /// Fields:
@@ -67,7 +90,7 @@ pub const APIResponse = struct {
 /// - `method`           HTTP method (GET, POST, PUT, DELETE, …).
 /// - `url`              Fully-qualified URL string, e.g.
 ///                      `"https://openqa.example.com/api/v1/jobs"`.
-///                      Must be a valid absolute URL; parsing errors surface as
+///                      Must be a valid absolute URL; parsing errors are returned as
 ///                      `error.InvalidUri`.
 /// - `headers`          Caller-supplied HTTP headers appended verbatim before
 ///                      the auto-injected `Accept` and `Accept-Encoding` headers.
@@ -120,7 +143,8 @@ pub const Request = struct {
     allow_lengthless: bool = false,
 };
 
-/// Result returned by `executeStream()`. Result type for executeStream()
+/// Result returned by `executeStream()`.
+///
 /// Fields:
 /// - `status`         HTTP status code of the response.
 /// - `content_length` Value of the `Content-Length` response header, or
@@ -130,8 +154,6 @@ pub const StreamResult = struct {
     content_length: ?u64,
 };
 
-/// Normalize path+query for HMAC signing: %20 → +, ~ → %7E
-///
 /// Normalize a URL path+query string for HMAC-SHA1 signing.
 /// Rewrites %20 → + and ~ → %7E.
 /// Output is written to `writer`. Called internally by `execute()` before
@@ -152,7 +174,7 @@ fn normalizePathQuery(input: []const u8, writer: anytype) !void {
     }
 }
 
-/// Shared request-header construction. Build the outbound header list for a single request attempt.
+/// Build the outbound header list for a single request attempt.
 ///
 /// Copies `extra_headers` verbatim, adds `Accept: application/json` if no
 /// `Accept` header is present, always adds `Accept-Encoding: identity`, and
@@ -229,7 +251,7 @@ fn buildHeaders(
     return headers;
 }
 
-/// Perform an HTTP request using the provided client. Injectable HTTP engine
+/// Perform an HTTP request using the provided client.
 ///
 /// Parameters:
 ///   - req: the fully-populated request (method, URL, headers, body,
@@ -254,7 +276,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
     // A request body is only valid for methods that permit one (POST/PUT/PATCH).
     // std.http.Client asserts this precondition inside sendBodyUnflushed, so a
     // body on e.g. a GET aborts the whole process with a panic in safe builds
-    // (and is silent UB in ReleaseFast). Guard here and fail cleanly instead:
+    // (and is silent undefined behavior in ReleaseFast). Guard here and fail cleanly instead:
     // this is a permanent condition, so it is checked once before the retry loop
     // rather than retried.
     //
@@ -262,8 +284,9 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
     //   Perl silently sends the body on a bodiless method (e.g. a GET) and exits
     //   0. The server simply ignores it.
     //   zoqa instead rejects the request up front with error.BodyOnBodilessMethod (non-zero exit).
-    //   It is break behavioural parity here because sound better to fails and
-    //   Zig's std client cannot send a body on GET without asserting.
+    //   Parity is broken on purpose: an explicit error is better than a body
+    //   that the server ignores, and Zig's std client cannot send a body on a
+    //   GET without failing the assertion.
     //   The most common trigger is `--data-file FILE` / `--data` on a GET route without
     //   an explicit `-X POST`. See the ROB-8 E2E test in tests/e2e/tests_robustness.sh.
     if (req.body != null and !req.method.requestHasBody()) {
@@ -374,7 +397,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         while (hit.next()) |hdr| {
             // Collect all headers for verbose output (§1.3).
             // Hop-by-hop headers (RFC 7230 §6.1) are excluded to match the
-            // behaviors of Mojolicious's Mojo::Headers, which strips them
+            // behavior of Mojolicious's Mojo::Headers, which strips them
             // before exposing the header set to application code.
             const hop_by_hop = [_][]const u8{
                 "Connection",          "Keep-Alive", "Proxy-Authenticate",
@@ -462,7 +485,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
 ///
 /// Unlike `execute()`, this function does not buffer the body in memory:
 /// it is intended for large file downloads (e.g. the `archive` subcommand and
-/// clone-job asset downloads) where buffering would be expencive.
+/// clone-job asset downloads) where buffering would use too much memory.
 ///
 /// Retries (up to `req.retries`) are attempted only for failures that occur
 /// BEFORE the body stream begins:
@@ -710,7 +733,7 @@ test "execute: MockClient returns APIResponse" {
 
 /// Configuration for a single openQA API call via `openQAReq`.
 ///
-/// This struct bundles every tuneable aspect of a request into a single value that
+/// This struct bundles every tunable aspect of a request into a single value that
 /// is passed to `openQAReq`: HTTP method, parameters, body, authentication credentials, retry policy, and diagnostics.
 /// All fields except `allocator` have sensible defaults, so callers only
 /// need to set the fields that differ from a simple unauthenticated GET.
@@ -718,7 +741,7 @@ test "execute: MockClient returns APIResponse" {
 /// **Ownership:** `CallOptions` does **not** own any of the slices or
 /// pointers it holds (`headers`, `params`, `body`, `credentials`). The
 /// caller must ensure these remain valid for the duration of the
-/// `openQAReq` call. There is no `deinit`, nothing to free.
+/// `openQAReq` call. There is no `deinit`; nothing needs to be freed.
 pub const CallOptions = struct {
     /// General-purpose allocator used by `openQAReq` for all internal
     /// allocations. Must remain valid until `APIResponse.deinit()` is called.
@@ -729,7 +752,7 @@ pub const CallOptions = struct {
     /// POST/PUT/PATCH unless an explicit `body` is set).
     method: std.http.Method = .GET,
 
-    /// Extra request headers. **Not owned**, caller keeps the memory alive.
+    /// Extra request headers. **Not owned**; the caller keeps the memory alive.
     headers: []const std.http.Header = &.{},
 
     /// Pre-encoded URL query / form-encoded parameter string.
@@ -791,7 +814,7 @@ pub const RawGetOptions = struct {
 
 /// Perform an authenticated GET request to an arbitrary path (no /api/v1/ prefix).
 ///
-/// Streams the response body into `writer`. Before streaming starts, deposits
+/// Streams the response body into `writer`. Before streaming starts, writes
 /// the Content-Length header value into `content_length_out` (if non-null),
 /// allowing callers to set up progress tracking. Retries transient pre-stream
 /// failures up to `opts.retries` times; a mid-stream failure is not retried
@@ -846,7 +869,7 @@ pub fn openQARawGet(
 
 /// Update a file's access and modification times to the current system time.
 ///
-/// Called after a successful download or a skip-if-complete to defer openQA's
+/// Called after a successful download or a skip-if-complete to delay openQA's
 /// asset-cleanup cron. On a fresh write the filesystem already stamps
 /// mtime to now, so the touch is only *observable* on the skip path.
 ///
@@ -862,7 +885,7 @@ pub fn touchFile(path: []const u8) !void {
     try file.updateTimes(now_ns, now_ns);
 }
 
-/// Probe whether an on-disk file is already the full asset
+/// Probe whether an on-disk file is already the full asset.
 ///
 /// Return `true` when the source already considers a `size`-byte local file to
 /// be a complete copy, mirroring Perl's `curl --continue-at -`
@@ -902,38 +925,14 @@ fn isRemoteComplete(url: []const u8, size: u64, opts: RawGetOptions, client: any
     return result.status == .range_not_satisfiable;
 }
 
-/// Authenticated GET streamed to a local file, with retry
+/// Stream an authenticated GET to a local file, with retry.
 ///
-/// Download the resource at `absolute_path` on `host` into the local file
-/// `dest_path`, streaming the body directly to disk with retry.
-///
-/// DESIGN: why the retry loop (and the file lifecycle) live HERE:
-///
-/// `executeStream` streams into a generic `*std.Io.Writer`, which has no way to
-/// rewind or truncate what was already written. That is fine for retrying
-/// failures that happen BEFORE the body stream starts (connection errors,
-/// 502/503). `executeStream` does exactly that.
-/// But it CANNOT retry a failure that happens mid-stream (e.g. a TCP reset after N body bytes),
-/// because the partial bytes are already committed to the sink and re-streaming
-/// would concatenate a second copy onto the first (see e2e CLO-98/99).
-///
-/// Retrying a mid-transfer failure therefore requires re-creating (truncating)
-/// the sink between attempts, which only the owner of the sink can do. This
-/// function owns the file, so the retry loop belongs here. Keeping it in this
-/// module (rather than in the CLI) lets `sleepForRetry` stay a private
-/// implementation detail shared with `execute`/`executeStream` instead of
-/// being exported. This is the one place in `http_client` that touches
-/// `std.fs`, by design.
-///
-/// Behaviors:
-///   - Each attempt re-creates `dest_path` (truncating), so a failed transfer
-///     never leaves partial bytes behind.
-///   - Retries connection/stream errors and 5xx status up to `opts.retries`
-///     times, sleeping with exponential backoff between attempts.
-///   - 404 (and any other non-5xx status) is terminal (never retried) and
-///     the caller decides how to treat it via the returned `StreamResult`.
-///   - On success the file is flushed and kept; on ANY failure (terminal or
-///     retry-exhausted) the partial file is deleted before returning.
+/// Downloads `absolute_path` from `host` into `dest_path`, streaming
+/// directly to disk. Three guarantees:
+///   1. No partial file survives any failure (destination is deleted).
+///   2. A complete local copy is skipped (ranged-GET probe, mtime touched).
+///   3. Transient failures (connection, 5xx, mid-stream reset) are retried
+///      with backoff; non-5xx statuses are terminal.
 ///
 /// Parameters:
 ///   - host: bare hostname or full base URL of the source openQA instance.
@@ -963,18 +962,18 @@ pub fn openQADownloadToFile(
     defer opts.allocator.free(url);
 
     // Skip-if-complete (mirrors Perl's `curl --continue-at -`). If the
-    // destination already exists and the source reports it as complete (a ranged
-    // GET at the on-disk size returns 416), skip the body transfer entirely and
-    // only refresh the mtime. This avoids re-fetching large already-present
-    // assets (multi-GB HDD images) on every re-clone. The check is gated on the
-    // file existing with size > 0, so fresh downloads (empty destination) take
-    // the normal streaming path below.
+    // destination file already exists and the source reports it as complete
+    // (a ranged GET at the on-disk size returns 416), skip the body transfer entirely and
+    // only refresh the mtime.
+    // This avoids re-fetching large already-present assets (multi-GB HDD images)
+    // on every re-clone. The check is gated on the file existing with size > 0,
+    // so fresh downloads (empty destination) take the normal streaming path below.
     if (std.fs.cwd().statFile(dest_path)) |st| {
         if (st.size > 0) {
             if (isRemoteComplete(url, st.size, opts, client)) |complete| {
                 if (complete) {
                     // Already complete on disk: skip the body transfer and touch
-                    // mtime to defer openQA's asset-cleanup cron.
+                    // mtime to delay openQA's asset-cleanup cron.
                     try touchFile(dest_path);
                     return StreamResult{ .status = .ok, .content_length = st.size };
                 }
@@ -1025,6 +1024,14 @@ pub fn openQADownloadToFile(
                 // responses without Content-Length or expected_size). Retrying
                 // would defeat the policy when the fault is transient.
                 if (err == error.LengthRequired) break :blk .{ .failed = err };
+                // Local disk write failure (NoSpaceLeft, DiskQuota, ...): the
+                // real file writer stashes the specific error in file_writer.err;
+                // a mock may also return it directly. Retrying would re-download
+                // the whole asset against a filesystem that cannot store it.
+                if (file_writer.err) |disk_err| break :blk .{ .failed = disk_err };
+                if (err == error.NoSpaceLeft or err == error.DiskQuota or err == error.ReadOnlyFilesystem or err == error.WriteFailed) {
+                    break :blk .{ .failed = err };
+                }
                 // Connection error or mid-stream reset, retry if budget remains.
                 break :blk if (attempt < opts.retries) .retry else .{ .failed = err };
             };
@@ -1032,7 +1039,7 @@ pub fn openQADownloadToFile(
             if (result.status == .ok) {
                 // Flush before the deferred close so the file is complete on disk.
                 file_writer.interface.flush() catch |err| break :blk .{ .failed = err };
-                // Update file timestamps to current system time to defer openQA's asset-cleanup cron.
+                // Update file timestamps to current system time to delay openQA's asset-cleanup cron.
                 const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
                 file.updateTimes(now_ns, now_ns) catch |err| break :blk .{ .failed = err };
                 break :blk .{ .done = result };
@@ -1063,7 +1070,7 @@ pub fn openQADownloadToFile(
     }
 }
 
-/// Construct URL and Perform an authenticated request against an openQA instance.
+/// Build the URL and perform an authenticated request against an openQA instance.
 ///
 /// This is the **primary public entry point** of the library. It orchestrates:
 ///   1. Host resolution (bare hostname → full base URL via `config.resolveHost`).
@@ -1071,7 +1078,7 @@ pub fn openQADownloadToFile(
 ///   3. HMAC-SHA1 signature generation (via resolved credentials).
 ///   4. HTTP execution and response decompression (via the injected `client`).
 ///
-/// Parameters routing:
+/// Parameter routing:
 ///   - GET / DELETE: `opts.params` is appended to the URL as a query string.
 ///   - POST / PUT / PATCH: `opts.params` is used as the request body, unless
 ///     `opts.body` is already set (explicit body takes precedence).
@@ -1139,7 +1146,7 @@ pub fn openQAReq(
 ///
 /// Captures the URL (reconstructed from the `std.Uri` that `execute` passes
 /// to `client.request`) and the request body (via `sendBodyComplete`), so
-/// test assertions can verify URL construction, parameters routing, and body
+/// test assertions can verify URL construction, parameter routing, and body
 /// selection without making real HTTP calls.
 const TestMockClient = struct {
     const Self = @This();
@@ -1599,7 +1606,7 @@ test "openQADownloadToFile: successful download and mtime touch" {
     const stat = try file.stat();
     try testing.expect(stat.size > 0);
 
-    // The file should have a very recent modification time (within last 5 seconds)
+    // The file should have a very recent modification time (within the last 5 seconds)
     const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
     const diff = if (now_ns >= stat.mtime) now_ns - stat.mtime else stat.mtime - now_ns;
     try testing.expect(diff < 5 * std.time.ns_per_s);
@@ -1935,10 +1942,87 @@ test "openQADownloadToFile: retries on error.HttpTransferTruncated and deletes p
     // Should exhaust retries and propagate the error.
     try testing.expectError(error.HttpTransferTruncated, result);
 
-    // Verified that 3 attempts were made.
+    // Verify that 3 attempts were made.
     try testing.expectEqual(@as(u32, 3), mock.attempts);
 
-    // Verified that no partial file remains on disk after terminal failure.
+    // Verify that no partial file remains on disk after terminal failure.
+    try testing.expectError(error.FileNotFound, std.fs.cwd().access(dest_path, .{}));
+}
+
+test "openQADownloadToFile: NoSpaceLeft is terminal (no retry)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const DiskFullMockClient = struct {
+        const Self = @This();
+
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_length: ?u64 = 100,
+
+            const HeaderIterator = struct {
+                done: bool = false,
+                fn next(self: *HeaderIterator) ?std.http.Header {
+                    if (self.done) return null;
+                    self.done = true;
+                    return .{ .name = "Content-Type", .value = "application/octet-stream" };
+                }
+            };
+
+            fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            fn streamRemaining(_: *MockReader, w: anytype) anyerror!usize {
+                // Write a few bytes, then simulate ENOSPC.
+                const partial = "partial-data";
+                try w.writeAll(partial);
+                return error.NoSpaceLeft;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        attempts: u32 = 0,
+        response: MockResponse = .{},
+
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            self.attempts += 1;
+            return &self.response;
+        }
+    };
+
+    var mock: DiskFullMockClient = .{};
+    const dest_path = "temp_download_diskfull_test.txt";
+    defer std.fs.cwd().deleteFile(dest_path) catch {};
+
+    const result = openQADownloadToFile("http://localhost", "/tests/123/file.txt", dest_path, .{
+        .allocator = allocator,
+        .credentials = null,
+        .quiet = true,
+        .retries = 2, // 2 retries = 3 total attempts (if buggy)
+        .retry_sleep_s = 0.001,
+        .retry_factor = 1.0,
+    }, &mock);
+
+    // NoSpaceLeft is terminal: exactly 1 attempt, no retry.
+    try testing.expectEqual(@as(u32, 1), mock.attempts);
+    try testing.expectError(error.NoSpaceLeft, result);
+    // Partial file must be deleted.
     try testing.expectError(error.FileNotFound, std.fs.cwd().access(dest_path, .{}));
 }
 

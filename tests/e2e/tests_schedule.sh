@@ -208,16 +208,9 @@ fi
 # Give the async job time to be created by the server before next test.
 e2e_sleep 5
 
-# Wait for any async-created jobs to finish (free the worker).
-# Query the scheduled product to find the job IDs.
-_sch3_sp_id=$(container_exec bash -c "cat '$LOG_DIR/sch3_perl_stdout.log'" 2>/dev/null | grep -oP '(?<="scheduled_product_id":)\d+' || true)
-if [[ -n "$_sch3_sp_id" ]]; then
-	_sch3_async_ids=$(container_exec openqa-cli api --host http://localhost \
-		"isos/$_sch3_sp_id" 2>/dev/null | jq -r '.results.successful_job_ids[]? // empty' 2>/dev/null || true)
-	for _jid in $_sch3_async_ids; do
-		wait_for_job "$_jid" 300 >/dev/null || echo "  WARNING: timeout waiting for async job $_jid"
-	done
-fi
+# Cancel the async-created jobs (Perl and Zig) to free the workers.
+# Nothing inspects them later.
+cancel_pending_jobs
 
 # SCH-4: async=1 --monitor — both should poll, wait for jobs, and exit 0.
 echo "--- Test: SCH-4: Async schedule with --monitor ---"
