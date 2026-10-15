@@ -1557,22 +1557,6 @@ pub fn main() !void {
         checkRepos(arena_alloc, &client, phase2.final_jobs.items[0].settings.items, args.verbose);
     }
 
-    // --export-command: print the equivalent zoqa api command and exit.
-    if (args.export_command) {
-        const cmd = zoqa.clone_job.formatExportCommand(gpa, phase2.final_jobs.items, resolved.host_url) catch |err| {
-            printStderr("Error: failed to format export command: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-        defer gpa.free(cmd);
-
-        var stdout_buf: [8192]u8 = undefined;
-        var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-        const stdout = &stdout_writer.interface;
-        try stdout.writeAll(cmd);
-        try stdout.flush();
-        return;
-    }
-
     // Asset download phase: download assets from source to --dir.
     if (!resolved.skip_download) {
         // Pre-check: abort on server-reported missing assets (unless suppressed).
@@ -1626,6 +1610,22 @@ pub fn main() !void {
             clone_opts,
             env.openqa_allow_lengthless,
         );
+    }
+
+    // --export-command: print the equivalent zoqa api command and exit.
+    if (args.export_command) {
+        const cmd = zoqa.clone_job.formatExportCommand(gpa, phase2.final_jobs.items, resolved.host_url) catch |err| {
+            printStderr("Error: failed to format export command: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer gpa.free(cmd);
+
+        var stdout_buf: [8192]u8 = undefined;
+        var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+        const stdout = &stdout_writer.interface;
+        try stdout.writeAll(cmd);
+        try stdout.flush();
+        return;
     }
 
     // POST to destination and format output.

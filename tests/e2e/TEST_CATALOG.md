@@ -317,6 +317,8 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-119 | SCC_ADDONS multiple reachable test repos | Both resolve test repositories from `SCC_ADDONS` and exit 0 when reachable. |
 | CLO-120 | SCC_ADDONS with unreachable test repo | Clone is aborted and exits non-zero if any resolved addon test repository is unreachable. |
 | CLO-126 | Disk-full write failure exits without retry | With --dir on a 1 MiB tmpfs, Perl (exit 23/1) and Zig (exit 1) fail after 1 attempt (no retry) and report a write error. |
+| CLO-127 | --export-command downloads assets (Perl oracle) | Both download assets + print command; download runs before the --export-command guard. |
+| CLO-128 | --export-command --skip-download downloads nothing | Both print command without downloading; 0 files in --dir. |
 
 ### Stress Tests (`tests_stress.sh`)
 | # | Test | Verification |
