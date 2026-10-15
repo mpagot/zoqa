@@ -180,6 +180,8 @@ MANUAL_SCRIPTS := \
 	tests/manual/lib.sh \
 	tests/manual/test_api.sh \
 	tests/manual/test_archive.sh \
+	tests/manual/test_perf_clone.sh \
+	tests/manual/test_perf_details.sh \
 	tests/manual/test_schedule_monitor.sh
 
 manual-lint:
