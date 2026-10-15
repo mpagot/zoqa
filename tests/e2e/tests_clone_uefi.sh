@@ -209,7 +209,7 @@ else
 		"$ZIG_CLONE_EXE --from http://localhost --host localhost --skip-deps $CLO111_CHILD_ID --dir $ASSET_DIR_112_ZIG"
 	_ZIG_EXIT=$_LAST_EXIT
 
-	# Assertions for Perl (documented divergence, SPEC §18.18.4 / PERL_DEVIATIONS §4.5):
+	# Assertions for Perl (documented divergence, SPEC §18.18.4 / PERL_DEVIATIONS "UEFI vars asset on skipped parents"):
 	# With --skip-deps, Perl does not fetch parent details, so its UEFI vars filter
 	# concludes no parent publishes the asset and SKIPS downloading it — leaving the
 	# cloned child broken. That skip is the expected upstream bug (like CLO-86/CLO-88

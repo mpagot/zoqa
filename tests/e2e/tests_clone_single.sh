@@ -211,6 +211,109 @@ else
 fi
 
 # =============================================================================
+# Test CLO-127: --export-command downloads assets (Perl oracle)
+#
+# Perl downloads assets then prints the command. Zig must do the same:
+# the asset download phase runs before the --export-command guard.
+# =============================================================================
+echo "--- Test CLO-127: --export-command downloads assets (Perl oracle) ---"
+ASSET_DIR_CLO127_PERL="/tmp/e2e-clo127-perl-$$"
+ASSET_DIR_CLO127_ZIG="/tmp/e2e-clo127-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO127_PERL" "$ASSET_DIR_CLO127_ZIG"
+
+run_capture "clo127" perl \
+	"$PERL_CLONE_EXE --from http://localhost --host localhost --export-command $JOB_ID --dir $ASSET_DIR_CLO127_PERL"
+_PERL_EXIT=$_LAST_EXIT
+
+run_capture "clo127" zig \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost --export-command $JOB_ID --dir $ASSET_DIR_CLO127_ZIG"
+_ZIG_EXIT=$_LAST_EXIT
+
+assert_capture_exits "clo127" 0
+
+# Perl (oracle): must download at least one asset file.
+if container_exec find "$ASSET_DIR_CLO127_PERL" -type f | grep -q .; then
+	echo "PASS: CLO-127 Perl --export-command downloaded assets (oracle)"
+else
+	echo "FAIL: CLO-127 Perl --export-command downloaded assets (oracle)"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Zig: must download at least one asset file, like the Perl oracle.
+if container_exec find "$ASSET_DIR_CLO127_ZIG" -type f | grep -q .; then
+	echo "PASS: CLO-127 Zig --export-command downloaded assets"
+else
+	echo "FAIL: CLO-127 Zig --export-command downloaded assets"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# Both must print the command to stdout.
+if grep -q "openqa-cli api.*-X POST jobs" "$LOG_DIR/clo127_perl_stdout.log"; then
+	echo "PASS: CLO-127 Perl stdout contains command"
+else
+	echo "FAIL: CLO-127 Perl stdout contains command"
+	failed_tests=$((failed_tests + 1))
+fi
+
+if grep -q "zoqa api.*-X POST jobs" "$LOG_DIR/clo127_zig_stdout.log"; then
+	echo "PASS: CLO-127 Zig stdout contains command"
+else
+	echo "FAIL: CLO-127 Zig stdout contains command"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# =============================================================================
+# Test CLO-128: --export-command --skip-download downloads nothing
+#
+# Both Perl and Zig should print the command without downloading any assets.
+# =============================================================================
+echo "--- Test CLO-128: --export-command --skip-download downloads nothing ---"
+ASSET_DIR_CLO128_PERL="/tmp/e2e-clo128-perl-$$"
+ASSET_DIR_CLO128_ZIG="/tmp/e2e-clo128-zig-$$"
+container_exec mkdir -p "$ASSET_DIR_CLO128_PERL" "$ASSET_DIR_CLO128_ZIG"
+
+run_capture "clo128" perl \
+	"$PERL_CLONE_EXE --from http://localhost --host localhost --export-command --skip-download $JOB_ID --dir $ASSET_DIR_CLO128_PERL"
+_PERL_EXIT=$_LAST_EXIT
+
+run_capture "clo128" zig \
+	"$ZIG_CLONE_EXE --from http://localhost --host localhost --export-command --skip-download $JOB_ID --dir $ASSET_DIR_CLO128_ZIG"
+_ZIG_EXIT=$_LAST_EXIT
+
+assert_capture_exits "clo128" 0
+
+# Perl (oracle): must NOT download any asset file.
+if container_exec find "$ASSET_DIR_CLO128_PERL" -type f | grep -q .; then
+	echo "FAIL: CLO-128 Perl --skip-download should not download assets (oracle)"
+	failed_tests=$((failed_tests + 1))
+else
+	echo "PASS: CLO-128 Perl --skip-download downloaded nothing (oracle)"
+fi
+
+# Zig: must NOT download any asset file.
+if container_exec find "$ASSET_DIR_CLO128_ZIG" -type f | grep -q .; then
+	echo "FAIL: CLO-128 Zig --skip-download should not download assets"
+	failed_tests=$((failed_tests + 1))
+else
+	echo "PASS: CLO-128 Zig --skip-download downloaded nothing"
+fi
+
+# Both must print the command to stdout.
+if grep -q "openqa-cli api.*-X POST jobs" "$LOG_DIR/clo128_perl_stdout.log"; then
+	echo "PASS: CLO-128 Perl stdout contains command"
+else
+	echo "FAIL: CLO-128 Perl stdout contains command"
+	failed_tests=$((failed_tests + 1))
+fi
+
+if grep -q "zoqa api.*-X POST jobs" "$LOG_DIR/clo128_zig_stdout.log"; then
+	echo "PASS: CLO-128 Zig stdout contains command"
+else
+	echo "FAIL: CLO-128 Zig stdout contains command"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# =============================================================================
 # Test CLO-55 to CLO-M59: --reproduce
 #
 # Clones a job with the exact test code version and needles version of the original.
