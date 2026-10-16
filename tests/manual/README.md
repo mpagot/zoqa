@@ -18,7 +18,10 @@ variable is unset.
 | `OPENQA_HOST` | yes | — | Base URL, e.g. `https://openqa.opensuse.org` |
 | `OPENQA_JOB_ID` | yes | — | A known-good completed job ID |
 | `ZOQA` | no | `./zig-out/bin/zoqa` | Path to the zoqa binary |
+| `ZOQA_CLONE` | no | `./zig-out/bin/zoqa-clone-job` | Path to the zoqa-clone-job binary (`test_perf_clone.sh`) |
 | `RUNS` | no | `3` | Number of timing repetitions per scenario |
+| `SLEEP` | no | `0` | Seconds to sleep between individual runs (`test_perf_details.sh`, `test_perf_clone.sh`) |
+| `ASSET_DIR` | no | `/tmp/zoqa-clone-perf-$$` | Base directory for downloads (`test_perf_clone.sh`) |
 
 ### Host tools
 
@@ -26,7 +29,9 @@ variable is unset.
 |---|---|---|
 | `bash 4+` | yes | |
 | `openqa-cli` | by script | `test_api.sh`, `test_schedule_monitor.sh` — install with `zypper install openQA-client` |
-| `python3` | by script | `test_api.sh`, `test_schedule_monitor.sh` — JSON validation and extraction |
+| `openqa-clone-job` | by script | `test_perf_clone.sh` — install with `zypper install openQA-client` |
+| `curl` | by script | `test_perf_details.sh`, `test_perf_clone.sh` — raw I/O baseline |
+| `python3` | by script | `test_api.sh`, `test_schedule_monitor.sh`, `test_perf_clone.sh` — JSON validation and extraction |
 | `/usr/bin/time` | no | GNU time; if absent, RSS measurement is silently skipped |
 
 ---
@@ -38,6 +43,8 @@ variable is unset.
 | `lib.sh` | Shared helpers (env-var validation, timing, RSS, correctness checks). Sourced by the other scripts; not run directly. |
 | `test_api.sh` | Read-only `api` subcommand: 7 correctness + wall-clock timing scenarios comparing zoqa vs `openqa-cli`. |
 | `test_archive.sh` | Archive download comparison: runs zoqa, `openqa-cli`, and `curl` in sequence, verifies MD5 checksums. Needs ~3.5 GB free disk space. |
+| `test_perf_details.sh` | Three-way (zoqa / `openqa-cli` / `curl`) benchmark of the `jobs/ID/details` endpoint: wall-clock timing + peak RSS. |
+| `test_perf_clone.sh` | Three-way (zoqa-clone-job / `openqa-clone-job` / `curl`) benchmark of clone-job asset downloads with `--show-progress` and `--skip-deps`: wall-clock timing + peak RSS. Needs ~4 GB free disk space. |
 | `test_schedule_monitor.sh` | `schedule` + `monitor` correctness + timing vs `openqa-cli`. **Creates real jobs on the server** (write access required). Supports `--dry-run` to skip all mutating calls. |
 
 ---
@@ -54,6 +61,13 @@ OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=12345 \
 
 OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=12345 \
     bash tests/manual/test_archive.sh
+
+OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=12345 \
+    bash tests/manual/test_perf_details.sh
+
+# Benchmark clone-job asset downloads (use a job with large assets)
+OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=6262303 \
+    bash tests/manual/test_perf_clone.sh
 
 # Live run — creates jobs on the server
 OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=12345 \

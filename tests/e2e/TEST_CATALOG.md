@@ -316,6 +316,11 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-118 | Unexpanded variables are warned and skipped | URL containing `%VAR%` is warned on stderr and skipped; clone proceeds and exits 0. |
 | CLO-119 | SCC_ADDONS multiple reachable test repos | Both resolve test repositories from `SCC_ADDONS` and exit 0 when reachable. |
 | CLO-120 | SCC_ADDONS with unreachable test repo | Clone is aborted and exits non-zero if any resolved addon test repository is unreachable. |
+| CLO-121 | --show-progress shows progress meter (assets downloaded) | Perl stderr shows curl's progress-meter header; Zig stderr shows `Downloading ...: 100%`. |
+| CLO-122 | Default (no --show-progress) produces no meter | Both Perl and Zig produce no progress meter on stderr without `--show-progress`. |
+| CLO-123 | --show-progress does not change stdout content | stdout is identical with and without `--show-progress` (job IDs excluded). |
+| CLO-124 | --show-progress survives mid-transfer retry | With faultproxy partial fault, Zig retries cleanly and meter reaches 100%. |
+| CLO-125 | --show-progress on already-complete asset prints skip | Re-cloning into populated asset dir prints `already complete` skip message on stderr (Zig only). |
 | CLO-126 | Disk-full write failure exits without retry | With --dir on a 1 MiB tmpfs, Perl (exit 23/1) and Zig (exit 1) fail after 1 attempt (no retry) and report a write error. |
 | CLO-127 | --export-command downloads assets (Perl oracle) | Both download assets + print command; download runs before the --export-command guard. |
 | CLO-128 | --export-command --skip-download downloads nothing | Both print command without downloading; 0 files in --dir. |

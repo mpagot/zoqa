@@ -50,6 +50,7 @@ pub const APIResponse = http_client.APIResponse;
 pub const StreamResult = http_client.StreamResult;
 pub const CallOptions = http_client.CallOptions;
 pub const RawGetOptions = http_client.RawGetOptions;
+pub const DownloadProgress = http_client.Progress;
 pub const openQAReq = http_client.openQAReq;
 pub const openQARawGet = http_client.openQARawGet;
 pub const openQADownloadToFile = http_client.openQADownloadToFile;
@@ -217,6 +218,11 @@ test "parseLinkHeader: quoted rel value" {
 
 test "re-exports: APIResponse accessible via zoqa" {
     const T = APIResponse;
+    _ = T;
+}
+
+test "re-exports: DownloadProgress accessible via zoqa" {
+    const T = DownloadProgress;
     _ = T;
 }
 
