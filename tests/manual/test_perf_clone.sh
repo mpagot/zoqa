@@ -67,8 +67,8 @@ if [[ ! -x "$ZOQA_CLONE" ]]; then
 	echo "       Run 'zig build' first."
 	exit 1
 fi
-echo "  zoqa-clone-job: $ZOQA_CLONE"
-
+print_bin_info "zoqa-clone-job" "$ZOQA_CLONE"
+require_zoqa
 require_openqa_cli
 require_curl
 detect_gnu_time
@@ -119,11 +119,15 @@ _sanity_check() {
 	bash -c "$cmd" >/dev/null 2>&1 || rc=$?
 
 	local dir
-	dir=$(echo "$cmd" | grep -oP '(?<=--dir )\S+')
+	dir=$(echo "$cmd" | grep -oP '(?<=--dir )\S+' || true)
+	if [[ -z "$dir" ]]; then
+		dir=$(echo "$cmd" | grep -oP '(?<=-o )\S+' | xargs -r dirname || true)
+	fi
 	local file_count=0 total_bytes=0
 	if [[ -n "$dir" && -d "$dir" ]]; then
 		file_count=$(find "$dir" -type f 2>/dev/null | wc -l)
 		total_bytes=$(find "$dir" -type f -exec stat -c %s {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
+		rm -rf "$dir"
 	fi
 
 	local status="OK"
@@ -151,21 +155,48 @@ _timed_run() {
 # filename of the largest one (one per line).  Used to build the curl
 # baseline command.
 _discover_largest_asset() {
-	local assets_json
-	assets_json=$("$ZOQA" api --host "$HOST" "jobs/$JOB_ID/assets" 2>/dev/null) || {
-		echo "  WARNING: could not fetch asset list; curl baseline will be skipped"
+	local job_json
+	job_json=$("$ZOQA" api --host "$HOST" "jobs/$JOB_ID" 2>/dev/null) || {
+		echo "  WARNING: could not fetch job details; curl baseline will be skipped"
 		return 1
 	}
 
-	echo "$assets_json" | python3 -c "
-import json, sys
-assets = json.load(sys.stdin)
-if not assets:
-    sys.exit(1)
-largest = max(assets, key=lambda a: a.get('size', 0))
-print(largest['type'])
-print(largest['name'])
-" 2>/dev/null
+	# Extract the assets object contents from the job JSON
+	local assets_block
+	assets_block=$(echo "$job_json" | grep -oP '"assets":\s*\{\K[^\}]+' || true)
+	[[ -z "$assets_block" ]] && return 1
+
+	local largest_type="" largest_name="" largest_size=0
+
+	# Iterate over each category: "type":["file1","file2"]
+	while IFS= read -r category; do
+		[[ -z "$category" ]] && continue
+		local type files
+		type=$(echo "$category" | grep -oP '^"[^"]+"' | tr -d '"' || true)
+		[[ "$type" == "repo" || -z "$type" ]] && continue
+
+		files=$(echo "$category" | grep -oP '\[\K[^\]]+' || true)
+		while IFS= read -r f; do
+			local filename
+			filename=$(echo "$f" | tr -d '"' | sed 's/\\//g')
+			[[ -z "$filename" ]] && continue
+
+			local sz
+			sz=$(curl -sIL "$HOST/tests/$JOB_ID/asset/$type/$filename" | awk 'tolower($1) == "content-length:" {sub(/\r/, "", $2); s=$2} END {print s+0}')
+			if [[ "$sz" -gt "$largest_size" ]]; then
+				largest_size="$sz"
+				largest_type="$type"
+				largest_name="$filename"
+			fi
+		done < <(echo "$files" | tr ',' '\n')
+	done < <(echo "$assets_block" | grep -oP '"[^"]+":\[[^\]]*\]' || true)
+
+	if [[ -n "$largest_type" && -n "$largest_name" && "$largest_size" -gt 0 ]]; then
+		echo "$largest_type"
+		echo "$largest_name"
+		return 0
+	fi
+	return 1
 }
 
 # =============================================================================
@@ -187,7 +218,7 @@ CURL_ASSET_NAME=""
 if _discover_largest_asset > /tmp/_perf_clone_asset.txt 2>/dev/null; then
 	CURL_ASSET_TYPE=$(sed -n '1p' /tmp/_perf_clone_asset.txt)
 	CURL_ASSET_NAME=$(sed -n '2p' /tmp/_perf_clone_asset.txt)
-	CURL_CMD="curl -sf -o $ASSET_DIR/sanity_curl/$CURL_ASSET_NAME $HOST/tests/$JOB_ID/asset/$CURL_ASSET_TYPE/$CURL_ASSET_NAME"
+	CURL_CMD="curl -sfL --create-dirs -o $ASSET_DIR/sanity_curl/$CURL_ASSET_NAME $HOST/tests/$JOB_ID/asset/$CURL_ASSET_TYPE/$CURL_ASSET_NAME"
 	echo "  Largest asset: $CURL_ASSET_TYPE/$CURL_ASSET_NAME"
 	_sanity_check "curl (largest asset)" "$CURL_CMD"
 else
@@ -256,7 +287,7 @@ _run_tool_timing "perl" "openqa-clone-job --from $HOST --skip-deps --show-progre
 
 if [[ -n "$CURL_ASSET_TYPE" && -n "$CURL_ASSET_NAME" ]]; then
 	echo "  curl (largest asset):"
-	_run_tool_timing "curl" "curl -sf -o __DIR__/$CURL_ASSET_NAME $HOST/tests/$JOB_ID/asset/$CURL_ASSET_TYPE/$CURL_ASSET_NAME" CURL_TIMES
+	_run_tool_timing "curl" "curl -sfL --create-dirs -o __DIR__/$CURL_ASSET_NAME $HOST/tests/$JOB_ID/asset/$CURL_ASSET_TYPE/$CURL_ASSET_NAME" CURL_TIMES
 fi
 
 echo ""
@@ -320,7 +351,7 @@ if [[ "$HAS_GNU_TIME" == "true" ]]; then
 
 	if [[ -n "$CURL_ASSET_TYPE" && -n "$CURL_ASSET_NAME" ]]; then
 		_run_tool_rss "curl" "clone_curl" \
-			"curl -sf -o $rss_dir_curl/$CURL_ASSET_NAME $HOST/tests/$JOB_ID/asset/$CURL_ASSET_TYPE/$CURL_ASSET_NAME" CURL_RSS
+			"curl -sfL --create-dirs -o $rss_dir_curl/$CURL_ASSET_NAME $HOST/tests/$JOB_ID/asset/$CURL_ASSET_TYPE/$CURL_ASSET_NAME" CURL_RSS
 		rm -rf "$rss_dir_curl"
 	fi
 
