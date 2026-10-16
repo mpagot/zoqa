@@ -52,13 +52,42 @@ _rss_report=()
 # Preflight helpers
 # =============================================================================
 
+# Prints path, mtime (build date and time), build type (Debug/Release), and size.
+print_bin_info() {
+	local label="$1"
+	local bin="$2"
+	[[ -f "$bin" ]] || return 0
+	echo "  $label path  : $(realpath "$bin")"
+	if command -v stat >/dev/null 2>&1; then
+		if stat --version >/dev/null 2>&1; then
+			echo "  $label mtime : $(stat -c '%y' "$bin")"
+		else
+			echo "  $label mtime : $(stat -f '%Sm' "$bin")"
+		fi
+	fi
+	if command -v readelf >/dev/null 2>&1; then
+		if readelf -S "$bin" 2>/dev/null | grep -q "debug_aranges"; then
+			echo "  $label build : Debug"
+		else
+			echo "  $label build : Release"
+		fi
+	fi
+	if command -v stat >/dev/null 2>&1; then
+		if stat --version >/dev/null 2>&1; then
+			echo "  $label size  : $(stat -c '%s' "$bin") bytes"
+		else
+			echo "  $label size  : $(stat -f '%z' "$bin") bytes"
+		fi
+	fi
+}
+
 require_zoqa() {
 	if [[ ! -x "$ZOQA" ]]; then
 		echo "FATAL: zoqa binary not found or not executable at: $ZOQA"
 		echo "       Run 'zig build' first."
 		exit 1
 	fi
-	echo "  zoqa:       $ZOQA"
+	print_bin_info "zoqa" "$ZOQA"
 }
 
 require_openqa_cli() {
