@@ -6,15 +6,17 @@
 #   ./tests/fuzz/coverage.sh --skip-build     # analyse existing coverage/ output only
 #   ./tests/fuzz/coverage.sh config request   # build + run + analyse specific targets
 #   ./tests/fuzz/coverage.sh --skip-build execute  # analyse only execute
+#   ./tests/fuzz/coverage.sh --build-only config   # compile the coverage
+#                                                  # executable, no kcov run
 #
 # Run from the project root or from tests/fuzz/; the script locates the root
 # by walking up from its own directory.
 #
 # The script performs three phases:
-#   1. Build & run:  zig build --build-file tests/fuzz/cov_build.zig coverage[-<name>]
+#   1. Build & run:  zig build -Dcoverage coverage[-<name>]
 #                    This compiles the coverage harnesses and runs every corpus
 #                    seed through kcov, producing merged HTML+JSON reports in
-#                    coverage/{config,request,execute}/.
+#                    zig-out/coverage/{config,request,execute,schedule}/.
 #   2. Collect:      Locate the latest coverage.json and codecov.json per target.
 #   3. Analyse:      Parse the JSON data and print a comprehensive report:
 #                    - Per-target summary (line counts, percentages)
@@ -34,6 +36,9 @@
 # Options:
 #   --skip-build    Skip the build+run phase; analyse existing coverage/ output.
 #                   Useful when coverage data already exists from a prior run.
+#   --build-only    Compile the coverage executables (zig build -Dcoverage
+#                   coverage-<name>-build) and exit; do not run kcov or
+#                   analyse. Useful for CI syntax checks of the harnesses.
 #
 # Target names:
 #   config   — INI parser + resolveHost          (corpus_config/)
@@ -58,7 +63,7 @@ if [[ ! -f "$ROOT/build.zig" ]]; then
 fi
 
 FUZZ_DIR="$ROOT/tests/fuzz"
-COV_DIR="$ROOT/coverage"
+COV_DIR="$ROOT/zig-out/coverage"
 REPORT_FILE="$FUZZ_DIR/coverage_report.txt"
 ALL_TARGETS=(config request execute schedule)
 
@@ -66,12 +71,16 @@ ALL_TARGETS=(config request execute schedule)
 # Parse arguments
 # ---------------------------------------------------------------------------
 SKIP_BUILD=0
+BUILD_ONLY=0
 TARGETS=()
 
 for arg in "$@"; do
 	case "$arg" in
 	--skip-build)
 		SKIP_BUILD=1
+		;;
+	--build-only)
+		BUILD_ONLY=1
 		;;
 	--help | -h)
 		sed -n '2,/^$/{ s/^# \?//; p }' "$0"
@@ -109,6 +118,16 @@ fi
 # ---------------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------------
+if [[ $BUILD_ONLY -eq 1 ]]; then
+	# --build-only compiles the harnesses; no kcov or jq needed.
+	echo "==> Building coverage executables only (no kcov run)"
+	for target in "${TARGETS[@]}"; do
+		echo "==> zig build -Dcoverage coverage-${target}-build"
+		zig build -Dcoverage "coverage-${target}-build"
+	done
+	exit 0
+fi
+
 if [[ $SKIP_BUILD -eq 0 ]]; then
 	if ! command -v kcov &>/dev/null; then
 		echo "error: kcov not found on PATH." >&2
@@ -138,17 +157,37 @@ if [[ $SKIP_BUILD -eq 0 ]]; then
 	echo "================================================================"
 	echo ""
 
+	# The kcov'd harnesses echo seed content (e.g. `Invalid command "--host".`
+	# from parseArgs error paths, monitor poll lines) to their stdout/stderr,
+	# which kcov and zig build pass through. Capture the build output and
+	# print it only on failure, so a successful run stays clean while any
+	# real error (including Zig panic stack traces) is still shown.
+	run_coverage_build() {
+		local desc="$1"
+		shift
+		local log
+		log=$(mktemp)
+		if zig build "$@" >"$log" 2>&1; then
+			rm -f "$log"
+		else
+			echo "==> $desc failed:" >&2
+			cat "$log" >&2
+			rm -f "$log"
+			return 1
+		fi
+	}
+
 	if [[ ${#TARGETS[@]} -eq ${#ALL_TARGETS[@]} ]]; then
 		# All targets — use the aggregate "coverage" step.
-		echo "==> zig build -p . --build-file tests/fuzz/cov_build.zig coverage"
+		echo "==> zig build -Dcoverage coverage"
 		echo ""
-		zig build -p . --build-file tests/fuzz/cov_build.zig coverage
+		run_coverage_build "zig build -Dcoverage coverage" -Dcoverage coverage
 	else
 		# Specific targets — run each coverage-<name> step.
 		for target in "${TARGETS[@]}"; do
-			echo "==> zig build -p . --build-file tests/fuzz/cov_build.zig coverage-${target}"
+			echo "==> zig build -Dcoverage coverage-${target}"
 			echo ""
-			zig build -p . --build-file tests/fuzz/cov_build.zig "coverage-${target}"
+			run_coverage_build "zig build -Dcoverage coverage-${target}" -Dcoverage "coverage-${target}"
 		done
 	fi
 
