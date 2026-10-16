@@ -330,14 +330,20 @@ AFL_DIR=/path/to/aflplusplus ./tests/fuzz/distill.sh config
 
 Source-level coverage uses [kcov](https://github.com/SimonKagstrom/kcov) with
 the LLVM backend (`use_llvm = true`). The LLVM backend emits DWARF 4 debug
-info, which kcov v42 can parse correctly. The Zig self-hosted backend emits
-DWARF 5, which kcov v42 cannot parse on x86_64-linux — it builds an empty
-address table and reports 0% coverage (see
+info, which kcov v42/43 can parse correctly. The Zig self-hosted backend emits
+DWARF 5, which kcov cannot parse on x86_64-linux — it builds an empty address
+table and reports 0% coverage (see
 [kcov#423](https://github.com/SimonKagstrom/kcov/issues/423),
 [ziglang/zig#25368](https://github.com/ziglang/zig/issues/25368)).
-`cov_build.zig` sets `use_llvm = true` to force the LLVM backend and ensure
-DWARF 4 compatibility. Once kcov ships Linux DWARF 5 support, this workaround
-can be removed.
+`build.zig` (`-Dcoverage`) sets `use_llvm = true` to force the LLVM backend
+and ensure DWARF 4 compatibility. Once kcov ships Linux DWARF 5 support, this
+workaround can be removed.
+
+The coverage targets live in `build.zig` behind the `-Dcoverage` flag (moved
+from the former `tests/fuzz/cov_build.zig`). Each target compiles a
+`zoqa-cov-<name>` executable from `cov_harness_<name>.zig`, runs every seed in
+`corpus_<name>/` through kcov, and installs the merged report to
+`zig-out/coverage/<name>/`.
 
 ### Install kcov
 
@@ -355,32 +361,49 @@ The easiest way to build, run, and analyse coverage in one step is the
 # Build + run kcov + print analysis for all targets
 ./tests/fuzz/coverage.sh
 
+# Or via the Makefile:
+make fuzz-cov
+
 # Analyse existing coverage data without rebuilding
 ./tests/fuzz/coverage.sh --skip-build
+make fuzz-cov SKIP_BUILD=1
 
 # Run only specific targets
 ./tests/fuzz/coverage.sh config request
+make fuzz-cov TARGETS=config request
+
+# Compile the coverage executables only (no kcov run, no kcov required)
+./tests/fuzz/coverage.sh --build-only
+make fuzz-cov-build
 ```
 
 The underlying `zig build` commands can also be invoked directly:
 
 ```sh
 # Coverage for a single target (seeds from corpus_config/)
-zig build -p . --build-file tests/fuzz/cov_build.zig coverage-config
+zig build -Dcoverage coverage-config
 
-# Coverage for all three targets
-zig build -p . --build-file tests/fuzz/cov_build.zig coverage
+# Coverage for all targets
+zig build -Dcoverage coverage
 
 # Open the report
-xdg-open coverage/config/index.html
+xdg-open zig-out/coverage/config/index.html
 ```
 
-Reports are written to `coverage/{config,request,execute}/`.
+Reports are written to `zig-out/coverage/{config,request,execute,schedule}/`.
 
 ### How it works
 
-`cov_build.zig` enumerates every seed file in `corpus_<name>/` at build-graph
-construction time and generates one `kcov` invocation per seed. The first
-invocation passes `--clean` to reset any stale report; subsequent invocations
-merge into the same output directory. All invocations are chained serially so
-kcov never runs concurrently (concurrent kcov runs corrupt the merged output).
+`build.zig` (`setupCoverage`/`addCoverageTarget`) enumerates every seed file
+in `corpus_<name>/` at build-graph construction time and generates one `kcov`
+invocation per seed. The first invocation passes `--clean` to reset any stale
+report; subsequent invocations merge into the same output directory. All
+invocations are chained serially so kcov never runs concurrently (concurrent
+kcov runs corrupt the merged output).
+
+**kcov 43 argument order:** kcov v43 stopped parsing options at the first
+positional argument (upstream PR #415), so every kcov flag — including
+`--include-path=<abs>/src/` — must come *before* the output directory. A flag
+placed after the output directory is treated as the binary to run and fails
+with `Can't find or open --include-...`. The build script emits the flags in
+the correct order; do not reorder them when editing the kcov step.

@@ -4,7 +4,7 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help zig-build-debug zig-build-release zig-test zig-test-discovery zig-lint zig-docs zig-docs-check zig-docs-serve e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize zig-doc-lint lint fuzz-build
+.PHONY: help zig-build-debug zig-build-release zig-test zig-test-discovery zig-lint zig-docs zig-docs-check zig-docs-serve e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize zig-doc-lint lint fuzz-build fuzz-cov fuzz-cov-build
 
 # Default target
 help:
@@ -39,6 +39,10 @@ help:
 	@echo "  fuzz-lint       Run bash -n and shellcheck on tests/fuzz/ scripts."
 	@echo "  fuzz-build      Build the fuzzy app."
 	@echo "  fuzz-sanitize   Check that corpus filenames are Windows-safe (no colons)."
+	@echo "  fuzz-cov        Build + run kcov coverage + analyse (requires kcov)."
+	@echo "              Optional: TARGETS=config request   run only the listed target(s)."
+	@echo "              Optional: SKIP_BUILD=1   analyse existing coverage data only."
+	@echo "  fuzz-cov-build  Compile the coverage executables only (no kcov run)."
 	@echo " "
 	@echo " "
 	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint, fuzz-lint)."
@@ -201,6 +205,19 @@ fuzz-build:
 
 fuzz-sanitize:
 	./tests/fuzz/sanitize_corpus.sh
+
+# kcov coverage over the fuzz corpora. Requires kcov on PATH.
+#   make fuzz-cov                    # all targets
+#   make fuzz-cov TARGETS=config     # single target
+#   make fuzz-cov SKIP_BUILD=1       # analyse existing data only
+fuzz-cov:
+	./tests/fuzz/coverage.sh $(if $(SKIP_BUILD),--skip-build,) $(TARGETS)
+
+# Compile the coverage executables only (no kcov run, no kcov required).
+#   make fuzz-cov-build
+#   make fuzz-cov-build TARGETS=config
+fuzz-cov-build:
+	./tests/fuzz/coverage.sh --build-only $(TARGETS)
 
 # -----------------------------------------------------------------------------
 # Linting  bash syntax check + shellcheck on fuzz harness scripts

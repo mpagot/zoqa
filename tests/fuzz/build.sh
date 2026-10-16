@@ -42,6 +42,10 @@ fi
 
 export PATH="$AFL_DIR:$PATH"
 
+# AFL_DIR is only used to locate afl-cc above. Unset it before the build so
+# afl-cc (clang) does not flag it as a mistyped AFL environment variable.
+unset AFL_DIR
+
 echo "==> Building all fuzz binaries (project root: $ROOT)"
 cd "$ROOT"
 zig build -Dfuzz "$@"
