@@ -44,8 +44,7 @@
 #   config   — INI parser + resolveHost          (corpus_config/)
 #   request  — CLI args + buildRequest + JSON    (corpus_request/)
 #   execute  — full pipeline: auth+retry+gzip    (corpus_execute/)
-#   schedule — runSchedule + extractJobIds       (corpus_schedule/)
-#              NOTE: coverage data unavailable until corpus_schedule/ is populated.
+#   schedule — runSchedule + runMonitor          (corpus_schedule/)
 
 set -euo pipefail
 

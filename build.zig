@@ -232,8 +232,8 @@ fn setupFuzzing(
         .{ .name = "zoqa", .module = lib_mod },
     });
 
-    // zoqa-fuzz-schedule: schedule subcommand: runSchedule + extractJobIds
-    // (stub: sync path only, see tests/fuzz/fuzz_schedule.zig STATUS section).
+    // zoqa-fuzz-schedule: runSchedule sync + async paths and runMonitor
+    // (see the corpus format in tests/fuzz/fuzz_schedule.zig).
     addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-schedule", "tests/fuzz/fuzz_schedule.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },
     });
@@ -329,8 +329,7 @@ fn setupCoverage(
         .corpus = "tests/fuzz/corpus_execute",
     });
 
-    // schedule: stub harness. corpus_schedule/ may not exist yet;
-    // addCoverageTarget detects the missing directory and skips with a warning.
+    // schedule: runSchedule sync + async paths and runMonitor.
     addCoverageTarget(b, target, optimize, coverage_step, .{
         .name = "schedule",
         .harness = "tests/fuzz/cov_harness_schedule.zig",
@@ -362,6 +361,13 @@ fn addCoverageTarget(
             .imports = opts.imports,
         }),
     });
+
+    // Compile-only step: builds the coverage executable without running kcov.
+    // Useful for CI syntax checks and for debugging the harness in isolation.
+    // Registered before the corpus checks so it exists even without seeds.
+    const build_only_name = b.fmt("coverage-{s}-build", .{opts.name});
+    const build_only = b.step(build_only_name, b.fmt("Build zoqa-cov-{s} without running kcov", .{opts.name}));
+    build_only.dependOn(&exe.step);
 
     const corpus_path = b.path(opts.corpus).getPath(b);
 
@@ -401,13 +407,14 @@ fn addCoverageTarget(
     // (getopt_long in POSIX mode, PR #415), so every kcov option must come
     // before the output directory. --include-path takes a directory and
     // filters the report to src/ only.
-    const cwd = std.process.getCwdAlloc(b.allocator) catch unreachable;
-    const src_abs = std.fs.path.join(b.allocator, &.{ cwd, "src/" }) catch unreachable;
+    // The path is resolved from the build root, not the cwd: `zig build` run
+    // from a subdirectory keeps that subdirectory as cwd.
+    const include_arg = b.fmt("--include-path={s}/", .{b.pathFromRoot("src")});
 
     for (seed_paths.items, 0..) |seed_abs, i| {
         const kcov_run = b.addSystemCommand(&.{"kcov"});
 
-        kcov_run.addArg(std.mem.concat(b.allocator, u8, &.{ "--include-path=", src_abs }) catch unreachable);
+        kcov_run.addArg(include_arg);
 
         if (i == 0) {
             kcov_run.addArg("--clean");
@@ -439,12 +446,6 @@ fn addCoverageTarget(
     );
     const named_step = b.step(step_name, step_desc);
     named_step.dependOn(&install.step);
-
-    // Compile-only step: builds the coverage executable without running kcov.
-    // Useful for CI syntax checks and for debugging the harness in isolation.
-    const build_only_name = b.fmt("coverage-{s}-build", .{opts.name});
-    const build_only = b.step(build_only_name, b.fmt("Build zoqa-cov-{s} without running kcov", .{opts.name}));
-    build_only.dependOn(&exe.step);
 
     coverage_step.dependOn(&install.step);
 }
