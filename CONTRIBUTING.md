@@ -43,28 +43,22 @@ make e2e SUITES=core     # quick E2E smoke test
 
 ### Make Targets
 
+Every target and its options are documented in the [Makefile](Makefile).
+Print the full list with:
+
 ```sh
-make help  # print full table
+make help
 ```
 
-| Target | Description |
+Targets are grouped in families by prefix:
+
+| Family | Covers |
 |---|---|
-| `zig-build-debug` | `zig build` debug binary at `zig-out/bin/zoqa`. |
-| `zig-build-release` | `zig build -Doptimize=ReleaseFast -Dstrip=true`. |
-| `zig-test` | Run all unit tests (includes `zig-test-discovery`). |
-| `zig-test-discovery` | Guard against Zig issue #10018: verify every `test` block runs. |
-| `zig-lint` | `zig fmt --check src/` Zig source formatting. |
-| `zig-doc-lint` | Check `///` docstring completeness for `pub`/`export fn` in `src/`. |
-| `e2e` | Run the full E2E suite (starts + tears down container). |
-| `e2e-keep` | Run E2E keeping the container alive (`--keep-container`). |
-| `e2e-dryrun` | Simulate E2E run without starting a container. |
-| `e2e-lint` | bash -n + shellcheck + suite registry check on all E2E scripts. |
-| `e2e-catalog-lint` | Test prefix naming and `TEST_CATALOG.md` parity. |
-| `manual-lint` | bash -n + shellcheck on `tests/manual/` scripts. |
-| `fuzz-build` | Build the AFL++ fuzz harness. |
-| `fuzz-sanitize` | Check corpus filenames are Windows-safe (no colons). |
-| `fuzz-lint` | bash -n + shellcheck on `tests/fuzz/` scripts. |
-| `lint` | Aggregate: `zig-lint` + `manual-lint` + `fuzz-lint`. |
+| `zig-*` | Build, unit tests, test discovery guard, formatting, docstring lint, API docs |
+| `e2e*` | Near E2E suite (Podman), its linter and the test catalog check |
+| `manual-*` | Linting of the `tests/manual/` scripts |
+| `fuzz-*` | AFL++ fuzz build, corpus filename check, kcov coverage, script lint |
+| `lint` | Aggregate of several linters |
 
 ### Testing
 
