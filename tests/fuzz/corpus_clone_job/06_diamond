@@ -1,0 +1,4 @@
+[{"id":1,"name":"A","settings":{"TEST":"A"},"parents":{},"children":{"Chained":[2,3]}},
+ {"id":2,"name":"B","settings":{"TEST":"B"},"parents":{"Chained":[1]},"children":{"Chained":[4]}},
+ {"id":3,"name":"C","settings":{"TEST":"C"},"parents":{"Chained":[1]},"children":{"Chained":[4]}},
+ {"id":4,"name":"D","settings":{"TEST":"D"},"parents":{"Chained":[2,3]},"children":{}}]

@@ -1,0 +1,4 @@
+[{"id":1,"name":"A","settings":{"TEST":"child-test","BUILD":"1"},"parents":{},"children":{}}]
+---
+BUILD:child-test=42
+BUILD:other-test=99

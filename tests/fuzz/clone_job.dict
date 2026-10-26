@@ -1,0 +1,77 @@
+# AFL++ token dictionary for the clone-job dependency graph fuzzer.
+# Seeds the fuzzer with JSON keys, setting names, and control tokens used
+# in tests/fuzz/fuzz_clone_job.zig.
+
+# Section separator for fuzz_clone_job.zig
+"\n---\n"
+
+# JSON structural tokens
+"{"
+"}"
+"["
+"]"
+":"
+","
+
+# Job object keys
+"\"id\""
+"\"name\""
+"\"settings\""
+"\"group_id\""
+"\"parents\""
+"\"children\""
+"\"assets\""
+
+# Dependency array keys
+"\"Chained\""
+"\"Directly chained\""
+"\"Parallel\""
+
+# Asset type keys
+"\"iso\""
+"\"hdd\""
+"\"other\""
+"\"repo\""
+
+# Server JSON (section 4) keys
+"\"ids\""
+"\"vars\""
+
+# Setting keys
+"TEST"
+"NAME"
+"BUILD"
+"_GROUP"
+"_GROUP_ID"
+"WORKER_CLASS"
+"PUBLISH_HDD_"
+"PUBLISH_PFLASH_VARS"
+"UEFI_PFLASH_VARS"
+"INCIDENT_REPO"
+"SCC_ADDONS"
+"_TEST_REPOS"
+"SKIP_MAINTENANCE_UPDATES"
+"TEST_GIT_URL"
+"TEST_GIT_HASH"
+"NEEDLES_GIT_URL"
+"NEEDLES_GIT_HASH"
+"CLONED_FROM"
+
+# Override syntax tokens
+"+="
+":"
+"="
+
+# Unexpanded variable placeholder marker
+"%"
+
+# Control byte values (section 3)
+"\x00"
+"\x01"
+"\x02"
+"\x04"
+"\x08"
+"\x10"
+"\x20"
+"\x40"
+"\xff"

@@ -1,0 +1,2 @@
+[{"id":10,"name":"child","settings":{"TEST":"child"},"parents":{"Chained":[],"Directly chained":[9],"Parallel":[]},"children":{}},
+ {"id":9,"name":"parent","settings":{"TEST":"parent"},"parents":{},"children":{"Directly chained":[10]}}]
