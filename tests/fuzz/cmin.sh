@@ -21,9 +21,7 @@
 #     config   — INI parser + resolveHost          (zoqa-fuzz-config)
 #     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request)
 #     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute)
-#     schedule — runSchedule + extractJobIds       (zoqa-fuzz-schedule)
-#                NOTE: corpus_schedule/ is not yet populated; cmin will warn
-#                and skip until seeds are added.
+#     schedule — runSchedule + runMonitor          (zoqa-fuzz-schedule)
 
 set -euo pipefail
 

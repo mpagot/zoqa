@@ -28,9 +28,7 @@
 #     config   — INI parser + resolveHost          (zoqa-fuzz-config, config.dict)
 #     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request, cli.dict)
 #     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute, no dict)
-#     schedule — runSchedule + extractJobIds       (zoqa-fuzz-schedule, no dict)
-#                NOTE: corpus_schedule_min/ is not yet populated; run will
-#                error with a helpful message until seeds are added via cmin.sh.
+#     schedule — runSchedule + runMonitor          (zoqa-fuzz-schedule, no dict)
 
 set -euo pipefail
 

@@ -54,9 +54,7 @@
 #     config   — INI parser + resolveHost          (zoqa-fuzz-config)
 #     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request)
 #     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute)
-#     schedule — runSchedule + extractJobIds       (zoqa-fuzz-schedule)
-#                NOTE: distill skips targets with no queue output; without a
-#                fuzzing campaign for schedule there is nothing to distill.
+#     schedule — runSchedule + runMonitor          (zoqa-fuzz-schedule)
 
 set -euo pipefail
 
