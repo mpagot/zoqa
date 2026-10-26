@@ -16,7 +16,7 @@
 #   1. Build & run:  zig build -Dcoverage coverage[-<name>]
 #                    This compiles the coverage harnesses and runs every corpus
 #                    seed through kcov, producing merged HTML+JSON reports in
-#                    zig-out/coverage/{config,request,execute,schedule}/.
+#                    zig-out/coverage/{config,request,execute,schedule,clone_job}/.
 #   2. Collect:      Locate the latest coverage.json and codecov.json per target.
 #   3. Analyse:      Parse the JSON data and print a comprehensive report:
 #                    - Per-target summary (line counts, percentages)
@@ -31,7 +31,7 @@
 # Requirements:
 #   - kcov installed and on PATH
 #   - jq installed and on PATH  (JSON parsing)
-#   - Non-empty corpus_{config,request,execute}/ directories
+#   - Non-empty corpus_{config,request,execute,schedule,clone_job}/ directories
 #
 # Options:
 #   --skip-build    Skip the build+run phase; analyse existing coverage/ output.
@@ -45,6 +45,7 @@
 #   request  — CLI args + buildRequest + JSON    (corpus_request/)
 #   execute  — full pipeline: auth+retry+gzip    (corpus_execute/)
 #   schedule — runSchedule + runMonitor          (corpus_schedule/)
+#   clone_job — clone-job dependency graph       (corpus_clone_job/)
 
 set -euo pipefail
 
@@ -64,7 +65,7 @@ fi
 FUZZ_DIR="$ROOT/tests/fuzz"
 COV_DIR="$ROOT/zig-out/coverage"
 REPORT_FILE="$FUZZ_DIR/coverage_report.txt"
-ALL_TARGETS=(config request execute schedule)
+ALL_TARGETS=(config request execute schedule clone_job)
 
 # ---------------------------------------------------------------------------
 # Parse arguments

@@ -1,0 +1,1 @@
+[{"id":1,"name":"A","settings":{"TEST":"A","PUBLISH_HDD_1":"a.qcow2","PUBLISH_PFLASH_VARS":"vars.fd"},"parents":{},"children":{},"assets":{"hdd":["a.qcow2"],"other":["vars.fd"]}}]

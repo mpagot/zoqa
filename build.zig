@@ -237,6 +237,12 @@ fn setupFuzzing(
     addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-schedule", "tests/fuzz/fuzz_schedule.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },
     });
+
+    // zoqa-fuzz-clone-job: clone-job dependency graph algorithm
+    // (see the corpus format in tests/fuzz/fuzz_clone_job.zig).
+    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-clone-job", "tests/fuzz/fuzz_clone_job.zig", &.{
+        .{ .name = "zoqa", .module = lib_mod },
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +343,16 @@ fn setupCoverage(
             .{ .name = "zoqa", .module = lib_mod },
         },
         .corpus = "tests/fuzz/corpus_schedule",
+    });
+
+    // clone_job: clone-job dependency graph algorithm (I/O-free library).
+    addCoverageTarget(b, target, optimize, coverage_step, .{
+        .name = "clone_job",
+        .harness = "tests/fuzz/cov_harness_clone_job.zig",
+        .imports = &.{
+            .{ .name = "zoqa", .module = lib_mod },
+        },
+        .corpus = "tests/fuzz/corpus_clone_job",
     });
 }
 

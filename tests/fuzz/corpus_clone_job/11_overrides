@@ -1,0 +1,13 @@
+[{"id":10,"name":"child","settings":{"TEST":"child","BUILD":"old","_GROUP":"g","_GROUP_ID":"7"},"parents":{"Chained":[9]},"children":{}},
+ {"id":9,"name":"parent","settings":{"TEST":"parent","BUILD":"pold"},"parents":{},"children":{}}]
+---
+BUILD=1234
+TEST+=:PR-1
+BUILD:child=9999
+BUILD:nomatch=8888
+FOOBAR=
+_GROUP=x
+_GROUP_ID=5
+WORKER_CLASS=y
+NAME=z
+noequalsline

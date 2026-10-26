@@ -29,6 +29,7 @@
 #     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request, cli.dict)
 #     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute, no dict)
 #     schedule — runSchedule + runMonitor          (zoqa-fuzz-schedule, no dict)
+#     clone_job — clone-job dependency graph       (zoqa-fuzz-clone-job, clone_job.dict)
 
 set -euo pipefail
 
@@ -64,6 +65,7 @@ declare -A BINARY=(
 	[request]="zoqa-fuzz-request"
 	[execute]="zoqa-fuzz-execute"
 	[schedule]="zoqa-fuzz-schedule"
+	[clone_job]="zoqa-fuzz-clone-job"
 )
 # Optional dictionary per target; empty string means no -x flag.
 declare -A DICT=(
@@ -71,8 +73,9 @@ declare -A DICT=(
 	[request]="cli.dict"
 	[execute]=""
 	[schedule]=""
+	[clone_job]="clone_job.dict"
 )
-ALL_TARGETS=(config request execute schedule)
+ALL_TARGETS=(config request execute schedule clone_job)
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -179,6 +182,16 @@ AFL_ARGS=(
 )
 if [[ -n "${DICT[$TARGET]}" ]]; then
 	AFL_ARGS+=(-x "$DICT_FILE")
+fi
+# clone_job: collectRepoUrls on large inputs (69KB+) can take ~30ms,
+# exceeding the default 20ms exec timeout. Raise it to 50ms so slow
+# inputs finish instead of timing out (keeps stability high).
+# TODO: after a longer campaign, verify that inputs > 8KB do not reach
+# new branches in collectRepoUrls. If they don't, replace this -E 50
+# with a MAX_INPUT cap in fuzz_clone_job.zig (truncate input to 8KB)
+# and remove this override.
+if [[ "$TARGET" == "clone_job" ]]; then
+	AFL_ARGS+=(-E 50)
 fi
 AFL_ARGS+=(-- "$BINARY_PATH")
 

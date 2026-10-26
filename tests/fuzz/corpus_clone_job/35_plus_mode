@@ -1,0 +1,4 @@
+[{"id":1,"name":"A","settings":{"TEST":"A","BUILD":"100"},"parents":{},"children":{}}]
+---
+BUILD+=:extra
+NEW_KEY+=:fresh
