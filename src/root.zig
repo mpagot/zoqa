@@ -32,6 +32,7 @@ const testing = std.testing;
 
 pub const url = @import("url.zig");
 pub const clone_job = @import("clone_job.zig");
+pub const fs_utils = @import("fs_utils.zig");
 
 // ---------------------------------------------------------------------------
 // Tier 1 : Configuration & auth
@@ -248,6 +249,7 @@ test {
     _ = @import("clone_job.zig");
     _ = @import("auth.zig");
     _ = @import("config.zig");
+    _ = @import("fs_utils.zig");
     _ = @import("http_client.zig");
     _ = @import("monitor.zig");
     _ = @import("schedule.zig");
