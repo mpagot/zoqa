@@ -40,12 +40,12 @@ help:
 	@echo "  fuzz-build      Build the fuzzy app."
 	@echo "  fuzz-sanitize   Check that corpus filenames are Windows-safe (no colons)."
 	@echo "  fuzz-cov        Build + run kcov coverage + analyse (requires kcov)."
-	@echo "              Optional: TARGETS=config request   run only the listed target(s)."
+	@echo "              Optional: TARGETS=\"config request\"   run only the listed target(s)."
 	@echo "              Optional: SKIP_BUILD=1   analyse existing coverage data only."
 	@echo "  fuzz-cov-build  Compile the coverage executables only (no kcov run)."
 	@echo " "
 	@echo " "
-	@echo "  lint        Run all linters (zig-lint, e2e-lint, manual-lint, fuzz-lint)."
+	@echo "  lint        Run zig-lint, e2e-lint, manual-lint and fuzz-lint (not e2e-catalog-lint)."
 
 zig-build-debug:
 	zig build
@@ -242,5 +242,5 @@ fuzz-lint:
 # -----------------------------------------------------------------------------
 # Aggregate lint target
 # -----------------------------------------------------------------------------
-lint: zig-lint manual-lint fuzz-lint
+lint: zig-lint e2e-lint manual-lint fuzz-lint
 	@echo "==> all linters passed"

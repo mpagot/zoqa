@@ -38,12 +38,17 @@
 // ---------------------------------------------------------------------------
 //
 // The harness uses poll_interval=0 to eliminate sleep between poll
-// iterations. To prevent infinite loops when the state machine receives non-terminal
-// states indefinitely, the final section (Section N-1) must be a terminal fallback
-// response body (e.g. {"status":"cancelled","state":"cancelled"}).
+// iterations. The final section (Section N-1) is the fallback response body
+// and is fuzzer-controlled, so termination is NOT guaranteed: the async loop
+// stops on a terminal "status", runMonitor only on a terminal "state". A
+// fallback without a terminal "state" (e.g. "\x01{\"ids\":[1]}\x00{}") makes
+// runMonitor poll forever. A poll cap (max_polls in MonitorOptions, task 4 in
+// TODO_FUZZ_HANG_SCHEDULE.md) is the planned fix.
 //
-// All output goes to a fixed-buffer writer (not stdout) to avoid
-// non-deterministic I/O that would reduce AFL++ stability.
+// runSchedule output goes to a fixed-buffer writer (not stdout) to avoid
+// non-deterministic I/O that would reduce AFL++ stability. runMonitor still
+// writes to the real stdout because MonitorOptions has no output_writer yet
+// (task 2 in TODO_FUZZ_HANG_SCHEDULE.md).
 
 const std = @import("std");
 const zoqa = @import("zoqa");

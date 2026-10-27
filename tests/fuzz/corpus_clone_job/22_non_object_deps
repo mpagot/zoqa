@@ -1,0 +1,2 @@
+[{"id":1,"name":"A","settings":{"TEST":"A"},"parents":"bad","children":[1,2],"group_id":5},
+ {"id":2,"name":"B","settings":{"TEST":"B"},"parents":42,"children":{"Chained":"bad","Directly chained":[],"Parallel":[]}}]

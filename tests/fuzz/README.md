@@ -10,7 +10,8 @@ in Persistent Mode with LLVM instrumentation.
 | `zoqa-fuzz-config` | `fuzz_config.zig` | `corpus_config/` | `config.dict` | INI parser + `resolveHost` all 7 branches (`src/config.zig`) |
 | `zoqa-fuzz-request` | `fuzz_request.zig` | `corpus_request/` | `cli.dict` | CLI args + `buildRequest` + `parseLinkHeader` + JSON (`src/main.zig`, `src/http_client.zig`) |
 | `zoqa-fuzz-execute` | `fuzz_execute.zig` | `corpus_execute/` | — | Full pipeline: auth + retry + gzip + `openQAReq` (`src/http_client.zig`, `src/auth.zig`). Input uses 5 sections: credentials/path, method/params, ctrl-byte/status/body, optional gzip bytes, optional Link header value. ctrl-byte bits 0–6 control fail_attempts, gzip, Link header, structured content_type fallback, ReadFailed injection, and Accept-header pre-presence. |
-| `zoqa-fuzz-schedule` | `fuzz_schedule.zig` | `corpus_schedule/` | — | **Stub** — sync path of `runSchedule` + `extractJobIds` + `checkFailedEntries` (`src/schedule.zig`). Uses a null `output_writer` to eliminate I/O non-determinism (AFL++ pipe-buffer stability fix, commit `c7a6bc1`). Async path + `runMonitor` integration remain follow-up work. |
+| `zoqa-fuzz-schedule` | `fuzz_schedule.zig` | `corpus_schedule/` | — | Sync and async paths of `runSchedule` (`extractJobIds`, `checkFailedEntries`, `asyncPollAndMonitor`) plus `runMonitor`/`checkJobStatus` (`src/schedule.zig`, `src/monitor.zig`). The option byte enables monitor, HTTP 500, retries and credentials. Input is `\x00`-separated sections: scripted POST/poll bodies, then a fallback body. Schedule output goes to a null `output_writer` (AFL++ stability fix, commit `c7a6bc1`). **Known issues:** a fallback body without a terminal `state` makes `runMonitor` poll forever (hangs), and `runMonitor` still writes to the real stdout (lower stability). See `TODO_FUZZ_HANG_SCHEDULE.md`. |
+| `zoqa-fuzz-clone-job` | `fuzz_clone_job.zig` | `corpus_clone_job/` | `clone_job.dict` | Clone-job dependency graph algorithm: `DependencyWalker` (BFS with feed cap), `assignExistingDeps`, `applySettings`, `buildPostBody`, `formatOutput`/`formatBadgeOutput`/`formatJsonOutput`/`formatExportCommand`, `appendRepeatSuffix`, `injectReproduceSettings`, `extractAssets`, `isAssetGeneratedByClonedJobs`, `shouldSkipUefiVarsAsset`, `collectRepoUrls` (`src/clone_job.zig`). Input is `\n---\n`-separated sections: jobs JSON array, override lines, 3 control bytes, optional server JSON (`ids`/`vars`). Control byte 0 bits 0–6 select skip_deps, skip_chained_deps, clone_children, parental_inheritance, reproduce, repeat, check_repos; byte 1 is max_depth (0xFF = null); byte 2 is repeat count (&0x03)+2. |
 
 ## Setup
 
@@ -370,7 +371,7 @@ make fuzz-cov SKIP_BUILD=1
 
 # Run only specific targets
 ./tests/fuzz/coverage.sh config request
-make fuzz-cov TARGETS=config request
+make fuzz-cov TARGETS="config request"
 
 # Compile the coverage executables only (no kcov run, no kcov required)
 ./tests/fuzz/coverage.sh --build-only
@@ -390,7 +391,7 @@ zig build -Dcoverage coverage
 xdg-open zig-out/coverage/config/index.html
 ```
 
-Reports are written to `zig-out/coverage/{config,request,execute,schedule}/`.
+Reports are written to `zig-out/coverage/{config,request,execute,schedule,clone_job}/`.
 
 ### How it works
 

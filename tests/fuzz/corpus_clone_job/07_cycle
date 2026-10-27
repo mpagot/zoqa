@@ -1,0 +1,2 @@
+[{"id":1,"name":"A","settings":{"TEST":"A"},"parents":{"Chained":[2]},"children":{"Chained":[2]}},
+ {"id":2,"name":"B","settings":{"TEST":"B"},"parents":{"Chained":[1]},"children":{"Chained":[1]}}]

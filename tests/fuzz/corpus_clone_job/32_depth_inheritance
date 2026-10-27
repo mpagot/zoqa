@@ -1,0 +1,5 @@
+[{"id":1,"name":"A","settings":{"TEST":"A","BUILD":"1"},"parents":{},"children":{"Chained":[2]}},
+ {"id":2,"name":"B","settings":{"TEST":"B","BUILD":"2"},"parents":{"Chained":[1]},"children":{"Chained":[3]}},
+ {"id":3,"name":"C","settings":{"TEST":"C","BUILD":"3"},"parents":{"Chained":[2]},"children":{}}]
+---
+BUILD=999

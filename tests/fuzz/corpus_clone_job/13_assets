@@ -1,0 +1,1 @@
+[{"id":10,"name":"child","settings":{"TEST":"child","UEFI_PFLASH_VARS":"vars.fd","PUBLISH_PFLASH_VARS":"vars.fd"},"parents":{},"children":{},"assets":{"iso":["boot.iso","","1"],"hdd":["a.qcow2"],"other":["x.bin",123,null],"repo":["http://repo/x"]}}]

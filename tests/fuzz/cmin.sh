@@ -21,9 +21,8 @@
 #     config   — INI parser + resolveHost          (zoqa-fuzz-config)
 #     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request)
 #     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute)
-#     schedule — runSchedule + extractJobIds       (zoqa-fuzz-schedule)
-#                NOTE: corpus_schedule/ is not yet populated; cmin will warn
-#                and skip until seeds are added.
+#     schedule — runSchedule + runMonitor          (zoqa-fuzz-schedule)
+#     clone_job — clone-job dependency graph       (zoqa-fuzz-clone-job)
 
 set -euo pipefail
 
@@ -59,14 +58,16 @@ declare -A CORPUS_DIR=(
 	[request]="corpus_request"
 	[execute]="corpus_execute"
 	[schedule]="corpus_schedule"
+	[clone_job]="corpus_clone_job"
 )
 declare -A BINARY=(
 	[config]="zoqa-fuzz-config"
 	[request]="zoqa-fuzz-request"
 	[execute]="zoqa-fuzz-execute"
 	[schedule]="zoqa-fuzz-schedule"
+	[clone_job]="zoqa-fuzz-clone-job"
 )
-ALL_TARGETS=(config request execute schedule)
+ALL_TARGETS=(config request execute schedule clone_job)
 
 # ---------------------------------------------------------------------------
 # Determine which targets to process

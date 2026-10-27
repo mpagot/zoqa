@@ -1,0 +1,5 @@
+[{"id":10,"name":"child","settings":{"TEST":"child","UEFI_PFLASH_VARS":"vars.fd"},"parents":{"Chained":[9]},"children":{}}]
+---
+
+---
+

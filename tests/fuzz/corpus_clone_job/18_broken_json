@@ -1,0 +1,4 @@
+NOT VALID JSON {{{
+---
+BUILD=1
+TEST+=:x

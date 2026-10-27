@@ -1,0 +1,5 @@
+[{"id":1,"name":"A","settings":{"TEST":"A","UEFI_PFLASH_VARS":"vars.fd"},"parents":{"Chained":[2]},"children":{},"assets":{"other":["vars.fd"]}}]
+---
+
+---
+
