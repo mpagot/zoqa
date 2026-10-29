@@ -4,7 +4,7 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help zig-build-debug zig-build-release zig-test zig-test-discovery zig-lint zig-docs zig-docs-check zig-docs-serve e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize zig-doc-lint lint fuzz-build fuzz-cov fuzz-cov-build
+.PHONY: help zig-build-debug zig-build-release zig-build-safe zig-test zig-test-discovery zig-lint zig-docs zig-docs-check zig-docs-serve e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize zig-doc-lint lint fuzz-build fuzz-cov fuzz-cov-build
 
 # Default target
 help:
@@ -13,6 +13,8 @@ help:
 	@echo "Targets:"
 	@echo "  zig-build-debug     Build the zoqa executable and static library (debug)."
 	@echo "  zig-build-release   Build with release optimizations and strip symbols."
+	@echo "  zig-build-safe      Build with release optimizations and runtime safety"
+	@echo "                      checks (ReleaseSafe); symbols kept for stack traces."
 	@echo "  zig-test            Run all Zig unit tests."
 	@echo "  zig-test-discovery  Verify every \`test\` block in src/ is actually run."
 	@echo "                      Catches Zig issue #10018 (lazy-analysis silently"
@@ -52,6 +54,12 @@ zig-build-debug:
 
 zig-build-release:
 	zig build -Doptimize=ReleaseFast -Dstrip=true
+
+# Optimized, but overflow / bounds / null-unwrap checks still panic instead of
+# becoming undefined behaviour. Useful for long real-server runs (e.g. o3
+# downloads) where Debug is too slow and ReleaseFast would hide a bug.
+zig-build-safe:
+	zig build -Doptimize=ReleaseSafe
 
 zig-test: zig-test-discovery
 	zig build test --summary all
