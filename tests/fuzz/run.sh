@@ -191,7 +191,7 @@ fi
 # with a MAX_INPUT cap in fuzz_clone_job.zig (truncate input to 8KB)
 # and remove this override.
 if [[ "$TARGET" == "clone_job" ]]; then
-	AFL_ARGS+=(-E 50)
+	AFL_ARGS+=(-t 50)
 fi
 AFL_ARGS+=(-- "$BINARY_PATH")
 
