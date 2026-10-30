@@ -325,6 +325,35 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-127 | --export-command downloads assets (Perl oracle) | Both download assets + print command; download runs before the --export-command guard. |
 | CLO-128 | --export-command --skip-download downloads nothing | Both print command without downloading; 0 files in --dir. |
 
+### Gatekeeper & Rate-Limit Robustness (`tests_gatekeeper.sh`)
+| # | Test | Verification |
+|---|---|---|
+| GAT-1 | R1 — Accept on every `api` request | Header log shows every request from both implementations carries an `Accept` header. |
+| GAT-2 | R1 — caller-supplied `Accept` wins | `-a 'Accept: text/plain'` → exactly one `Accept` header with the caller value on both. |
+| GAT-3 | R2 — challenge on `/api/v1/` | `challenge` mode on the API path: both exit 0, body printed (API path unchanged; R2 applies to assets only). |
+| GAT-4 | R3 — `429`×2 then success | Both exit 0 with 3 hits (1 + 2 retries). |
+| GAT-5 | R3 — `408`/`500`/`504` ×1 each | Both exit 0 with 2 hits per status. |
+| GAT-6 | R3 — persistent `429` | Both exit non-zero with 3 hits (retries exhausted). |
+| GAT-7 | R4 — `Retry-After: 2` (seconds) | `429`×2, `SLEEP=0`: both exit 0, per-leg elapsed ≥ 4 s (proxy started before the timer). |
+| GAT-8 | R4 — `Retry-After: date:+2` (HTTP date) | `429`×2: both exit 0; Perl elapsed ≥ 2 s (honours HTTP date); Zig elapsed < 2 s (ignores non-integer Retry-After, falls back to computed 0 s delay). |
+| GAT-9 | R4 — unparsable `Retry-After` falls back | `429`×2, `Retry-After: soon`, `SLEEP=1`: both exit 0, per-leg elapsed ≥ 2 s (computed delay). |
+| GAT-10 | R4 control — no `Retry-After` | `503`×2, `SLEEP=0`: both exit 0, per-leg elapsed < 5 s (proves GAT-7/8/9 measured the header, not backoff). |
+| GAT-11 | R4 — `Retry-After` on 404 ignored | `404` + `Retry-After: 30`: both exit non-zero with 1 hit, per-leg elapsed < 5 s. |
+| GAT-12 | R4 — `Retry-After` 60s cap divergence | `429` + `Retry-After: 70`, `timeout 65s`: Zig caps delay at 60s and finishes in ~60s (exit 0); Perl uncapped, sleeps 70s and times out at 65s (exit 124). |
+| GAT-20 | R1 — Accept on every clone-job request and redirect hop | `--pass-redirects`: header log shows no `accept=-` line for the asset paths; both exit 0, MD5 OK. |
+| GAT-21 | R1 — `challenge_no_accept` on `/tests/` + `/assets/` | Challenged only when `Accept` is missing; both send it, so both exit 0 with MD5 OK. |
+| GAT-22 | R2 — `challenge` on asset GET | Zig exits 1, names the asset, exactly 1 attempt, no file kept. Perl exits 0 with the HTML saved (documented divergence). |
+| GAT-23 | R3 — BFS GET `429`×2 | Both retry and exit 0. |
+| GAT-24 | R3 — asset `429`×2 | Both exit 0 with ≥ 3 hits, MD5 OK. |
+| GAT-25 | R3 — asset `408`×2 | Both exit 0 with ≥ 3 hits, MD5 OK. |
+| GAT-26 | R3 — asset `429` always, `--retry 0` | Zig exits 1 with 1 hit (GET); Perl exits 0 with 2 hits (HEAD + GET — curl redirect-resolution probe; curl `--fail` bug, documented). |
+| GAT-27 | R4 — asset `429`×2 + `Retry-After: 2` | Both exit 0, elapsed ≥ 4 s per leg. |
+| GAT-28 | R3 — POST `429`×1 (optional) | Both retry the destination POST and create the job (exit 0). |
+| GAT-40 | Persistent truncation on a later asset (formerly CLO-129) | Proxy faults only the hdd asset path with `partial_cl` (1 MiB then RST) on every attempt. **Zig** (downloads ISO first, deterministic order): exits 1 with `HttpTransferTruncated` naming the qcow2 after exactly 6 attempts (1 + 5 retries), leaves no partial qcow2, keeps the ISO intact (MD5). **Perl (oracle):** curl sees CURLE_PARTIAL_FILE (18) and does not auto-retry; exits non-zero after >= 1 attempt (a transient proxy backend-fetch failure can add an extra attempt via curl's error-56 retry); asset download order is non-deterministic, so the ISO is kept and MD5-checked only when Perl downloads it before the faulted qcow2 (informational otherwise); any partial qcow2 left behind is informational only (no assertion — length-bearing case not documented in CLO-98). |
+| GAT-41 | `challenge` on hdd asset only — likely o3 cause | Zig exits 1 with an HTML error naming the qcow2, exactly 1 hit, no qcow2 kept, ISO intact (MD5). Perl exits 0 with the HTML saved (documented divergence). |
+| GAT-42 | R2 exception — real `page.html` asset served as `text/html` | Separate job (`ASSET_1=page.html`, type `other`), no fault. Precondition: the asset route answers `Content-Type: text/html`. Both exit 0, save the file, MD5 OK (the `*.htm`/`*.html` exception must not reject a real HTML asset). |
+| GAT-43 | `challenge` on the `.html` asset — known gap, pinned | Proxy serves the challenge page on every attempt of `/tests/<id>/asset/other/`. Both exit 0 and save the challenge page as `page.html`; Zig makes exactly 1 GET. [KNOWN GAP] — pins today's behaviour; flip the Zig assertions to "rejects" when the gap is fixed (plan §5a). |
+
 ### Stress Tests (`tests_stress.sh`)
 | # | Test | Verification |
 |---|---|---|

@@ -105,8 +105,10 @@ invoked automatically.
 --collect-logs      Dump openQA server-side logs to ./openqa-e2e-logs/ before stopping.
 --suites NAMES      Comma-separated list of suite names to run. Valid names:
                     core, auth, data, output, robustness, retry_knobs, archive,
-                    monitor, schedule, help, stress, perf. When omitted, all
-                    suites are run (default behaviour).
+                    monitor, schedule, help, clone_smoke, clone_single,
+                    clone_topology, clone_maxdepth, clone_uefi, gatekeeper,
+                    stress, perf. When omitted, all suites are run
+                    (default behaviour).
 -h, --help          Show help.
 ```
 

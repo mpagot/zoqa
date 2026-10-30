@@ -17,6 +17,7 @@
 #   ensure_basic_job()      — lazy-init JOB_ID
 #   ensure_rich_job()       — lazy-init RICH_JOB_ID
 #   ensure_stress_job()     — lazy-init STRESS_JOB_ID
+#   ensure_html_asset_job() — lazy-init GAT_HTML_JOB_ID (ASSET_1=page.html)
 #
 # Dependencies: lib.sh must be sourced first (provides container_exec, die,
 # e2e_sleep, DRY_RUN, CIRROS_IMG, CIRROS_TESTDIR, LOG_PREFIX).
@@ -327,6 +328,47 @@ ensure_stress_job() {
 }
 
 # ---------------------------------------------------------------------------
+# ensure_html_asset_job — lazy-init GAT_HTML_JOB_ID (GAT-42/43).
+#
+# A job whose only asset is a real HTML file, ASSET_1=page.html (type
+# "other").  openQA serves it as Content-Type: text/html, which is exactly
+# what the R2 HTML-rejection exception for *.htm/*.html assets must let
+# through.  A separate job keeps the rich job (GAT-1…41) unchanged.
+#
+# The file must exist in factory/other before scheduling, otherwise the
+# POST /isos reports the asset as missing.  BACKEND=null + STRESSTEST with
+# a single tiny step makes the job pass in seconds without QEMU.
+# ---------------------------------------------------------------------------
+GAT_HTML_ASSET="page.html"
+GAT_HTML_ASSET_SRC="/var/lib/openqa/share/factory/other/${GAT_HTML_ASSET}"
+
+ensure_html_asset_job() {
+	# The single worker must be free before we schedule another job.
+	ensure_basic_job
+	if [[ -z "${GAT_HTML_JOB_ID:-}" ]]; then
+		container_exec bash -c "mkdir -p \$(dirname ${GAT_HTML_ASSET_SRC}) && \
+			printf '%s\n' '<!DOCTYPE html>' \
+			'<html><head><title>GAT-42 real HTML asset</title></head>' \
+			'<body><p>Real HTML asset served as text/html.</p></body></html>' \
+			>${GAT_HTML_ASSET_SRC}"
+	fi
+	_ensure_job GAT_HTML_JOB_ID "HTML-asset job" \
+		DISTRI=example \
+		VERSION=0 \
+		FLAVOR=DVD \
+		ARCH=x86_64 \
+		BUILD=e2e-gat-html \
+		BACKEND=null \
+		CASEDIR="$CIRROS_TESTDIR" \
+		NEEDLES_DIR="%CASEDIR%/needles" \
+		STRESSTEST=1 \
+		STRESS_STEPS=1 \
+		STRESS_TEXT_SIZE=16 \
+		ASSET_1="$GAT_HTML_ASSET" \
+		"_GROUP_ID=${GROUP_ID:-1}"
+}
+
+# ---------------------------------------------------------------------------
 # register_deletable_asset NAME — create a file-backed asset for DELETE tests.
 #
 # Creates a dummy file in the container's factory/other directory, triggers
@@ -368,18 +410,28 @@ register_deletable_asset() {
 FAULTPROXY_PORT="9797"
 FAULTPROXY_COUNT_FILE="/tmp/faultproxy_counts.txt"
 FAULTPROXY_LOG="/tmp/faultproxy_proxy.log"
+FAULTPROXY_HEADER_LOG="/tmp/faultproxy_headers.log"
 FAULTPROXY_SCRIPT="/app/tests/e2e/fixtures/faultproxy.py"
 
-# Usage: start_faultproxy [FAIL_TIMES] [FAULT_MODE] [FAULT_PATH] [PARTIAL_BYTES]
-# Defaults: FAIL_TIMES=2, FAULT_MODE=503, FAULT_PATH=/tests/, PARTIAL_BYTES=64
+# Usage: start_faultproxy [FAIL_TIMES] [FAULT_MODE] [FAULT_PATH] [PARTIAL_BYTES] [RETRY_AFTER] [EXTRA_FLAGS]
+# Defaults: FAIL_TIMES=2, FAULT_MODE=503, FAULT_PATH=/tests/, PARTIAL_BYTES=64,
+#           RETRY_AFTER=(none), EXTRA_FLAGS=(none)
+#
+# RETRY_AFTER is forwarded as --retry-after (integer, "date:+N", or verbatim).
+# EXTRA_FLAGS is a shell word list of additional faultproxy flags.  Pass
+# "--header-log" (no path) to enable the header log — the canonical
+# ${FAULTPROXY_HEADER_LOG} path is injected automatically.  e.g.
+#   start_faultproxy 2 429 /tests/ 64 2 "--header-log --pass-redirects"
 start_faultproxy() {
 	local fail_times="${1:-2}"
 	local mode="${2:-503}"
 	local fault_path="${3:-/tests/}"
 	local partial_bytes="${4:-64}"
+	local retry_after="${5:-}"
+	local extra_flags="${6:-}"
 
 	if [[ "$DRY_RUN" == "true" ]]; then
-		echo "[DRY-RUN] start_faultproxy $fail_times $mode $fault_path $partial_bytes"
+		echo "[DRY-RUN] start_faultproxy $fail_times $mode $fault_path $partial_bytes $retry_after $extra_flags"
 		return 0
 	fi
 
@@ -388,9 +440,18 @@ start_faultproxy() {
 	# that runs this very pkill command (which would otherwise exit 137).
 	container_exec bash -c 'pkill -9 -f "^python3 .*faultproxy" 2>/dev/null || true'
 	container_exec bash -c "truncate -s 0 ${FAULTPROXY_COUNT_FILE} 2>/dev/null || true"
+	container_exec bash -c "truncate -s 0 ${FAULTPROXY_HEADER_LOG} 2>/dev/null || true"
 
 	# Use podman exec -d (detached) so this call returns immediately.
 	# container_exec blocks until all descendants exit on cgroup-v2 systems.
+	local retry_after_arg=""
+	[[ -n "$retry_after" ]] && retry_after_arg="--retry-after ${retry_after}"
+	local header_log_arg=""
+	local passthrough_flags="$extra_flags"
+	if [[ "$extra_flags" == *"--header-log"* ]]; then
+		header_log_arg="--header-log ${FAULTPROXY_HEADER_LOG}"
+		passthrough_flags="${passthrough_flags//--header-log/}"
+	fi
 	podman exec -d "$CONTAINER_NAME" bash -c \
 		"python3 ${FAULTPROXY_SCRIPT} \
 		 --port ${FAULTPROXY_PORT} \
@@ -400,6 +461,9 @@ start_faultproxy() {
 		 --fail-times ${fail_times} \
 		 --partial-bytes ${partial_bytes} \
 		 --count-file ${FAULTPROXY_COUNT_FILE} \
+		 ${retry_after_arg} \
+		 ${header_log_arg} \
+		 ${passthrough_flags} \
 		 >${FAULTPROXY_LOG} 2>&1"
 	sleep 1 # wait for the proxy socket to be ready
 }
@@ -424,6 +488,55 @@ get_faultproxy_hits() {
 		"grep -c '${pattern}' ${FAULTPROXY_COUNT_FILE} 2>/dev/null || echo 0"
 }
 
+# Print the header-log lines matching PATTERN (grep -F).
+# The header log is written by faultproxy --header-log (see start_faultproxy
+# EXTRA_FLAGS): one line per request, "METHOD PATH accept=<v|-> ua=<v|->".
+# Used by GAT-1/GAT-2/GAT-20 to verify Accept header presence.
+get_faultproxy_headers() {
+	local pattern=$1
+	if [[ "$DRY_RUN" == "true" ]]; then
+		return 0
+	fi
+	container_exec bash -c \
+		"grep -F '${pattern}' ${FAULTPROXY_HEADER_LOG} 2>/dev/null || true"
+}
+
+# Assert that every request recorded in the header log for PATTERN carries an
+# Accept header (i.e. no line with "accept=-").  Increments failed_tests on
+# violation.  PATTERN is a fixed string matched against the path column.
+assert_all_requests_have_accept() {
+	local pattern=$1
+	local label=$2
+	if [[ "$DRY_RUN" == "true" ]]; then
+		echo "[DRY-RUN] assert_all_requests_have_accept $pattern"
+		return 0
+	fi
+	local lines missing
+	lines=$(get_faultproxy_headers "$pattern")
+	if [[ -z "$lines" ]]; then
+		echo "FAIL: $label — no header-log lines for '$pattern'"
+		failed_tests=$((failed_tests + 1))
+		return 0
+	fi
+	missing=$(echo "$lines" | grep -c 'accept=-' || true)
+	if [[ "$missing" -gt 0 ]]; then
+		echo "FAIL: $label — $missing request(s) without Accept header:"
+		echo "$lines" | grep 'accept=-' | head -5
+		failed_tests=$((failed_tests + 1))
+	else
+		echo "PASS: $label ($(echo "$lines" | wc -l) request(s), all with Accept)"
+	fi
+}
+
+# Wall-clock seconds elapsed since START_NS (epoch nanoseconds from
+# date +%s%N).  Used by the GAT-7/8/9/10 Retry-After sleep checks.
+elapsed_since() {
+	local start_ns=$1
+	local now_ns
+	now_ns=$(date +%s%N)
+	echo $(( (now_ns - start_ns) / 1000000000 ))
+}
+
 # Dump the fault proxy log file for troubleshooting in case of test failures.
 dump_faultproxy_logs() {
 	echo "=== FAULT PROXY LOGS (${FAULTPROXY_LOG}) ===" >&2
@@ -433,10 +546,12 @@ dump_faultproxy_logs() {
 
 # Reset the proxy in-memory hit counts by truncating its log file.
 # Works via the self-resetting file check, avoiding slow and flaky process restarts.
+# Also truncates the header log so per-leg header assertions stay clean.
 reset_faultproxy() {
 	if [[ "$DRY_RUN" == "true" ]]; then
 		echo "[DRY-RUN] reset_faultproxy"
 		return 0
 	fi
 	container_exec bash -c "truncate -s 0 ${FAULTPROXY_COUNT_FILE} 2>/dev/null || true"
+	container_exec bash -c "truncate -s 0 ${FAULTPROXY_HEADER_LOG} 2>/dev/null || true"
 }

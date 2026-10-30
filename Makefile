@@ -4,7 +4,7 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help zig-build-debug zig-build-release zig-build-safe zig-test zig-test-discovery zig-lint zig-docs zig-docs-check zig-docs-serve e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize zig-doc-lint lint fuzz-build fuzz-cov fuzz-cov-build
+.PHONY: help zig-build-debug zig-build-release zig-build-safe zig-test zig-test-discovery zig-lint zig-docs zig-docs-check zig-doc-lint zig-docs-serve e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize lint fuzz-build fuzz-cov fuzz-cov-build
 
 # Default target
 help:
@@ -33,8 +33,9 @@ help:
 	@echo "  e2e-keep    Run E2E keeping the container alive (--keep-container)."
 	@echo "              Optional: SUITES=            deploy only, skip all tests."
 	@echo "  e2e-dryrun  Simulate E2E run without starting container (--dryrun)."
-	@echo "  e2e-lint        Run bash -n, shellcheck, and suite registry check on E2E scripts."
+	@echo "  e2e-lint        Run bash -n, shellcheck, py_compile, and suite registry check."
 	@echo "  e2e-catalog-lint Run test prefix and catalog validation."
+	@echo "  e2e-list        List valid SUITES= values (one per line)."
 	@echo " "
 	@echo "  manual-lint     Run bash -n and shellcheck on manual test scripts."
 	@echo " "
@@ -165,6 +166,7 @@ E2E_SCRIPTS := \
 	tests/e2e/tests_clone_topology.sh \
 	tests/e2e/tests_clone_maxdepth.sh \
 	tests/e2e/tests_clone_uefi.sh \
+	tests/e2e/tests_gatekeeper.sh \
 	tests/e2e/tests_help.sh \
 	tests/e2e/tests_perf.sh \
 	tests/e2e/tests_stress.sh
@@ -174,6 +176,9 @@ e2e-catalog-lint:
 	@bash tools/check_test_catalog.sh
 	@echo "==> e2e-catalog-lint passed"
 
+e2e-list:
+	@ls tests/e2e/tests_*.sh | sed 's|tests/e2e/tests_||;s|\.sh||'
+
 e2e-lint:
 	@echo "==> bash -n syntax check"
 	@for f in $(E2E_SCRIPTS); do \
@@ -181,6 +186,8 @@ e2e-lint:
 	done
 	@echo "==> shellcheck"
 	@shellcheck $(E2E_SCRIPTS)
+	@echo "==> py_compile (Python fixtures)"
+	@python3 -m py_compile tests/e2e/fixtures/faultproxy.py
 	@echo "==> suite registry check"
 	@bash tools/check_suite_registry.sh
 	@echo "==> e2e-lint passed"

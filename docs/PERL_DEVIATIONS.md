@@ -89,7 +89,18 @@ scheme, matching Perl.
 ### Exit code on download failure — **deliberate divergence**
 - **Perl:** invokes `curl` without `--fail`, so curl exits `0` on 404/503; the `mirror()` error check is a no-op. **The process exits `0` even when every asset download failed** (upstream bug).
 - **Zig:** exits `1` immediately on HTTP 404 (no retry), exits `1` after exhausting `--retry` on transient errors, and only exits `0` if all assets downloaded (or were skipped via `--ignore-missing-assets`).
-- **Source:** e2e CLO-86 (404), CLO-88 (`--retry 0`) — the suite explicitly accepts Perl's buggy exit-0 without failing (`tests_clone_single.sh:1129`); TEST_CATALOG CLO-86/CLO-88.
+- **Source:** e2e CLO-86 (404), CLO-88 (`--retry 0`), GAT-26 — the suite explicitly accepts Perl's buggy exit-0 without failing (`tests_clone_single.sh:1129`); TEST_CATALOG CLO-86/CLO-88/GAT-26.
+
+### HTML/bot-challenge page on asset download — **deliberate divergence**
+- **Perl:** saves the HTML challenge page as the asset file and exits `0` (footgun — leaves corrupt/invalid asset files on disk).
+- **Zig:** detects `text/html` on a `.ok` asset response, rejects it as a permanent terminal error (`error.UnexpectedHtmlResponse`), makes no retries, deletes any partial file, and exits `1` with a clear diagnostic message: `Error: asset download failed for '<name>': server returned an HTML page instead of the asset (bot challenge?)`.
+- **Exception:** assets explicitly named `*.htm` or `*.html` (case-insensitive) are exempted from HTML rejection so legitimate HTML assets are not blocked (GAT-42). Note that for an `.htm`/`.html` asset, a bot challenge page is saved silently (known gap tracked by GAT-43).
+- **Source:** e2e GAT-22, GAT-41, GAT-42, GAT-43; SPEC §18.18.5; TEST_CATALOG GAT-22/GAT-41.
+
+### `Retry-After` cap — **deliberate divergence**
+- **Perl:** honours any `Retry-After` header value verbatim, uncapped.
+- **Zig:** clamps a parsed, server-supplied integer `Retry-After` value to `RETRY_AFTER_CAP_S = 60` seconds (rationale: UX — an unbounded header value would hang the CLI indefinitely; capping at 60s ensures zoqa retries safely). Unparsable or non-integer values (such as HTTP dates) are ignored and fall back to computed exponential backoff.
+- **Source:** unit tests (`retryDelayNs` override cap).
 
 ### Mid-transfer TCP drop / short-read validation — **deliberate divergence**
 - **Perl:** on a length-bearing TCP drop, curl detects `CURLE_PARTIAL_FILE` (18) but **does not retry** it (curl's `--retry` excludes error 18), so the clone fails immediately even when retries are configured. On a *length-less* response it interprets the reset as clean EOF, exits `0`, and leaves a corrupt truncated file.
@@ -132,6 +143,25 @@ scheme, matching Perl.
   targeting the same factory path).
 - **Source:** `src/http_client.zig` (`isRemoteComplete`, `openQADownloadToFile`);
   e2e CLO-75 (`tests_clone_single.sh`).
+
+### Asset download request count — HEAD redirect-resolution probe (accepted)
+- **Perl:** issues **two** HTTP requests per asset: a `HEAD`
+  (`curl --head --location -w %{url_effective}`, `_resolve_redirection`,
+  CloneJob.pm:196-198) to resolve the final URL after following redirects,
+  and a `GET` (`curl --continue-at -`, `mirror()`, CloneJob.pm:201-204)
+  to download the body. The HEAD is a plumbing necessity of Perl's
+  shell-out-to-curl architecture: it needs the final URL as a string to
+  compose the second curl command line. Both requests carry auth headers
+  and are subject to `--retry`.
+- **Zig:** follows redirects in-process (`std.http.Client`) and issues a
+  **single** ranged GET per asset. No separate HEAD is needed.
+- **Net effect:** the downloaded file is byte-identical (same MD5); the
+  difference is request count only (Perl: 2, Zig: 1 per asset). This is
+  observable in rate-limit / fault-proxy testing (e.g. GAT-26: Perl gets
+  2 hits on the fault path, Zig gets 1) but is not a behavioural
+  divergence — the user-visible result (the file on disk) is the same.
+- **Source:** `CloneJob.pm:196-204`; SPEC §18.18 step 4 note; e2e GAT-26
+  (`tests_gatekeeper.sh`).
 
 ### Omission of deprecated `--skip-checks` option
 - **Perl:** `openqa-clone-job` accepts `--skip-checks`, but marks it as a deprecated no-op in `--help` ("Deprecated option. The logic was inverted, so currently the check is skipped by default. If you were using it, just remove it and the behavior will remain the same.").
