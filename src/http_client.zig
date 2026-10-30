@@ -77,81 +77,92 @@ pub const APIResponse = struct {
     }
 };
 
-/// Parameters for a single HTTP request dispatched by `execute()`.
+/// Parameters for a single HTTP request dispatched by `execute()` or `executeStream()`.
 ///
 /// `execute()` does not own any of the slices stored here; all borrowed
 /// memory must remain valid for the duration of the call.
-///
-/// Fields:
-/// - `allocator`        Used for all internal allocations (header list, body
-///                      buffer, HMAC scratch buffers). The returned `APIResponse`
-///                      is also allocated with this allocator and must be freed
-///                      by the caller via `APIResponse.deinit()`.
-/// - `method`           HTTP method (GET, POST, PUT, DELETE, …).
-/// - `url`              Fully-qualified URL string, e.g.
-///                      `"https://openqa.example.com/api/v1/jobs"`.
-///                      Must be a valid absolute URL; parsing errors are returned as
-///                      `error.InvalidUri`.
-/// - `headers`          Caller-supplied HTTP headers appended verbatim before
-///                      the auto-injected `Accept` and `Accept-Encoding` headers.
-///                      If no `Accept` header is present, `application/json` is
-///                      added automatically.
-/// - `body`             Optional request body bytes. For methods that require a
-///                      body (`requestHasBody()` returns true) but where `body`
-///                      is `null`, an empty body is sent.
-/// - `credentials`      If non-null, HMAC-SHA1 `X-API-Key` / `X-API-Hash` /
-///                      `X-API-Microtime` headers are computed from the path,
-///                       query string, and current Unix timestamp, then appended.
-///                      Body parameters are intentionally excluded from the HMAC
-///                      message.
-/// - `retries`          Maximum number of additional attempts after the first
-///                      failure. Retries are triggered by connection errors, send
-///                      errors, and 502/503 HTTP responses. Each retry sleeps for
-///                      an exponentially increasing interval (see `sleepForRetry`).
-/// - `quiet`             When `true`, suppresses all diagnostic output to stderr
-///                       (connection errors, non-2xx status lines, read/decompress
-///                       errors). Useful in tests and when the caller handles
-///                       errors itself.
-/// - `connect_timeout_s` TCP connect timeout in seconds. Currently parsed and
-///                       validated but not yet wired into `std.http.Client`
-///                       (which does not expose per-connection timeout support).
-///                       Reserved for future use. Defaults to 30.0.
-/// - `retry_sleep_s`     Base sleep duration in seconds between retry attempts.
-///                       Actual sleep = `retry_sleep_s * retry_factor^attempt`.
-///                       Defaults to 3.0.
-/// - `retry_factor`      Exponential backoff multiplier applied per attempt.
-///                       Defaults to 1.0 (constant sleep).
-/// - `size_limit`        Maximum bytes to accept in a streaming response. Only used by
-///                       `executeStream()`; ignored by `execute()`. If the `Content-Length`
-///                       response header exceeds this value, `executeStream()` returns
-///                       `error.FileTooLarge` without reading the body.
 pub const Request = struct {
+    /// General-purpose allocator used for all internal allocations (header list,
+    /// body buffer, HMAC scratch buffers). The returned `APIResponse` is also allocated
+    /// with this allocator and must be freed by the caller via `APIResponse.deinit()`.
     allocator: std.mem.Allocator,
+
+    /// HTTP method (GET, POST, PUT, DELETE, …).
     method: std.http.Method,
+
+    /// Fully-qualified URL string, e.g. `"https://openqa.example.com/api/v1/jobs"`.
+    /// Must be a valid absolute URL; parsing errors are returned as `error.InvalidUri`.
     url: []const u8,
+
+    /// Caller-supplied HTTP headers appended verbatim before auto-injected `Accept`
+    /// and `Accept-Encoding` headers. If no `Accept` header is present, `application/json`
+    /// is added automatically.
     headers: []const std.http.Header,
+
+    /// Optional request body bytes. For methods that require a body (`requestHasBody()`
+    /// returns true) but where `body` is `null`, an empty body is sent.
     body: ?[]const u8,
+
+    /// If non-null, HMAC-SHA1 `X-API-Key` / `X-API-Hash` / `X-API-Microtime` headers
+    /// are computed from the path, query string, and current Unix timestamp, then appended.
+    /// Body parameters are intentionally excluded from the HMAC message.
     credentials: ?config.Credentials,
+
+    /// Maximum number of additional attempts after the first failure. Retries are triggered
+    /// by connection errors, send errors, and 502/503 HTTP responses. Each retry sleeps for
+    /// an exponentially increasing interval (see `sleepForRetry`).
     retries: u32,
+
+    /// When `true`, suppresses all diagnostic output to stderr (connection errors,
+    /// non-2xx status lines, read/decompress errors). Useful in tests and when the caller
+    /// handles errors itself.
     quiet: bool,
+
+    /// When `true`, prints detailed request and response HTTP headers to stdout. Defaults to `false`.
     verbose: bool = false,
+
+    /// TCP connect timeout in seconds. Currently parsed and validated but not yet wired into
+    /// `std.http.Client` (which does not expose per-connection timeout support). Reserved for future use.
+    /// Defaults to 30.0.
     connect_timeout_s: f64 = 30.0,
+
+    /// Base sleep duration in seconds between retry attempts.
+    /// Actual sleep = `retry_sleep_s * retry_factor^attempt`. Defaults to 3.0.
     retry_sleep_s: f64 = 3.0,
+
+    /// Exponential backoff multiplier applied per attempt. Defaults to 1.0 (constant sleep).
     retry_factor: f64 = 1.0,
+
+    /// Maximum bytes to accept in a streaming response. Only used by `executeStream()`;
+    /// ignored by `execute()`. If the `Content-Length` response header exceeds this value,
+    /// `executeStream()` returns `error.FileTooLarge` without reading the body.
     size_limit: ?u64 = null,
+
+    /// Optional expected byte size of the response payload. Used by `executeStream()`
+    /// to detect incomplete transfers or to validate stream size when `Content-Length` header is absent.
     expected_size: ?u64 = null,
+
+    /// When `true`, permits streaming responses without a `Content-Length` header or `expected_size`.
+    /// Defaults to `false`.
     allow_lengthless: bool = false,
+
+    /// When `true`, rejects HTTP 200 responses with `Content-Type: text/html` (`error.UnexpectedHtmlResponse`).
+    /// Used for asset downloads to prevent saving HTML challenge/error pages as binary payload files.
+    reject_html: bool = false,
 };
 
 /// Result returned by `executeStream()`.
-///
-/// Fields:
-/// - `status`         HTTP status code of the response.
-/// - `content_length` Value of the `Content-Length` response header, or
-///                    `null` if absent or not parseable as u64.
 pub const StreamResult = struct {
+    /// HTTP status code of the response.
     status: std.http.Status,
+
+    /// Value of the `Content-Length` response header, or `null` if absent or not parseable as u64.
     content_length: ?u64,
+
+    /// Parsed `Retry-After` header value in seconds, or `null` when absent or unparsable.
+    /// Only meaningful for non-retryable (terminal) results; callers use it to honour the
+    /// server's delay on their own retry loop.
+    retry_after_s: ?u64 = null,
 };
 
 /// Normalize a URL path+query string for HMAC-SHA1 signing.
@@ -323,7 +334,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         }) catch |err| {
             if (!req.quiet) std.debug.print("Connection error: {s}\n", .{@errorName(err)});
             if (attempt >= req.retries) return err;
-            try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+            try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
             continue;
         };
         defer http_req.deinit();
@@ -335,21 +346,21 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
             http_req.sendBodyComplete(body_mut) catch |err| {
                 if (!req.quiet) std.debug.print("sendBodyComplete with alloc error: {s}\n", .{@errorName(err)});
                 if (attempt >= req.retries) return err;
-                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
                 continue;
             };
         } else if (req.method.requestHasBody()) {
             http_req.sendBodyComplete(&.{}) catch |err| {
                 if (!req.quiet) std.debug.print("sendBodyComplere error: {s}\n", .{@errorName(err)});
                 if (attempt >= req.retries) return err;
-                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
                 continue;
             };
         } else {
             http_req.sendBodiless() catch |err| {
                 if (!req.quiet) std.debug.print("sendBodyLess error: {s}\n", .{@errorName(err)});
                 if (attempt >= req.retries) return err;
-                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
                 continue;
             };
         }
@@ -359,16 +370,15 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         var response = http_req.receiveHead(&redirect_buf) catch |err| {
             if (!req.quiet) std.debug.print("Response error: {s}\n", .{@errorName(err)});
             if (attempt >= req.retries) return err;
-            try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+            try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
             continue;
         };
 
-        const status_uint = @intFromEnum(response.head.status);
-
-        // Retry on gateway errors
-        if (status_uint == 502 or status_uint == 503) {
+        // Retry on transient statuses (408, 429, 500, 502, 503, 504).
+        if (isRetryableStatus(response.head.status)) {
             if (attempt < req.retries) {
-                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                const override = retryAfterSeconds(response.head);
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, override);
                 continue;
             }
         }
@@ -549,7 +559,7 @@ pub fn executeStream(
             .extra_headers = headers.items,
         }) catch |err| {
             if (attempt < req.retries) {
-                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
                 continue;
             }
             if (!req.quiet) std.debug.print("Connection error: {s}\n", .{@errorName(err)});
@@ -559,7 +569,7 @@ pub fn executeStream(
 
         http_req.sendBodiless() catch |err| {
             if (attempt < req.retries) {
-                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
                 continue;
             }
             if (!req.quiet) std.debug.print("Send error: {s}\n", .{@errorName(err)});
@@ -569,19 +579,28 @@ pub fn executeStream(
         var redirect_buf: [8 * 1024]u8 = undefined;
         var response = http_req.receiveHead(&redirect_buf) catch |err| {
             if (attempt < req.retries) {
-                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+                try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
                 continue;
             }
             if (!req.quiet) std.debug.print("Response error: {s}\n", .{@errorName(err)});
             return err;
         };
 
-        // Retry transient gateway errors. This happens before the body is
-        // streamed, so `writer` is still untouched: it is safe to retry.
-        const status_uint = @intFromEnum(response.head.status);
-        if ((status_uint == 502 or status_uint == 503) and attempt < req.retries) {
-            try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor);
+        // Retry transient statuses (408, 429, 500, 502, 503, 504). This
+        // happens before the body is streamed, so `writer` is still
+        // untouched: it is safe to retry.
+        if (isRetryableStatus(response.head.status) and attempt < req.retries) {
+            const override = retryAfterSeconds(response.head);
+            try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, override);
             continue;
+        }
+
+        if (req.reject_html and response.head.status == .ok) {
+            if (response.head.content_type) |ct| {
+                if (std.ascii.startsWithIgnoreCase(ct, "text/html")) {
+                    return error.UnexpectedHtmlResponse;
+                }
+            }
         }
 
         const content_length = response.head.content_length;
@@ -625,14 +644,75 @@ pub fn executeStream(
         return StreamResult{
             .status = response.head.status,
             .content_length = content_length,
+            .retry_after_s = if (isRetryableStatus(response.head.status)) retryAfterSeconds(response.head) else null,
         };
     }
 }
 
-fn sleepForRetry(attempt: u32, sleep_s: f64, factor: f64) !void {
+/// Extract and parse `Retry-After` header from response head (if present and integer).
+pub fn retryAfterSeconds(head: anytype) ?u64 {
+    var hit = head.iterateHeaders();
+    while (hit.next()) |hdr| {
+        if (std.ascii.eqlIgnoreCase(hdr.name, "Retry-After")) {
+            return parseRetryAfter(hdr.value);
+        }
+    }
+    return null;
+}
+
+/// Returns true when the API or asset-download response status is transient and worth retrying.
+/// Covers request timeout (408), rate limiting (429), and server/gateway
+/// errors (500, 502, 503, 504).
+pub fn isRetryableStatus(status: std.http.Status) bool {
+    return switch (status) {
+        .request_timeout, .too_many_requests, .internal_server_error, .bad_gateway, .service_unavailable, .gateway_timeout => true,
+        else => false,
+    };
+}
+
+/// Parse a `Retry-After` header value in seconds into an integer delay.
+/// Accepts whole non-negative integers (delay-seconds, RFC 9110 §10.2.3).
+/// Non-integer values (including HTTP-dates) return `null` (caller falls back
+/// to computed backoff).
+pub fn parseRetryAfter(value: []const u8) ?u64 {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return null;
+    for (trimmed) |c| {
+        if (!std.ascii.isDigit(c)) return null;
+    }
+    return std.fmt.parseInt(u64, trimmed, 10) catch null;
+}
+
+/// Maximum allowed delay in seconds for a server-supplied `Retry-After` header.
+pub const RETRY_AFTER_CAP_S: u64 = 60;
+
+/// Compute retry delay in nanoseconds.
+/// If `override_s` is provided (e.g. from `Retry-After`), it is capped at `RETRY_AFTER_CAP_S` (60 s).
+/// Otherwise, computes exponential backoff `sleep_s * factor^attempt` in ns, saturating at `maxInt(u64)`.
+pub fn retryDelayNs(attempt: u32, sleep_s: f64, factor: f64, override_s: ?u64) u64 {
+    if (override_s) |ov| {
+        const clamped: u64 = @min(ov, RETRY_AFTER_CAP_S);
+        return clamped * std.time.ns_per_s;
+    }
+    if (sleep_s <= 0) return 0;
     const delay_s = sleep_s * std.math.pow(f64, factor, @floatFromInt(attempt));
-    const delay_ns: u64 = @intFromFloat(delay_s * 1_000_000_000.0);
-    std.Thread.sleep(delay_ns);
+    if (std.math.isNan(delay_s) or delay_s <= 0) return 0;
+    if (std.math.isInf(delay_s)) return std.math.maxInt(u64);
+    const ns_f = delay_s * @as(f64, @floatFromInt(std.time.ns_per_s));
+    const max_u64_f: f64 = @floatFromInt(std.math.maxInt(u64));
+    if (ns_f >= max_u64_f) return std.math.maxInt(u64);
+    return @intFromFloat(ns_f);
+}
+
+fn sleepForRetry(attempt: u32, sleep_s: f64, factor: f64, override_s: ?u64) !void {
+    std.Thread.sleep(retryDelayNs(attempt, sleep_s, factor, override_s));
+}
+
+/// Returns true if the path ends with `.htm` or `.html` (case-insensitive).
+pub fn hasHtmlExtension(path: []const u8) bool {
+    if (path.len >= 5 and std.ascii.eqlIgnoreCase(path[path.len - 5 ..], ".html")) return true;
+    if (path.len >= 4 and std.ascii.eqlIgnoreCase(path[path.len - 4 ..], ".htm")) return true;
+    return false;
 }
 
 test "normalizePathQuery: %20 becomes plus, tilde becomes %7E" {
@@ -1065,7 +1145,9 @@ pub const RawGetOptions = struct {
     size_limit: ?u64 = null,
     quiet: bool = false,
     verbose: bool = false,
+    /// Optional expected byte size of the response payload.
     expected_size: ?u64 = null,
+    /// When `true`, permits streaming responses without a `Content-Length` header or `expected_size`.
     allow_lengthless: bool = false,
 
     /// When non-null, `openQADownloadToFile` renders a progress meter for the
@@ -1278,12 +1360,13 @@ pub fn openQADownloadToFile(
         .size_limit = opts.size_limit,
         .expected_size = opts.expected_size,
         .allow_lengthless = opts.allow_lengthless,
+        .reject_html = !hasHtmlExtension(dest_path),
     };
 
     const Outcome = union(enum) {
         done: StreamResult, // success: keep the file
         terminal: StreamResult, // non-retryable status: delete + return status
-        retry, // retryable failure: delete + backoff + try again
+        retry: ?u64, // retryable failure: delete + backoff (or Retry-After) + try again
         failed: anyerror, // retry-exhausted error: delete + return error
     };
 
@@ -1308,7 +1391,7 @@ pub fn openQADownloadToFile(
                     // LengthRequired is a policy violation (strict mode rejects
                     // responses without Content-Length or expected_size). Retrying
                     // would defeat the policy when the fault is transient.
-                    if (err == error.LengthRequired) break :blk .{ .failed = err };
+                    if (err == error.LengthRequired or err == error.UnexpectedHtmlResponse) break :blk .{ .failed = err };
                     // Local disk write failure (NoSpaceLeft, DiskQuota, ...): the
                     // real file writer stashes the specific error in file_writer.err;
                     // a mock may also return it directly. Retrying would re-download
@@ -1318,7 +1401,7 @@ pub fn openQADownloadToFile(
                         break :blk .{ .failed = err };
                     }
                     // Connection error or mid-stream reset, retry if budget remains.
-                    break :blk if (attempt < opts.retries) .retry else .{ .failed = err };
+                    break :blk if (attempt < opts.retries) .{ .retry = null } else .{ .failed = err };
                 };
 
                 if (res.status == .ok) {
@@ -1344,15 +1427,16 @@ pub fn openQADownloadToFile(
 
                 renderer.abort() catch {};
                 // Non-2xx: the body just written is an error page, not the asset.
-                const code = @intFromEnum(res.status);
-                if (code >= 500 and attempt < opts.retries) break :with_progress .retry;
+                if (isRetryableStatus(res.status) and attempt < opts.retries) {
+                    break :with_progress .{ .retry = res.retry_after_s };
+                }
                 break :with_progress .{ .terminal = res };
             } else no_progress: {
                 const res = executeStream(req, client, &file_writer.interface, &cl) catch |err| {
                     // LengthRequired is a policy violation (strict mode rejects
                     // responses without Content-Length or expected_size). Retrying
                     // would defeat the policy when the fault is transient.
-                    if (err == error.LengthRequired) break :blk .{ .failed = err };
+                    if (err == error.LengthRequired or err == error.UnexpectedHtmlResponse) break :blk .{ .failed = err };
                     // Local disk write failure (NoSpaceLeft, DiskQuota, ...): the
                     // real file writer stashes the specific error in file_writer.err;
                     // a mock may also return it directly. Retrying would re-download
@@ -1362,7 +1446,7 @@ pub fn openQADownloadToFile(
                         break :blk .{ .failed = err };
                     }
                     // Connection error or mid-stream reset, retry if budget remains.
-                    break :blk if (attempt < opts.retries) .retry else .{ .failed = err };
+                    break :blk if (attempt < opts.retries) .{ .retry = null } else .{ .failed = err };
                 };
 
                 if (res.status == .ok) {
@@ -1375,8 +1459,9 @@ pub fn openQADownloadToFile(
                 }
 
                 // Non-2xx: the body just written is an error page, not the asset.
-                const code = @intFromEnum(res.status);
-                if (code >= 500 and attempt < opts.retries) break :no_progress .retry;
+                if (isRetryableStatus(res.status) and attempt < opts.retries) {
+                    break :no_progress .{ .retry = res.retry_after_s };
+                }
                 break :no_progress .{ .terminal = res };
             };
             break :blk outcome_inner;
@@ -1393,9 +1478,9 @@ pub fn openQADownloadToFile(
                 std.fs.cwd().deleteFile(dest_path) catch {};
                 return err;
             },
-            .retry => {
+            .retry => |ra| {
                 std.fs.cwd().deleteFile(dest_path) catch {};
-                try sleepForRetry(attempt, opts.retry_sleep_s, opts.retry_factor);
+                try sleepForRetry(attempt, opts.retry_sleep_s, opts.retry_factor, ra);
             },
         }
     }
@@ -1955,6 +2040,7 @@ const SkipProbeReader = struct {
 const SkipProbeHead = struct {
     status: std.http.Status,
     content_length: ?u64 = null,
+    content_type: ?[]const u8 = null,
     const HeaderIterator = struct {
         /// The probe ignores response headers, so yield none.
         fn next(_: *HeaderIterator) ?std.http.Header {
@@ -2290,6 +2376,7 @@ test "openQADownloadToFile: NoSpaceLeft is terminal (no retry)" {
         const MockHead = struct {
             status: std.http.Status = .ok,
             content_length: ?u64 = 100,
+            content_type: ?[]const u8 = "application/octet-stream",
 
             const HeaderIterator = struct {
                 done: bool = false,
@@ -2504,6 +2591,7 @@ test "executeStream: fails with HttpTransferTruncated when bytes written < expec
         const MockHead = struct {
             status: std.http.Status = .ok,
             content_length: ?u64 = null,
+            content_type: ?[]const u8 = null,
 
             const HeaderIterator = struct {
                 pub fn next(_: *HeaderIterator) ?std.http.Header {
@@ -2569,6 +2657,7 @@ test "executeStream: lengthless 404 response with expected_size set returns not_
         const MockHead = struct {
             status: std.http.Status = .not_found,
             content_length: ?u64 = null,
+            content_type: ?[]const u8 = null,
 
             const HeaderIterator = struct {
                 pub fn next(_: *HeaderIterator) ?std.http.Header {
@@ -2920,4 +3009,154 @@ test "ProgressStreamTap: large write across buffer boundary" {
     // The payload (1000 x 0x42) must appear as a contiguous run; progress
     // lines are interleaved but never contain 0x42.
     try testing.expect(std.mem.indexOf(u8, out, &big) != null);
+}
+
+test "parseRetryAfter: integer seconds and invalid formats" {
+    const testing = std.testing;
+    try testing.expectEqual(@as(?u64, 2), parseRetryAfter("2"));
+    try testing.expectEqual(@as(?u64, 30), parseRetryAfter(" 30 "));
+    try testing.expectEqual(@as(?u64, 0), parseRetryAfter("0"));
+    try testing.expectEqual(@as(?u64, 999999), parseRetryAfter("999999"));
+    try testing.expectEqual(@as(?u64, null), parseRetryAfter("soon"));
+    try testing.expectEqual(@as(?u64, null), parseRetryAfter("Wed, 21 Oct 2015 07:28:00 GMT"));
+    try testing.expectEqual(@as(?u64, null), parseRetryAfter(""));
+    try testing.expectEqual(@as(?u64, null), parseRetryAfter("-5"));
+    try testing.expectEqual(@as(?u64, null), parseRetryAfter("1.5"));
+}
+
+test "retryDelayNs: override and exponential backoff" {
+    const testing = std.testing;
+    // Override capped at RETRY_AFTER_CAP_S (60 s)
+    try testing.expectEqual(@as(u64, 2 * std.time.ns_per_s), retryDelayNs(0, 3.0, 1.0, 2));
+    try testing.expectEqual(@as(u64, 0), retryDelayNs(0, 3.0, 1.0, 0));
+    try testing.expectEqual(@as(u64, 60 * std.time.ns_per_s), retryDelayNs(0, 3.0, 1.0, 120));
+
+    // Computed backoff (uncapped for server delay, saturates on overflow)
+    try testing.expectEqual(@as(u64, 3 * std.time.ns_per_s), retryDelayNs(0, 3.0, 1.0, null));
+    try testing.expectEqual(@as(u64, 3 * std.time.ns_per_s), retryDelayNs(0, 3.0, 2.0, null));
+    try testing.expectEqual(@as(u64, 6 * std.time.ns_per_s), retryDelayNs(1, 3.0, 2.0, null));
+    try testing.expectEqual(@as(u64, 12 * std.time.ns_per_s), retryDelayNs(2, 3.0, 2.0, null));
+    try testing.expectEqual(@as(u64, 100 * std.time.ns_per_s), retryDelayNs(0, 100.0, 1.0, null));
+    try testing.expectEqual(std.math.maxInt(u64), retryDelayNs(1000, 100.0, 10.0, null));
+}
+
+test "hasHtmlExtension: case-insensitive suffix matching" {
+    const testing = std.testing;
+    try testing.expect(hasHtmlExtension("a.html"));
+    try testing.expect(hasHtmlExtension("A.HTM"));
+    try testing.expect(hasHtmlExtension("x.Html"));
+    try testing.expect(!hasHtmlExtension("a.qcow2"));
+    try testing.expect(!hasHtmlExtension("html"));
+    try testing.expect(!hasHtmlExtension("a.html.qcow2"));
+    try testing.expect(!hasHtmlExtension("a.xhtml"));
+}
+
+test "executeStream: reject_html returns error.UnexpectedHtmlResponse on text/html" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const HtmlMockClient = struct {
+        const Self = @This();
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_length: ?u64 = 100,
+            content_type: ?[]const u8 = "text/html; charset=utf-8",
+
+            const HeaderIterator = struct {
+                pub fn next(_: *HeaderIterator) ?std.http.Header {
+                    return null;
+                }
+            };
+
+            pub fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            pub fn streamRemaining(_: *MockReader, w: anytype) anyerror!usize {
+                try w.writeAll("<html>Challenge</html>");
+                return 22;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        response: MockResponse = .{},
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            return &self.response;
+        }
+    };
+
+    var mock: HtmlMockClient = .{};
+    const req = Request{
+        .allocator = allocator,
+        .method = .GET,
+        .url = "http://localhost/tests/1/asset/hdd/disk.qcow2",
+        .headers = &.{},
+        .body = null,
+        .credentials = null,
+        .retries = 0,
+        .quiet = true,
+        .reject_html = true,
+    };
+
+    var discarding: std.Io.Writer.Discarding = .init(&.{});
+    const result = executeStream(req, &mock, &discarding.writer, null);
+    try testing.expectError(error.UnexpectedHtmlResponse, result);
+}
+
+test "buildHeaders: R1 regression — always exactly one Accept header" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const uri = try std.Uri.parse("http://localhost/api/v1/jobs");
+    var hash_buf: [40]u8 = undefined;
+    var timestamp_buf: [32]u8 = undefined;
+
+    // Default: Accept: application/json added automatically
+    {
+        var headers = try buildHeaders(allocator, &.{}, null, uri, &hash_buf, &timestamp_buf, false);
+        defer headers.deinit(allocator);
+
+        var accept_count: usize = 0;
+        var accept_val: []const u8 = "";
+        for (headers.items) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "Accept")) {
+                accept_count += 1;
+                accept_val = h.value;
+            }
+        }
+        try testing.expectEqual(@as(usize, 1), accept_count);
+        try testing.expectEqualStrings("application/json", accept_val);
+    }
+
+    // Custom Accept header provided by caller: caller value wins, still exactly 1 Accept
+    {
+        const custom_headers = [_]std.http.Header{.{ .name = "Accept", .value = "text/plain" }};
+        var headers = try buildHeaders(allocator, &custom_headers, null, uri, &hash_buf, &timestamp_buf, false);
+        defer headers.deinit(allocator);
+
+        var accept_count: usize = 0;
+        var accept_val: []const u8 = "";
+        for (headers.items) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "Accept")) {
+                accept_count += 1;
+                accept_val = h.value;
+            }
+        }
+        try testing.expectEqual(@as(usize, 1), accept_count);
+        try testing.expectEqualStrings("text/plain", accept_val);
+    }
 }

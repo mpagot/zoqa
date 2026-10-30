@@ -1294,9 +1294,13 @@ fn downloadAssets(
                 .out = &stderr_w.interface,
             } else null,
         }, client) catch |err| {
-            // Connection error or mid-stream reset that survived all retries;
+            // Connection error, mid-stream reset, or HTML challenge on asset;
             // the helper has already removed any partial file.
-            printStderr("Error: asset download failed for '{s}': {s}\n", .{ asset.filename, @errorName(err) });
+            if (err == error.UnexpectedHtmlResponse) {
+                printStderr("Error: asset download failed for '{s}': server returned an HTML page instead of the asset (bot challenge?)\n", .{asset.filename});
+            } else {
+                printStderr("Error: asset download failed for '{s}': {s}\n", .{ asset.filename, @errorName(err) });
+            }
             std.process.exit(1);
         };
 
