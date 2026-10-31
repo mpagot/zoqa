@@ -109,7 +109,7 @@ done
 # full container spin-up only to discover zero tests ran.
 # -----------------------------------------------------------------------------
 if [[ -n "$E2E_SUITES" && "$E2E_SUITES" != "all" ]]; then
-	_valid_suites="core auth data output robustness retry_knobs archive monitor schedule help clone_smoke clone_single clone_topology clone_maxdepth clone_uefi stress perf"
+	_valid_suites="core auth data output robustness retry_knobs archive monitor schedule help clone_smoke clone_single clone_topology clone_maxdepth clone_uefi gatekeeper stress perf"
 	IFS=',' read -ra _suite_tokens <<<"$E2E_SUITES"
 	_invalid_suites=()
 	for _token in "${_suite_tokens[@]}"; do

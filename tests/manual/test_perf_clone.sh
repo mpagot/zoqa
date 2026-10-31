@@ -26,11 +26,21 @@
 #   SLEEP          (optional)  Seconds to sleep between individual runs (default: 0)
 #   ASSET_DIR      (optional)  Base directory for downloads (default: /tmp/zoqa-clone-perf-$$)
 #
+# CLI flags:
+#   --strace      Trace zoqa-clone-job syscalls (network + read) with strace.
+#                 Output: ASSET_DIR/traces/strace_<label>_<run>.strace
+#                 No sudo required.
+#   --tcpdump     Capture network traffic with tcpdump during zoqa timing runs.
+#                 Output: ASSET_DIR/traces/tcpdump_<label>_<run>.pcap
+#                 Requires sudo (password prompt before timing starts).
+#
 # Requirements:
 #   - bash 4+
 #   - openqa-clone-job in PATH
 #   - curl in PATH
 #   - /usr/bin/time (GNU time) for RSS/CPU metrics (optional, skipped if absent)
+#   - strace (only for --strace)
+#   - tcpdump + sudo (only for --tcpdump)
 #   - Network access to the target openQA server
 #   - ~4 GB free disk space in ASSET_DIR
 #
@@ -41,16 +51,102 @@ set -euo pipefail
 # shellcheck source=lib.sh source-path=SCRIPTDIR
 source "$(dirname "$0")/lib.sh"
 
+# =============================================================================
+# CLI flag parsing
+# =============================================================================
+
+DO_STRACE=false
+DO_TCPDUMP=false
+
+usage() {
+	cat <<'EOF'
+Usage: test_perf_clone.sh [OPTIONS]
+
+Performance benchmark for clone-job asset downloads. Four-way comparison of
+zoqa-clone-job (with and without --show-progress), openqa-clone-job, and curl.
+
+Options:
+  --strace      Trace zoqa-clone-job syscalls (network + read) with strace.
+                Output: ASSET_DIR/traces/strace_<label>_<run>.strace
+                No sudo required.
+  --tcpdump     Capture network traffic with tcpdump during zoqa timing runs.
+                Output: ASSET_DIR/traces/tcpdump_<label>_<run>.pcap
+                Requires sudo (password prompt before timing starts).
+  --help, -h    Show this help and exit
+
+Environment variables:
+  OPENQA_HOST    (required)  Base URL of the openQA instance
+  OPENQA_JOB_ID  (required)  Job ID to benchmark (should have large assets)
+  ZOQA_CLONE     (optional)  Path to zoqa-clone-job binary
+                             (default: ./zig-out/bin/zoqa-clone-job)
+  RUNS           (optional)  Number of timing repetitions per tool (default: 3)
+  SLEEP          (optional)  Seconds to sleep between individual runs (default: 0)
+  ASSET_DIR      (optional)  Base directory for downloads
+                             (default: /tmp/zoqa-clone-perf-$$)
+
+Examples:
+  OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=6300310 \
+      bash tests/manual/test_perf_clone.sh
+
+  OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=6300310 \
+      RUNS=5 bash tests/manual/test_perf_clone.sh --strace
+
+  OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=6300310 \
+      bash tests/manual/test_perf_clone.sh --strace --tcpdump
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--strace)
+		DO_STRACE=true
+		shift
+		;;
+	--tcpdump)
+		DO_TCPDUMP=true
+		shift
+		;;
+	--help | -h)
+		usage
+		exit 0
+		;;
+	*)
+		echo "FATAL: unknown flag: $1"
+		usage
+		exit 1
+		;;
+	esac
+done
+
 SLEEP="${SLEEP:-0}"
 ZOQA_CLONE="${ZOQA_CLONE:-./zig-out/bin/zoqa-clone-job}"
 ASSET_DIR="${ASSET_DIR:-/tmp/zoqa-clone-perf-$$}"
+TRACE_DIR="$ASSET_DIR/traces"
 
 # =============================================================================
 # Cleanup
 # =============================================================================
 
+_TCPDUMP_PID=""
+
 cleanup() {
-	rm -rf "$ASSET_DIR"
+	if [[ -n "$_TCPDUMP_PID" ]]; then
+		kill "$_TCPDUMP_PID" 2>/dev/null || true
+		wait "$_TCPDUMP_PID" 2>/dev/null || true
+	fi
+	# Remove downloaded assets but preserve trace files (strace/pcap) so the
+	# user can inspect them after the run.  Traces stay in ASSET_DIR/traces/
+	# (not moved to /tmp, which may be a small tmpfs).
+	if [[ -d "$ASSET_DIR" ]]; then
+		if [[ -d "$TRACE_DIR" && -n "$(find "$TRACE_DIR" -type f 2>/dev/null)" ]]; then
+			# Remove everything except the traces directory
+			find "$ASSET_DIR" -mindepth 1 -maxdepth 1 ! -name 'traces' -exec rm -rf {} + 2>/dev/null
+			# Remove empty run dirs
+			find "$ASSET_DIR" -mindepth 1 -maxdepth 1 -type d -empty -delete 2>/dev/null
+		else
+			rm -rf "$ASSET_DIR"
+		fi
+	fi
 	rm -f /tmp/_manual_wall.tmp /tmp/_perf_timev_*.txt
 }
 trap cleanup EXIT
@@ -79,6 +175,12 @@ echo "  JOB_ID:    $JOB_ID"
 echo "  RUNS:      $RUNS"
 echo "  SLEEP:     ${SLEEP}s"
 echo "  ASSET_DIR: $ASSET_DIR"
+if [[ "$DO_STRACE" == "true" ]]; then
+	echo "  STRACE:    enabled (traces → $TRACE_DIR/)"
+fi
+if [[ "$DO_TCPDUMP" == "true" ]]; then
+	echo "  TCPDUMP:   enabled (pcaps → $TRACE_DIR/)"
+fi
 echo ""
 
 # Connectivity check
@@ -91,19 +193,73 @@ else
 	exit 1
 fi
 
-# Disk space check
+# Disk space check — estimate the space needed for all downloads in this run.
+# Each zoqa/perl run downloads the full asset set (~2.3 GB for job 6300310).
+# curl downloads only the largest asset (~1.4 GB).  We need space for the
+# largest single run (assets are deleted between runs), plus trace files.
 mkdir -p "$ASSET_DIR"
 _avail_kb=$(df -k "$ASSET_DIR" | awk 'NR==2 {print $4}')
-if [[ "$_avail_kb" -lt 4000000 ]]; then
-	echo "  WARNING: Less than 4 GB available in $ASSET_DIR (${_avail_kb} kB)."
-	echo "           Large-asset downloads may fail."
+# Estimate: 4 GB per full download (zoqa/perl) + 2 GB for curl + 2 GB for traces
+_estimated_need_kb=8000000
+if [[ "$DO_TCPDUMP" == "true" ]]; then
+	_estimated_need_kb=$(( _estimated_need_kb + 4000000 )) # +4 GB for pcaps
 fi
+if [[ "$_avail_kb" -lt "$_estimated_need_kb" ]]; then
+	echo "  WARNING: Only $((_avail_kb / 1024)) MB available in $ASSET_DIR."
+	echo "           Estimated need: $((_estimated_need_kb / 1024)) MB."
+	echo "           Consider a larger ASSET_DIR or fewer RUNS."
+fi
+
+# Trace tooling checks
+if [[ "$DO_STRACE" == "true" ]]; then
+	if ! command -v strace &>/dev/null; then
+		echo "  WARNING: strace not found; --strace will be ignored"
+	fi
+fi
+if [[ "$DO_TCPDUMP" == "true" ]]; then
+	if ! command -v tcpdump &>/dev/null; then
+		echo "  WARNING: tcpdump not found; --tcpdump will be ignored"
+	elif ! command -v sudo &>/dev/null; then
+		echo "  WARNING: sudo not found; --tcpdump will be ignored"
+	else
+		# Prompt for the sudo password NOW, before any timing starts, so the
+		# interactive prompt does not skew the wall-clock measurements.
+		echo -n "  sudo check (for tcpdump)... "
+		if sudo -n true 2>/dev/null; then
+			echo "OK (cached)"
+		else
+			sudo -v
+			echo "OK"
+		fi
+	fi
+fi
+mkdir -p "$TRACE_DIR"
 
 echo ""
 
 # =============================================================================
 # Helpers
 # =============================================================================
+
+# _snapshot_system_metrics LABEL
+#
+# Captures a one-line system metrics snapshot (load, memory, disk) before a
+# timing run.  Appended to $ASSET_DIR/system_metrics.log so the user can
+# correlate timing variance with local system state.
+#
+# Format: timestamp  label  load1  mem_used_gb  mem_avail_gb  disk_avail_gb
+_snapshot_system_metrics() {
+	local label=$1
+	local ts load1 mem_used mem_avail disk_avail
+	ts=$(date '+%Y-%m-%d %H:%M:%S')
+	load1=$(awk '{print $1}' /proc/loadavg)
+	mem_used=$(free -g | awk '/^Mem:/ {print $3}')
+	mem_avail=$(free -g | awk '/^Mem:/ {print $7}')
+	disk_avail=$(df -BG "$ASSET_DIR" | awk 'NR==2 {print $4}' | tr -d 'G')
+	printf "%s  %-12s  load=%-4s  mem_used=%sG  mem_avail=%sG  disk_avail=%sG\n" \
+		"$ts" "$label" "$load1" "$mem_used" "$mem_avail" "$disk_avail" \
+		>> "$ASSET_DIR/system_metrics.log"
+}
 
 # _sanity_check LABEL CMD
 #
@@ -199,6 +355,47 @@ _discover_largest_asset() {
 	return 1
 }
 
+# _start_tcpdump LABEL
+#
+# Starts tcpdump in the background, capturing traffic to the openQA host.
+# The sudo password prompt happens HERE, before any timing starts, so it does
+# not affect the measurements.  The tcpdump PID is stored in _TCPDUMP_PID.
+#
+# Usage:
+#   _start_tcpdump "zoqa_np_1"
+_start_tcpdump() {
+	local label=$1
+
+	if [[ "$DO_TCPDUMP" != "true" ]]; then
+		return
+	fi
+
+	if ! command -v tcpdump &>/dev/null; then
+		echo "WARNING: tcpdump not found; --tcpdump ignored" >&2
+		return
+	fi
+
+	local pcap_file="$TRACE_DIR/tcpdump_${label}.pcap"
+	local host_domain
+	host_domain=$(echo "$HOST" | sed 's|.*://||; s|/.*||')
+
+	echo "    Starting tcpdump (sudo) → $pcap_file"
+	sudo tcpdump -i any -w "$pcap_file" -C 200 "host $host_domain" 2>/dev/null &
+	_TCPDUMP_PID=$!
+	sleep 0.5 # wait for tcpdump to start capturing
+}
+
+# _stop_tcpdump
+#
+# Stops the background tcpdump started by _start_tcpdump.
+_stop_tcpdump() {
+	if [[ -n "$_TCPDUMP_PID" ]]; then
+		kill "$_TCPDUMP_PID" 2>/dev/null || true
+		wait "$_TCPDUMP_PID" 2>/dev/null || true
+		_TCPDUMP_PID=""
+	fi
+}
+
 # =============================================================================
 # Sanity check — one run per tool, verify exit code + file count
 # =============================================================================
@@ -240,21 +437,66 @@ declare -a ZOQA_TIMES=()
 declare -a ZOQA_NOPROG_TIMES=()
 declare -a PERL_TIMES=()
 declare -a CURL_TIMES=()
+declare -A FAILED_RUNS=()
 TIMING_FAILURES=0
 
+# _run_tool_timing LABEL CMD_TEMPLATE TIMES_ARRAY_NAME
+#
+# Only runs that exit 0 are appended to TIMES_ARRAY_NAME: a failed run may
+# abort early (or late) and its wall-clock time says nothing about download
+# speed.  The failure count is kept in FAILED_RUNS[LABEL].
+#
+# When --strace or --tcpdump is active, the zoqa runs are wrapped with the
+# corresponding tracer.  The tracer adds a small overhead (strace) or runs
+# concurrently (tcpdump); the timing numbers are still valid for comparison
+# as long as the same tracer is used for all zoqa runs.
 _run_tool_timing() {
 	local label=$1 cmd_template=$2
 	local -n _times_ref=$3
 	local failures=0
 
+	# Determine if this tool's runs should be traced.  Only zoqa runs are
+	# traced: the bug is in zoqa's HTTP client, and tracing perl/curl would
+	# add noise without diagnostic value.
+	local is_zoqa=false
+	case "$label" in
+	zoqa_np | zoqa) is_zoqa=true ;;
+	esac
+
 	for i in $(seq 1 "$RUNS"); do
 		local dir="$ASSET_DIR/run_${label}_${i}"
 		local cmd="${cmd_template//__DIR__/$dir}"
 		local result t rc
-		result=$(_timed_run "$cmd")
+		local run_label="${label}_${i}"
+
+		# Snapshot system metrics before the run
+		_snapshot_system_metrics "$run_label"
+
+		# Start tcpdump before the run (sudo already cached in preflight)
+		if [[ "$is_zoqa" == "true" && "$DO_TCPDUMP" == "true" ]]; then
+			_start_tcpdump "$run_label"
+		fi
+
+		if [[ "$is_zoqa" == "true" && "$DO_STRACE" == "true" ]]; then
+			local trace_file="$TRACE_DIR/strace_${run_label}.strace"
+			result=$(bash -c '
+				TIMEFORMAT=%R
+				{ time strace -f -e trace=network,read,readv,pwritev,write,writev,recv,recvfrom,sendto,sendmsg,connect,close -o "$1" bash -c "$2" >/dev/null 2>&1; } 2>/tmp/_manual_wall.tmp
+				_rc=$?
+				printf "%s %d" "$(cat /tmp/_manual_wall.tmp)" "$_rc"
+			' _ "$trace_file" "$cmd")
+		else
+			result=$(_timed_run "$cmd")
+		fi
+
+		# Stop tcpdump after the run
+		if [[ "$is_zoqa" == "true" && "$DO_TCPDUMP" == "true" ]]; then
+			_stop_tcpdump
+		fi
+
 		t="${result% *}"
 		rc="${result##* }"
-		_times_ref+=("$t")
+		[[ "$rc" -eq 0 ]] && _times_ref+=("$t")
 		if [[ "$rc" -ne 0 ]]; then
 			failures=$((failures + 1))
 			echo "    $label [$i/$RUNS]: ${t}s  (exit=$rc — FAILED)"
@@ -267,8 +509,9 @@ _run_tool_timing() {
 		fi
 	done
 
+	FAILED_RUNS[$label]=$failures
 	if [[ "$failures" -gt 0 ]]; then
-		echo "    WARNING: $label had $failures/$RUNS failed runs"
+		echo "    WARNING: $label had $failures/$RUNS failed runs (excluded from statistics)"
 		TIMING_FAILURES=$((TIMING_FAILURES + failures))
 	fi
 }
@@ -292,6 +535,22 @@ fi
 
 echo ""
 
+# Every tool that was timed needs at least one successful run, otherwise
+# min/avg/max and the comparisons below are meaningless.  Stop here rather
+# than spend another full download per tool on the resource phase.
+_no_stats=()
+[[ ${#ZOQA_NOPROG_TIMES[@]} -eq 0 ]] && _no_stats+=("zoqa-clone-job (no progress)")
+[[ ${#ZOQA_TIMES[@]} -eq 0 ]] && _no_stats+=("zoqa-clone-job (--show-progress)")
+[[ ${#PERL_TIMES[@]} -eq 0 ]] && _no_stats+=("openqa-clone-job")
+if [[ -n "$CURL_ASSET_TYPE" && ${#CURL_TIMES[@]} -eq 0 ]]; then
+	_no_stats+=("curl (largest asset)")
+fi
+if [[ ${#_no_stats[@]} -gt 0 ]]; then
+	echo "FATAL: no successful timing runs for: ${_no_stats[*]}"
+	echo "       Statistics are not possible; rerun with a higher RUNS or check the tool output."
+	exit 1
+fi
+
 # =============================================================================
 # Resource measurement phase (single /usr/bin/time -v run per tool)
 # =============================================================================
@@ -312,6 +571,16 @@ _run_tool_rss() {
 
 	echo "    $label: measuring..."
 	_peak_rss_kb "$tag" "$cmd" >/dev/null
+
+	# A failed run's resource figures are not comparable; leave the array
+	# empty so the summary prints "(run failed)" for this tool.
+	local exit_status
+	exit_status=$(_timev_field "$tag" 'Exit status')
+	if [[ "$exit_status" != "0" ]]; then
+		echo "    WARNING: $label exited with status ${exit_status:-?}; metrics discarded"
+		_rss_ref=()
+		return
+	fi
 
 	local rss usr sys maj min vcs ics
 	rss=$(_timev_field "$tag" 'Maximum resident set size')
@@ -371,9 +640,12 @@ echo ""
 echo "--- Wall-clock timing (seconds, $RUNS runs) ---"
 echo ""
 
+# _print_timing_row LABEL RUN_LABEL TIME...
+#
+# RUN_LABEL is the _run_tool_timing label, used to look up FAILED_RUNS.
 _print_timing_row() {
-	local label=$1
-	shift
+	local label=$1 run_label=$2
+	shift 2
 	local times=("$@")
 	local times_str=""
 	for t in "${times[@]}"; do
@@ -381,18 +653,20 @@ _print_timing_row() {
 	done
 	local agg
 	agg=$(_aggregate "${times[*]}")
+	local failed=${FAILED_RUNS[$run_label]:-0}
+	[[ "$failed" -gt 0 ]] && agg+="  ($failed failed, excluded)"
 	printf "  %-28s  %-42s  %s\n" "$label" "$times_str" "$agg"
 }
 
-printf "  %-28s  %-42s  %s\n" "Tool" "Runs" "min / avg / max"
+printf "  %-28s  %-42s  %s\n" "Tool" "Successful runs" "min / avg / max"
 printf "  %-28s  %-42s  %s\n" "----------------------------" \
 	"------------------------------------------" \
 	"------------------------------"
-_print_timing_row "zoqa (no progress)" "${ZOQA_NOPROG_TIMES[@]}"
-_print_timing_row "zoqa (--show-progress)" "${ZOQA_TIMES[@]}"
-_print_timing_row "openqa-clone-job" "${PERL_TIMES[@]}"
+_print_timing_row "zoqa (no progress)" zoqa_np "${ZOQA_NOPROG_TIMES[@]}"
+_print_timing_row "zoqa (--show-progress)" zoqa "${ZOQA_TIMES[@]}"
+_print_timing_row "openqa-clone-job" perl "${PERL_TIMES[@]}"
 if [[ ${#CURL_TIMES[@]} -gt 0 ]]; then
-	_print_timing_row "curl (largest)" "${CURL_TIMES[@]}"
+	_print_timing_row "curl (largest)" curl "${CURL_TIMES[@]}"
 fi
 echo ""
 
@@ -440,7 +714,7 @@ if [[ "$TIMING_FAILURES" -gt 0 ]]; then
 fi
 
 # --- Resource table ---
-if [[ "$HAS_GNU_TIME" == "true" && ${#ZOQA_RSS[@]} -gt 0 ]]; then
+if [[ "$HAS_GNU_TIME" == "true" ]]; then
 	echo "--- Resource usage (/usr/bin/time -v, single run) ---"
 	echo ""
 	printf "  %-28s  %12s  %10s  %10s  %12s  %12s  %8s  %8s\n" \
@@ -454,7 +728,7 @@ if [[ "$HAS_GNU_TIME" == "true" && ${#ZOQA_RSS[@]} -gt 0 ]]; then
 		shift
 		local m=("$@")
 		if [[ ${#m[@]} -lt 7 ]]; then
-			printf "  %-28s  %s\n" "$label" "(no data)"
+			printf "  %-28s  %s\n" "$label" "(run failed or no data)"
 			return
 		fi
 		printf "  %-28s  %12s  %10s  %10s  %12s  %12s  %8s  %8s\n" \
@@ -466,6 +740,36 @@ if [[ "$HAS_GNU_TIME" == "true" && ${#ZOQA_RSS[@]} -gt 0 ]]; then
 	_print_rss_row "openqa-clone-job" "${PERL_RSS[@]}"
 	if [[ ${#CURL_RSS[@]} -gt 0 ]]; then
 		_print_rss_row "curl (largest)" "${CURL_RSS[@]}"
+	fi
+	echo ""
+fi
+
+# --- System metrics ---
+if [[ -f "$ASSET_DIR/system_metrics.log" ]]; then
+	echo "--- System metrics (per run) ---"
+	echo ""
+	while IFS= read -r _line; do
+		echo "  $_line"
+	done < "$ASSET_DIR/system_metrics.log"
+	echo ""
+fi
+
+# --- Trace summary ---
+if [[ "$DO_STRACE" == "true" || "$DO_TCPDUMP" == "true" ]]; then
+	echo "--- Trace files ---"
+	echo ""
+	if [[ -d "$TRACE_DIR" ]]; then
+		_trace_files=$(find "$TRACE_DIR" -type f \( -name '*.strace' -o -name '*.pcap' \) | sort)
+		if [[ -n "$_trace_files" ]]; then
+			while IFS= read -r _f; do
+				_sz=$(stat -c %s "$_f" 2>/dev/null || echo 0)
+				printf "  %-50s  %10s bytes\n" "${_f#"$ASSET_DIR"/}" "$_sz"
+			done <<< "$_trace_files"
+			echo ""
+			echo "  Trace files are in: $TRACE_DIR/"
+		else
+			echo "  (no trace files produced)"
+		fi
 	fi
 	echo ""
 fi
