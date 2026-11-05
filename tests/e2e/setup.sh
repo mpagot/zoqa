@@ -158,7 +158,23 @@ sed -i "/install.*pkgs/a $SPLIT_INSTALL" "$BOOTSTRAP"
 # we need for E2E testing of zoqa's credential handling.
 # ---------------------------------------------------------------------------
 mkdir -p /etc/openqa/openqa.ini.d
-echo -e "[auth]\nmethod = Fake" > /etc/openqa/openqa.ini.d/99-force-fake-auth.ini
+echo -e "[auth]\nmethod = Fake\nrequire_for_assets = 1" > /etc/openqa/openqa.ini.d/99-force-fake-auth.ini
+
+# ---------------------------------------------------------------------------
+# Disable Apache static asset alias so /assets requests reach Mojolicious.
+#
+# WHY: In standard openQA, Apache serves /assets directly from disk via
+# `Alias /assets /var/lib/openqa/share/factory` and `ProxyPass /assets !`.
+# Apache does not evaluate HMAC or API keys, bypassing Mojolicious and
+# returning 200 OK regardless of authentication headers.
+# Commenting out these directives causes Apache to reverse-proxy /assets to
+# Mojolicious (port 9526), allowing Mojolicious to enforce HMAC when
+# require_for_assets = 1.
+# ---------------------------------------------------------------------------
+if [[ -f /etc/apache2/vhosts.d/openqa-common.inc ]]; then
+	sed -i 's|^Alias /assets|# Alias /assets|; s|^ProxyPass /assets !|# ProxyPass /assets !|' \
+		/etc/apache2/vhosts.d/openqa-common.inc
+fi
 
 # ---------------------------------------------------------------------------
 # Create tmpfiles.d directories (Apache DocumentRoot workaround).
@@ -267,8 +283,14 @@ else
 
 	# Write client.conf so that openqa-cli (Perl reference) can authenticate
 	# inside the container.  This file is also used by openqa-clone-job.
+	# Both [localhost] and [127.0.0.1] are defined so that tests targeting
+	# local fault proxies bound to 127.0.0.1 resolve credentials as well.
 	container_exec bash -c "cat > /etc/openqa/client.conf <<'CCONF'
 [localhost]
+key = ${API_KEY}
+secret = ${API_SECRET}
+
+[127.0.0.1]
 key = ${API_KEY}
 secret = ${API_SECRET}
 CCONF"

@@ -85,3 +85,60 @@ run_test "ZIG : CLI flags override wrong env var credentials" \
 	$ZIG_EXE api --host http://localhost --apikey '$OPENQA_API_KEY' --apisecret '$OPENQA_API_SECRET' \
 	-X POST isos DISTRI=envtest VERSION=1 FLAVOR=test ARCH=x86_64\"" \
 	0
+
+# =============================================================================
+# Section B2: Asset Authentication and Redirection
+# =============================================================================
+
+# Test AUT-8: Asset download with require_for_assets = 1 (unauthenticated returns 403 Forbidden; authenticated with valid HMAC follows 302 and returns 200 OK).
+# AUT-8: Asset download with require_for_assets = 1
+# Under default require_for_assets = 1, unauthenticated requests to /assets or
+# to asset redirect endpoints return 403 Forbidden.
+# Authenticated requests with valid HMAC credentials follow the 302 redirect
+# and succeed with 200 OK.
+ensure_basic_job
+
+run_test "Unauthenticated /assets request returns 403 (require_for_assets = 1)" \
+	"bash -c \"curl -s -o /dev/null -w '%{http_code}' http://localhost/assets/iso/dummy.iso | grep -q '^403$'\"" \
+	0
+
+run_test "Unauthenticated /tests/{id}/asset redirect returns 403 on target hop" \
+	"bash -c \"curl -s -L -o /dev/null -w '%{http_code}' http://localhost/tests/${JOB_ID}/asset/iso/seed-nocloud.iso | grep -q '^403$'\"" \
+	0
+
+container_exec rm -rf /tmp/aut8_perl /tmp/aut8_zig
+run_test "PERL: Authenticated asset download follows 302 and re-signs HMAC" \
+	"bash -c \"$PERL_EXE archive --host http://localhost ${JOB_ID} /tmp/aut8_perl && test -f /tmp/aut8_perl/iso/seed-nocloud.iso\"" \
+	0
+run_test "ZIG : Authenticated asset download follows 302 and re-signs HMAC" \
+	"bash -c \"$ZIG_EXE archive --host http://localhost ${JOB_ID} /tmp/aut8_zig && test -f /tmp/aut8_zig/iso/seed-nocloud.iso\"" \
+	0
+container_exec rm -rf /tmp/aut8_perl /tmp/aut8_zig
+
+# Test AUT-9: Runtime toggle with set_require_for_assets 0 (unauthenticated asset request succeeds with 200 OK).
+# AUT-9: Runtime toggle with set_require_for_assets 0
+# Overwriting configuration with require_for_assets = 0 and reloading Mojolicious
+# allows unauthenticated access to /assets (returns 200 OK).
+set_require_for_assets 0
+
+run_test "Unauthenticated /assets request succeeds (200 OK) when require_for_assets = 0" \
+	"bash -c \"curl -s -o /dev/null -w '%{http_code}' http://localhost/assets/iso/dummy.iso | grep -q '^200$'\"" \
+	0
+
+run_test "Unauthenticated /tests/{id}/asset redirect succeeds (200 OK) when require_for_assets = 0" \
+	"bash -c \"curl -s -L -o /dev/null -w '%{http_code}' http://localhost/tests/${JOB_ID}/asset/iso/seed-nocloud.iso | grep -q '^200$'\"" \
+	0
+
+# Test AUT-10: Restoring set_require_for_assets 1 (unauthenticated asset request is rejected again with 403 Forbidden).
+# AUT-10: Restoring set_require_for_assets 1
+# Overwriting configuration with require_for_assets = 1 and reloading Mojolicious
+# re-enforces HMAC authentication on assets, rejecting unauthenticated requests with 403.
+set_require_for_assets 1
+
+run_test "Unauthenticated /assets request returns 403 again after restoring require_for_assets = 1" \
+	"bash -c \"curl -s -o /dev/null -w '%{http_code}' http://localhost/assets/iso/dummy.iso | grep -q '^403$'\"" \
+	0
+
+run_test "Unauthenticated /tests/{id}/asset redirect returns 403 again after restoring require_for_assets = 1" \
+	"bash -c \"curl -s -L -o /dev/null -w '%{http_code}' http://localhost/tests/${JOB_ID}/asset/iso/seed-nocloud.iso | grep -q '^403$'\"" \
+	0

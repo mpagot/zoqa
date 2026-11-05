@@ -58,6 +58,9 @@ import urllib.response
 # Per-path hit counters: path -> int
 _hit_counts = {}
 
+# Pending partial faults deferred across redirects: target_path -> (preserve_cl, attempt)
+_pending_partial_faults = {}
+
 # Response headers that are always forwarded to the client, in addition to the
 # base set (content-length, content-type, x-api-*).  The gatekeeper tests
 # (GAT-*) need retry-after / refresh / set-cookie / location to reach the
@@ -154,7 +157,19 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
     count_file = "/tmp/faultproxy_counts.txt"
     retry_after = None
     header_log = None
-    pass_redirects = False
+
+    def _rewrite_location(self, loc):
+        """Rewrite Location header to keep the client inside this faultproxy."""
+        if not loc:
+            return loc
+        parsed = urllib.parse.urlsplit(loc)
+        return urllib.parse.urlunsplit((
+            "http",
+            "127.0.0.1:%d" % self.port,
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        ))
 
     def _record(self, path, status):
         # Self-resetting behavior: if the count file is empty or does not exist,
@@ -163,6 +178,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
         try:
             if not os.path.exists(self.count_file) or os.path.getsize(self.count_file) == 0:
                 _hit_counts.clear()
+                _pending_partial_faults.clear()
         except OSError:
             pass
 
@@ -208,6 +224,12 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
     def _handle(self, method):
         path = self.path
         self._log_request_headers(method)
+
+        parsed_path = urllib.parse.urlsplit(path).path
+        if method == "GET" and parsed_path in _pending_partial_faults:
+            preserve_cl, attempt = _pending_partial_faults.pop(parsed_path)
+            self._inject_partial_reset(path, attempt, preserve_cl=preserve_cl)
+            return
 
         if self.fault_mode.lower() == "partial_no_meta" and path.startswith("/api/v1/assets"):
             self._handle_assets_no_meta(method)
@@ -305,7 +327,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
             sys.stderr.write("[proxy] 502 forward-assets-exception: %s\n" % exc)
             sys.stderr.flush()
 
-    def _open_backend(self, url, method, follow_redirects=True):
+    def _open_backend(self, url, method):
         """Open a backend connection, retrying transient failures.
 
         Retries the fetch up to 3 times, 0.5 s apart, on connection errors
@@ -327,10 +349,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
                 if method == "POST":
                     length = int(self.headers.get("Content-Length") or 0)
                     req.data = self.rfile.read(length) if length else b""
-                if follow_redirects:
-                    resp = urllib.request.urlopen(req, timeout=120)
-                else:
-                    resp = _NoRedirectOpener().open(req, timeout=120)
+                resp = _NoRedirectOpener().open(req, timeout=120)
                 break
             except urllib.error.HTTPError:
                 raise
@@ -381,7 +400,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
         elif mode == "404":
             self.send_response(404)
             if self.retry_after is not None:
-                self.send_header("Retry-After", self.retry_after)
+                self.send_header("Retry-After", _render_retry_after(self.retry_after))
             self.end_headers()
             self.wfile.write(b"injected 404\n")
             sys.stderr.write("[proxy] 404 injected attempt=%d %s\n" % (attempt, path))
@@ -390,7 +409,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
             # 504, ...).  Used by GAT-4/5/6/7/8/9/10/11 and GAT-23..27.
             self.send_response(int(mode))
             if self.retry_after is not None:
-                self.send_header("Retry-After", self.retry_after)
+                self.send_header("Retry-After", _render_retry_after(self.retry_after))
             self.end_headers()
             self.wfile.write(("injected %s\n" % mode).encode("utf-8"))
             sys.stderr.write("[proxy] %s injected attempt=%d %s\n" % (mode, attempt, path))
@@ -398,7 +417,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
             # Default: 503 Service Unavailable
             self.send_response(503)
             if self.retry_after is not None:
-                self.send_header("Retry-After", self.retry_after)
+                self.send_header("Retry-After", _render_retry_after(self.retry_after))
             self.end_headers()
             self.wfile.write(b"injected 503\n")
             sys.stderr.write("[proxy] 503 injected attempt=%d %s\n" % (attempt, path))
@@ -438,6 +457,31 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
         sent = 0
         try:
             with self._open_backend(url, "GET") as resp:
+                if resp.status in (301, 302, 303, 307, 308):
+                    loc = resp.headers.get("Location")
+                    if loc:
+                        target_path = urllib.parse.urlsplit(loc).path
+                        _pending_partial_faults[target_path] = (preserve_cl, attempt)
+                        self.send_response(resp.status)
+                        for k, v in resp.headers.items():
+                            if k.lower() in ("content-length", "content-type",
+                                             "x-api-microtime", "x-api-key", "x-api-hash") \
+                                    or k.lower() in _EXTRA_FORWARD_HEADERS:
+                                if k.lower() == "location":
+                                    v = self._rewrite_location(v)
+                                self.send_header(k, v)
+                        self.end_headers()
+                        body = resp.read()
+                        if body:
+                            self.wfile.write(body)
+                        try:
+                            self.wfile.flush()
+                        except OSError:
+                            pass
+                        sys.stderr.write("[proxy] deferred partial fault for %s via %d redirect attempt=%d\n" % (target_path, resp.status, attempt))
+                        sys.stderr.flush()
+                        return
+
                 self.send_response(resp.status)
                 # Forward headers; optionally include Content-Length.
                 allowed_headers = ["content-type", "x-api-microtime", "x-api-key", "x-api-hash"]
@@ -480,13 +524,15 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
     def _forward(self, method, path):
         url = self.backend + path
         try:
-            with self._open_backend(url, method, follow_redirects=not self.pass_redirects) as resp:
+            with self._open_backend(url, method) as resp:
                 body = b"" if method == "HEAD" else resp.read()
                 self.send_response(resp.status)
                 for k, v in resp.headers.items():
                     if k.lower() in ("content-length", "content-type",
                                      "x-api-microtime", "x-api-key", "x-api-hash") \
                             or k.lower() in _EXTRA_FORWARD_HEADERS:
+                        if k.lower() == "location":
+                            v = self._rewrite_location(v)
                         self.send_header(k, v)
                 self.end_headers()
                 if body:
@@ -502,6 +548,8 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(exc.code)
                 for k, v in exc.headers.items():
                     if k.lower() in _EXTRA_FORWARD_HEADERS:
+                        if k.lower() == "location":
+                            v = self._rewrite_location(v)
                         self.send_header(k, v)
                 self.end_headers()
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -573,7 +621,7 @@ def _render_retry_after(value):
     """Resolve --retry-after into the header value to send.
 
     - integer string            -> as-is (delay-seconds form)
-    - "date:+N"                 -> HTTP-date N seconds in the future
+    - "date:+N"                 -> HTTP-date N seconds after this response
     - anything else             -> verbatim (e.g. "soon" for the fallback test)
     """
     v = value.strip()
@@ -670,9 +718,6 @@ if __name__ == "__main__":
     parser.add_argument("--header-log", default=None,
                         help="Path to append one line per request: 'METHOD PATH accept=<v|-> ua=<v|->'. "
                              "Never logs API keys. Used by GAT-1/GAT-2/GAT-20.")
-    parser.add_argument("--pass-redirects", action="store_true",
-                        help="Do not follow backend redirects: a backend 302 + Location reaches the client as-is. "
-                             "Used by GAT-20 to observe Accept on every redirect hop.")
     parser.add_argument("--count-file", "-c", default="/tmp/faultproxy_counts.txt", help="Path to write per-path hit counts to")
     args = parser.parse_args()
 
@@ -683,9 +728,9 @@ if __name__ == "__main__":
     FaultProxyHandler.fail_times = args.fail_times
     FaultProxyHandler.partial_bytes = args.partial_bytes
     FaultProxyHandler.count_file = args.count_file
-    FaultProxyHandler.retry_after = _render_retry_after(args.retry_after) if args.retry_after else None
+    # Raw spec; rendered per response so "date:+N" is N s after each reply.
+    FaultProxyHandler.retry_after = args.retry_after or None
     FaultProxyHandler.header_log = args.header_log
-    FaultProxyHandler.pass_redirects = args.pass_redirects
 
     # Truncate the count file at startup so each test run starts clean.
     try:
@@ -704,7 +749,7 @@ if __name__ == "__main__":
     sys.stderr.write(
         "[proxy] listening on 127.0.0.1:%d  backend=%s  fault_path=%s  "
         "mode=%s  fail_times=%d  partial_bytes=%d  retry_after=%s  "
-        "header_log=%s  pass_redirects=%s\n" % (
+        "header_log=%s\n" % (
             FaultProxyHandler.port,
             FaultProxyHandler.backend,
             FaultProxyHandler.fault_path,
@@ -713,7 +758,6 @@ if __name__ == "__main__":
             FaultProxyHandler.partial_bytes,
             FaultProxyHandler.retry_after,
             FaultProxyHandler.header_log,
-            FaultProxyHandler.pass_redirects,
         )
     )
     sys.stderr.flush()

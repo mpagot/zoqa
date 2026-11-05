@@ -436,3 +436,22 @@ Schedule, and Stress.
 
 These files are committed and must not be modified without updating the corresponding
 test expectations in `run.sh`.
+
+## ISOs
+
+Here is how each asset in e2e/ is created:
+
+  1. dummy.iso
+      • Created by: seed_fixtures.sh:106-114 (lines 106–114).
+      • How: Runs mkdir -p /var/lib/openqa/share/factory/iso and touch /var/lib/openqa/share/factory/iso/dummy.iso.
+      • Size: 0 bytes.
+  2. cirros-0.6.3-x86_64-disk.qcow2 (Rich Job HDD asset)
+      • Created by: setup.sh:360-388 (lines 360–388) and verified by seed_fixtures.sh:116-130.
+      • How: Downloaded on the host into a shared cache and injected into the container at /var/lib/openqa/share/factory/hdd/cirros-0.6.3-
+      x86_64-disk.qcow2.
+  3. seed-nocloud.iso (NoCloud seed ISO)
+      • Created by: seed_fixtures.sh:132-145 (lines 132–145).
+      • How: Built inside the container using mkisofs with generated cloud-init metadata into /var/lib/openqa/share/factory/iso/seed-nocloud.
+      iso.
+  4. other/page.html (Gatekeeper HTML exception test fixture)
+      • Created by: tests_gatekeeper.sh during the execution of test job GAT_HTML_JOB_ID via openQA test execution upload.

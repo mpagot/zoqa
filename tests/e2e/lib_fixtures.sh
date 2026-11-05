@@ -485,7 +485,7 @@ get_faultproxy_hits() {
 		return 0
 	fi
 	container_exec bash -c \
-		"grep -c '${pattern}' ${FAULTPROXY_COUNT_FILE} 2>/dev/null || echo 0"
+		"count=\$(grep -c '${pattern}' '${FAULTPROXY_COUNT_FILE}' 2>/dev/null || true); echo \"\${count:-0}\""
 }
 
 # Print the header-log lines matching PATTERN (grep -F).

@@ -310,22 +310,24 @@ else
 fi
 
 # GAT-8: R4 — Retry-After as HTTP date (non-integer ignored by Zig).
-# Test GAT-8: 429x2 + Retry-After: date:+2 — Perl honours HTTP-date, Zig ignores and falls back
+# Test GAT-8: 429x2 + Retry-After: date:+5 — Perl honours HTTP-date, Zig ignores and falls back
 #
-# The proxy renders "date:+2" as an HTTP date 2 s in the future.
-# Perl parses HTTP-date headers and sleeps >= 2 s.
+# The proxy renders "date:+5" as an HTTP date 5 s after each 429 response.
+# Perl parses HTTP-date headers and sleeps ~5 s per retry (~10 s total).
 # Zig ignores non-integer Retry-After headers (per integer-only R4 decision)
-# and falls back to computed delay (SLEEP=0 -> elapsed < 2 s).
+# and falls back to computed delay (SLEEP=0 -> elapsed < 5 s).
+# The 5 s threshold leaves seconds of margin on both sides, so start-up
+# latency and whole-second rounding cannot flip the result.
 _gat8_perl_cmd="bash -c \"OPENQA_CLI_RETRIES=2 OPENQA_CLI_RETRY_SLEEP_TIME_S=0 ${PERL_EXE} api --host http://127.0.0.1:${FAULTPROXY_PORT} jobs/${JOB_ID}\""
 _gat8_zig_cmd="bash -c \"OPENQA_CLI_RETRIES=2 OPENQA_CLI_RETRY_SLEEP_TIME_S=0 ${ZIG_EXE} api --host http://127.0.0.1:${FAULTPROXY_PORT} jobs/${JOB_ID}\""
 
-start_faultproxy 2 429 /api/v1/ 64 "date:+2"
+start_faultproxy 2 429 /api/v1/ 64 "date:+5"
 _gat8_start=$(date +%s%N)
 _gat_run_leg "gat8" perl "$_gat8_perl_cmd" /api/v1/
 _gat8_perl_elapsed=$(elapsed_since "$_gat8_start")
 _GAT8_PERL_EXIT=$_GAT_LEG_EXIT
 
-start_faultproxy 2 429 /api/v1/ 64 "date:+2"
+start_faultproxy 2 429 /api/v1/ 64 "date:+5"
 _gat8_start=$(date +%s%N)
 _gat_run_leg "gat8" zig "$_gat8_zig_cmd" /api/v1/
 _gat8_zig_elapsed=$(elapsed_since "$_gat8_start")
@@ -337,16 +339,16 @@ else
 	echo "FAIL: GAT-8 exits perl=$_GAT8_PERL_EXIT zig=$_GAT8_ZIG_EXIT (expected 0/0)"
 	failed_tests=$((failed_tests + 1))
 fi
-if [[ "$_gat8_perl_elapsed" -ge 2 ]]; then
-	echo "PASS: GAT-8 Perl elapsed ${_gat8_perl_elapsed}s >= 2s (HTTP-date Retry-After honoured)"
+if [[ "$_gat8_perl_elapsed" -ge 5 ]]; then
+	echo "PASS: GAT-8 Perl elapsed ${_gat8_perl_elapsed}s >= 5s (HTTP-date Retry-After honoured)"
 else
-	echo "FAIL: GAT-8 Perl elapsed ${_gat8_perl_elapsed}s < 2s (HTTP-date Retry-After not honoured)"
+	echo "FAIL: GAT-8 Perl elapsed ${_gat8_perl_elapsed}s < 5s (HTTP-date Retry-After not honoured)"
 	failed_tests=$((failed_tests + 1))
 fi
-if [[ "$_gat8_zig_elapsed" -lt 2 ]]; then
-	echo "PASS: GAT-8 Zig elapsed ${_gat8_zig_elapsed}s < 2s (non-integer HTTP-date ignored, fallback to computed delay)"
+if [[ "$_gat8_zig_elapsed" -lt 5 ]]; then
+	echo "PASS: GAT-8 Zig elapsed ${_gat8_zig_elapsed}s < 5s (non-integer HTTP-date ignored, fallback to computed delay)"
 else
-	echo "FAIL: GAT-8 Zig elapsed ${_gat8_zig_elapsed}s >= 2s (non-integer HTTP-date not ignored)"
+	echo "FAIL: GAT-8 Zig elapsed ${_gat8_zig_elapsed}s >= 5s (non-integer HTTP-date not ignored)"
 	failed_tests=$((failed_tests + 1))
 fi
 
@@ -542,7 +544,7 @@ GAT_RICH_JOB_ID="$RICH_JOB_ID"
 # the /tests/{id}/asset/... route reaches the client.  Both implementations
 # must follow the redirect themselves and send Accept on every hop.  The
 # header log must show no "accept=-" line for the asset paths.
-start_faultproxy 0 503 "/tests/${GAT_RICH_JOB_ID}/asset/" 64 "" "--header-log --pass-redirects"
+start_faultproxy 0 503 "/tests/${GAT_RICH_JOB_ID}/asset/" 64 "" "--header-log"
 ASSET_DIR_GAT_20_ZIG="/tmp/e2e-gat20-zig-$$"
 container_exec mkdir -p "$ASSET_DIR_GAT_20_ZIG"
 run_capture "gat20" zig \
@@ -554,7 +556,7 @@ assert_all_requests_have_accept "/tests/${GAT_RICH_JOB_ID}/asset/" "GAT-20 Zig s
 stop_faultproxy
 
 if [[ "$_GAT20_ZIG_EXIT" -eq 0 ]]; then
-	echo "PASS: GAT-20 Zig exits 0 with --pass-redirects"
+	echo "PASS: GAT-20 Zig exits 0 on redirect hops"
 else
 	echo "FAIL: GAT-20 Zig exit=$_GAT20_ZIG_EXIT (expected 0)"
 	dump_faultproxy_logs
@@ -567,7 +569,7 @@ container_exec rm -rf "$ASSET_DIR_GAT_20_ZIG"
 
 ASSET_DIR_GAT_20_PERL="/tmp/e2e-gat20-perl-$$"
 container_exec mkdir -p "$ASSET_DIR_GAT_20_PERL"
-start_faultproxy 0 503 "/tests/${GAT_RICH_JOB_ID}/asset/" 64 "" "--header-log --pass-redirects"
+start_faultproxy 0 503 "/tests/${GAT_RICH_JOB_ID}/asset/" 64 "" "--header-log"
 run_capture "gat20" perl \
 	"bash -c \"${PERL_CLONE_EXE} --from http://127.0.0.1:${FAULTPROXY_PORT} \
 	 --host http://localhost --skip-deps \
@@ -577,7 +579,7 @@ assert_all_requests_have_accept "/tests/${GAT_RICH_JOB_ID}/asset/" "GAT-20 Perl 
 stop_faultproxy
 
 if [[ "$_GAT20_PERL_EXIT" -eq 0 ]]; then
-	echo "PASS: GAT-20 Perl exits 0 with --pass-redirects"
+	echo "PASS: GAT-20 Perl exits 0 on redirect hops"
 else
 	echo "FAIL: GAT-20 Perl exit=$_GAT20_PERL_EXIT (expected 0)"
 	dump_faultproxy_logs
@@ -977,6 +979,8 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
+cancel_pending_jobs # clones left by GAT-28
+
 # =============================================================================
 # Part C — o3 symptom reproduction (GAT-40 to GAT-43)
 # =============================================================================
@@ -1244,9 +1248,16 @@ _GAT_HTML_PATH="/tests/${GAT_HTML_JOB_ID}/asset/other/"
 # implementations must save the file (exit 0, MD5 OK).  A precondition check
 # makes sure the asset really is served as text/html — without it this test
 # would pass trivially and stop covering the exception.
+#
+# The precondition request must be authenticated: with require_for_assets = 1
+# an anonymous request to /assets gets 403 with a JSON body.  Log in as Demo
+# (Fake auth) and send the session cookie on every hop.  Use GET with
+# headers dumped (-D -), not HEAD (-I): HEAD on /assets returns 403 even with
+# a valid session.
 if [[ "$DRY_RUN" != "true" ]]; then
+	audit_login
 	_gat42_ctype=$(container_exec bash -c \
-		"curl -sIL http://localhost${_GAT_HTML_PATH}${GAT_HTML_ASSET} | grep -i '^content-type:' | tail -1" || true)
+		"curl -sL -o /dev/null -D - -b $_AUDIT_COOKIE_JAR http://localhost${_GAT_HTML_PATH}${GAT_HTML_ASSET} | grep -i '^content-type:' | tail -1" || true)
 	if [[ "$_gat42_ctype" == *text/html* ]]; then
 		echo "PASS: GAT-42 precondition — ${GAT_HTML_ASSET} is served as text/html"
 	else
