@@ -455,9 +455,14 @@ const CloneArgs = struct {
     repeat: ?u32 = null,
     retry: ?u32 = null,
 
-    // Positional: JOBREF and KEY=[VALUE] overrides
-    // All slices borrow directly from argv, no copies are made during parsing.
-    positionals: std.ArrayList([]const u8),
+    // Positional: JOBREF and KEY=[VALUE] overrides.
+    // All string slices borrow directly from argv (no copies are made during parsing),
+    // making `positionals` the only dynamically allocated field in `CloneArgs`.
+    // While an arena allocator at the CLI boundary could free this in bulk,
+    // `deinit()` is intentionally retained so callers using non-arena allocators
+    // (such as `std.testing.allocator` in unit tests) can clean up and detect leaks
+    // without requiring per-test arena scaffolding.
+    positionals: std.ArrayList([]const u8) = .empty,
 
     pub fn deinit(self: *CloneArgs, allocator: std.mem.Allocator) void {
         self.positionals.deinit(allocator);
@@ -478,9 +483,7 @@ const CloneArgs = struct {
 ///   - `error.UnknownFlag` : unrecognised flag.
 ///   - `error.InvalidNumber` : a numeric flag has a non-numeric value.
 fn parseCloneArgs(allocator: std.mem.Allocator, argv: []const []const u8) !CloneArgs {
-    var args = CloneArgs{
-        .positionals = .empty,
-    };
+    var args: CloneArgs = .{};
 
     var i: usize = 1; // skip argv[0] = program name
     while (i < argv.len) : (i += 1) {
@@ -680,6 +683,9 @@ const WalkResult = struct {
 ///
 /// Returns: A `WalkResult` containing the walker state, collected assets, and
 ///   any missing asset filenames reported by the server.
+///
+/// Errors:
+///   `error.WalkFailed` on any transport, parse, or extraction error.
 fn walkDependencyGraph(
     gpa: std.mem.Allocator,
     arena_alloc: std.mem.Allocator,
@@ -689,11 +695,11 @@ fn walkDependencyGraph(
     clone_opts: zoqa.clone_job.CloneOptions,
     verbose: bool,
     ignore_missing_assets: bool,
-    client: *std.http.Client,
-) WalkResult {
+    client: anytype,
+) !WalkResult {
     var walker = zoqa.clone_job.DependencyWalker.init(arena_alloc, resolved.job_id, clone_opts) catch |err| {
         printStderr("Error: walker init failed: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
+        return error.WalkFailed;
     };
     var all_assets: std.ArrayList(zoqa.clone_job.AssetEntry) = .empty;
     var all_missing_assets: std.ArrayList([]const u8) = .empty;
@@ -704,7 +710,7 @@ fn walkDependencyGraph(
     while (walker.next()) |item| {
         const job_path = std.fmt.allocPrint(gpa, "jobs/{d}{s}", .{ item.job_id, check_assets_qs }) catch |err| {
             printStderr("Error: allocPrint failed: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
+            return error.WalkFailed;
         };
         defer gpa.free(job_path);
 
@@ -719,7 +725,7 @@ fn walkDependencyGraph(
             .quiet = !verbose,
         }, client) catch |err| {
             printStderr("Error: GET job {d} failed: {s}\n", .{ item.job_id, @errorName(err) });
-            std.process.exit(1);
+            return error.WalkFailed;
         };
         defer get_resp.deinit();
 
@@ -727,45 +733,51 @@ fn walkDependencyGraph(
             printStderr("Error: failed to get job '{d}': {d}\n", .{
                 item.job_id, @intFromEnum(get_resp.status),
             });
-            std.process.exit(1);
+            return error.WalkFailed;
         }
 
         // Parse job response
         const get_parsed = std.json.parseFromSlice(std.json.Value, gpa, get_resp.body, .{}) catch |err| {
             printStderr("Error: failed to parse job {d} response: {s}\n", .{ item.job_id, @errorName(err) });
-            std.process.exit(1);
+            return error.WalkFailed;
         };
         defer get_parsed.deinit();
 
-        const job_val = get_parsed.value.object.get("job") orelse {
+        const root_obj = switch (get_parsed.value) {
+            .object => |o| o,
+            else => {
+                printStderr("Error: response for job {d} is not a JSON object\n", .{item.job_id});
+                return error.WalkFailed;
+            },
+        };
+
+        const job_val = root_obj.get("job") orelse {
             printStderr("Error: response for job {d} missing 'job' field\n", .{item.job_id});
-            std.process.exit(1);
+            return error.WalkFailed;
         };
         const job_obj = switch (job_val) {
             .object => |o| o,
             else => {
                 printStderr("Error: 'job' field is not an object for job {d}\n", .{item.job_id});
-                std.process.exit(1);
+                return error.WalkFailed;
             },
         };
 
         // Feed parsed job to walker (extracts settings, deps, enqueues children)
         walker.feed(arena_alloc, item, job_obj) catch |err| {
             printStderr("Error: walker feed failed for job {d}: {s}\n", .{ item.job_id, @errorName(err) });
-            std.process.exit(1);
+            return error.WalkFailed;
         };
 
         // Extract assets from this job
         const job_assets = zoqa.clone_job.extractAssets(arena_alloc, job_obj, item.job_id) catch |err| {
             printStderr("Error: extractAssets failed for job {d}: {s}\n", .{ item.job_id, @errorName(err) });
-            std.process.exit(1);
+            return error.WalkFailed;
         };
-        for (job_assets) |asset| {
-            all_assets.append(arena_alloc, asset) catch |err| {
-                printStderr("Error: asset append failed: {s}\n", .{@errorName(err)});
-                std.process.exit(1);
-            };
-        }
+        all_assets.appendSlice(arena_alloc, job_assets) catch |err| {
+            printStderr("Error: asset append failed: {s}\n", .{@errorName(err)});
+            return error.WalkFailed;
+        };
 
         // Collect server-reported missing_assets (populated when check_assets=1 was sent)
         if (job_obj.get("missing_assets")) |ma_val| {
@@ -776,11 +788,11 @@ fn walkDependencyGraph(
                             .string => |s| {
                                 const duped = arena_alloc.dupe(u8, s) catch |err| {
                                     printStderr("Error: dupe failed: {s}\n", .{@errorName(err)});
-                                    std.process.exit(1);
+                                    return error.WalkFailed;
                                 };
                                 all_missing_assets.append(arena_alloc, duped) catch |err| {
                                     printStderr("Error: missing_assets append failed: {s}\n", .{@errorName(err)});
-                                    std.process.exit(1);
+                                    return error.WalkFailed;
                                 };
                             },
                             else => {},
@@ -1495,7 +1507,9 @@ pub fn main() !void {
         args.verbose,
         args.ignore_missing_assets,
         &client,
-    );
+    ) catch {
+        std.process.exit(1);
+    };
 
     // --reproduce fetch vars.json and inject versioning settings.
     if (args.reproduce) {
@@ -1698,6 +1712,13 @@ pub fn main() !void {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+test "CloneArgs: default initialization" {
+    const args: CloneArgs = .{};
+    try std.testing.expectEqual(@as(usize, 0), args.positionals.items.len);
+    try std.testing.expect(args.host == null);
+    try std.testing.expect(!args.skip_deps);
+}
 
 test "parseCloneArgs: --help returns help flag" {
     const allocator = std.testing.allocator;
@@ -2008,4 +2029,424 @@ test "resolveJobRef: job_id from --from URL, no positional needed" {
 
     try std.testing.expectEqualStrings("http://openqa.opensuse.org", r.from_url);
     try std.testing.expectEqual(@as(u64, 99), r.job_id);
+}
+
+// ---------------------------------------------------------------------------
+// Tests: walkDependencyGraph
+// ---------------------------------------------------------------------------
+
+const MockGraphClient = struct {
+    const Self = @This();
+
+    pub const MockResponseEntry = struct {
+        status: std.http.Status = .ok,
+        body: []const u8 = "{}",
+    };
+
+    responses: std.StringHashMapUnmanaged(MockResponseEntry) = .empty,
+    default_response: MockResponseEntry = .{
+        .status = .not_found,
+        .body = "{\"error\":\"not found\"}",
+    },
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.responses.deinit(allocator);
+    }
+
+    pub fn setResponse(self: *Self, allocator: std.mem.Allocator, path_pattern: []const u8, resp: MockResponseEntry) !void {
+        try self.responses.put(allocator, path_pattern, resp);
+    }
+
+    pub fn request(self: *Self, allocator: std.mem.Allocator, path: []const u8) !zoqa.APIResponse {
+        var resp = self.default_response;
+
+        var it = self.responses.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.indexOf(u8, path, entry.key_ptr.*) != null) {
+                resp = entry.value_ptr.*;
+                break;
+            }
+        }
+
+        return zoqa.APIResponse{
+            .allocator = allocator,
+            .status = resp.status,
+            .body = try allocator.dupe(u8, resp.body),
+        };
+    }
+};
+
+test "walkDependencyGraph: single job success" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var mock: MockGraphClient = .{};
+    defer mock.deinit(allocator);
+    try mock.setResponse(allocator, "jobs/42", .{
+        .status = .ok,
+        .body =
+        \\{
+        \\  "job": {
+        \\    "id": 42,
+        \\    "name": "single_test_job",
+        \\    "settings": {
+        \\      "DISTRI": "opensuse",
+        \\      "VERSION": "15.5"
+        \\    },
+        \\    "assets": {
+        \\      "iso": ["openSUSE-DVD.iso"]
+        \\    }
+        \\  }
+        \\}
+        ,
+    });
+
+    const resolved = ResolvedJobRef{
+        .from_url = try allocator.dupe(u8, "http://localhost"),
+        .host_url = try allocator.dupe(u8, "http://localhost"),
+        .job_id = 42,
+        .skip_download = false,
+        .jobref_consumed_positional = false,
+    };
+    defer resolved.deinit(allocator);
+
+    const retry_cfg = cli_env.RetryConfig{
+        .retries = 0,
+        .connect_timeout_s = 0,
+        .retry_sleep_s = 0,
+        .retry_factor = 1.0,
+    };
+    const clone_opts = zoqa.clone_job.CloneOptions{
+        .from_url = "http://localhost",
+    };
+
+    const res = try walkDependencyGraph(
+        allocator,
+        arena_alloc,
+        &resolved,
+        null,
+        retry_cfg,
+        clone_opts,
+        false,
+        false,
+        &mock,
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), res.walker.collected.items.len);
+    try std.testing.expectEqual(@as(u64, 42), res.walker.collected.items[0].job_id);
+    try std.testing.expectEqualStrings("single_test_job", res.walker.collected.items[0].name);
+
+    try std.testing.expectEqual(@as(usize, 1), res.assets.items.len);
+    try std.testing.expectEqualStrings("openSUSE-DVD.iso", res.assets.items[0].filename);
+    try std.testing.expectEqual(zoqa.clone_job.AssetType.iso, res.assets.items[0].asset_type);
+
+    try std.testing.expectEqual(@as(usize, 0), res.missing_asset_filenames.items.len);
+}
+
+test "walkDependencyGraph: bfs traversal follows parent chained dependencies" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var mock: MockGraphClient = .{};
+    defer mock.deinit(allocator);
+    try mock.setResponse(allocator, "jobs/10", .{
+        .status = .ok,
+        .body =
+        \\{
+        \\  "job": {
+        \\    "id": 10,
+        \\    "name": "child_job",
+        \\    "parents": {
+        \\      "Chained": [20]
+        \\    }
+        \\  }
+        \\}
+        ,
+    });
+    try mock.setResponse(allocator, "jobs/20", .{
+        .status = .ok,
+        .body =
+        \\{
+        \\  "job": {
+        \\    "id": 20,
+        \\    "name": "parent_job"
+        \\  }
+        \\}
+        ,
+    });
+
+    const resolved = ResolvedJobRef{
+        .from_url = try allocator.dupe(u8, "http://localhost"),
+        .host_url = try allocator.dupe(u8, "http://localhost"),
+        .job_id = 10,
+        .skip_download = false,
+        .jobref_consumed_positional = false,
+    };
+    defer resolved.deinit(allocator);
+
+    const retry_cfg = cli_env.RetryConfig{
+        .retries = 0,
+        .connect_timeout_s = 0,
+        .retry_sleep_s = 0,
+        .retry_factor = 1.0,
+    };
+    const clone_opts = zoqa.clone_job.CloneOptions{
+        .from_url = "http://localhost",
+    };
+
+    const res = try walkDependencyGraph(
+        allocator,
+        arena_alloc,
+        &resolved,
+        null,
+        retry_cfg,
+        clone_opts,
+        false,
+        false,
+        &mock,
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), res.walker.collected.items.len);
+    try std.testing.expectEqual(@as(u64, 10), res.walker.collected.items[0].job_id);
+    try std.testing.expectEqualStrings("child_job", res.walker.collected.items[0].name);
+    try std.testing.expectEqual(@as(u64, 20), res.walker.collected.items[1].job_id);
+    try std.testing.expectEqualStrings("parent_job", res.walker.collected.items[1].name);
+}
+
+test "walkDependencyGraph: collects missing_assets array from job" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var mock: MockGraphClient = .{};
+    defer mock.deinit(allocator);
+    try mock.setResponse(allocator, "jobs/42", .{
+        .status = .ok,
+        .body =
+        \\{
+        \\  "job": {
+        \\    "id": 42,
+        \\    "name": "job_with_missing",
+        \\    "missing_assets": ["iso/missing.iso", "hdd/missing.qcow2"]
+        \\  }
+        \\}
+        ,
+    });
+
+    const resolved = ResolvedJobRef{
+        .from_url = try allocator.dupe(u8, "http://localhost"),
+        .host_url = try allocator.dupe(u8, "http://localhost"),
+        .job_id = 42,
+        .skip_download = false,
+        .jobref_consumed_positional = false,
+    };
+    defer resolved.deinit(allocator);
+
+    const retry_cfg = cli_env.RetryConfig{
+        .retries = 0,
+        .connect_timeout_s = 0,
+        .retry_sleep_s = 0,
+        .retry_factor = 1.0,
+    };
+    const clone_opts = zoqa.clone_job.CloneOptions{
+        .from_url = "http://localhost",
+    };
+
+    const res = try walkDependencyGraph(
+        allocator,
+        arena_alloc,
+        &resolved,
+        null,
+        retry_cfg,
+        clone_opts,
+        false,
+        false,
+        &mock,
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), res.missing_asset_filenames.items.len);
+    try std.testing.expectEqualStrings("iso/missing.iso", res.missing_asset_filenames.items[0]);
+    try std.testing.expectEqualStrings("hdd/missing.qcow2", res.missing_asset_filenames.items[1]);
+}
+
+test "walkDependencyGraph: returns error.WalkFailed on HTTP 404" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var mock: MockGraphClient = .{};
+    defer mock.deinit(allocator);
+    // default_response is 404
+
+    const resolved = ResolvedJobRef{
+        .from_url = try allocator.dupe(u8, "http://localhost"),
+        .host_url = try allocator.dupe(u8, "http://localhost"),
+        .job_id = 404,
+        .skip_download = false,
+        .jobref_consumed_positional = false,
+    };
+    defer resolved.deinit(allocator);
+
+    const retry_cfg = cli_env.RetryConfig{
+        .retries = 0,
+        .connect_timeout_s = 0,
+        .retry_sleep_s = 0,
+        .retry_factor = 1.0,
+    };
+    const clone_opts = zoqa.clone_job.CloneOptions{
+        .from_url = "http://localhost",
+    };
+
+    try std.testing.expectError(error.WalkFailed, walkDependencyGraph(
+        allocator,
+        arena_alloc,
+        &resolved,
+        null,
+        retry_cfg,
+        clone_opts,
+        false,
+        false,
+        &mock,
+    ));
+}
+
+test "walkDependencyGraph: returns error.WalkFailed on malformed JSON" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var mock: MockGraphClient = .{};
+    defer mock.deinit(allocator);
+    try mock.setResponse(allocator, "jobs/42", .{
+        .status = .ok,
+        .body = "this is not valid json {",
+    });
+
+    const resolved = ResolvedJobRef{
+        .from_url = try allocator.dupe(u8, "http://localhost"),
+        .host_url = try allocator.dupe(u8, "http://localhost"),
+        .job_id = 42,
+        .skip_download = false,
+        .jobref_consumed_positional = false,
+    };
+    defer resolved.deinit(allocator);
+
+    const retry_cfg = cli_env.RetryConfig{
+        .retries = 0,
+        .connect_timeout_s = 0,
+        .retry_sleep_s = 0,
+        .retry_factor = 1.0,
+    };
+    const clone_opts = zoqa.clone_job.CloneOptions{
+        .from_url = "http://localhost",
+    };
+
+    try std.testing.expectError(error.WalkFailed, walkDependencyGraph(
+        allocator,
+        arena_alloc,
+        &resolved,
+        null,
+        retry_cfg,
+        clone_opts,
+        false,
+        false,
+        &mock,
+    ));
+}
+
+test "walkDependencyGraph: returns error.WalkFailed on non-object JSON root" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var mock: MockGraphClient = .{};
+    defer mock.deinit(allocator);
+    try mock.setResponse(allocator, "jobs/42", .{
+        .status = .ok,
+        .body = "[\"an\", \"array\", \"not\", \"object\"]",
+    });
+
+    const resolved = ResolvedJobRef{
+        .from_url = try allocator.dupe(u8, "http://localhost"),
+        .host_url = try allocator.dupe(u8, "http://localhost"),
+        .job_id = 42,
+        .skip_download = false,
+        .jobref_consumed_positional = false,
+    };
+    defer resolved.deinit(allocator);
+
+    const retry_cfg = cli_env.RetryConfig{
+        .retries = 0,
+        .connect_timeout_s = 0,
+        .retry_sleep_s = 0,
+        .retry_factor = 1.0,
+    };
+    const clone_opts = zoqa.clone_job.CloneOptions{
+        .from_url = "http://localhost",
+    };
+
+    try std.testing.expectError(error.WalkFailed, walkDependencyGraph(
+        allocator,
+        arena_alloc,
+        &resolved,
+        null,
+        retry_cfg,
+        clone_opts,
+        false,
+        false,
+        &mock,
+    ));
+}
+
+test "walkDependencyGraph: returns error.WalkFailed when 'job' key is missing" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var mock: MockGraphClient = .{};
+    defer mock.deinit(allocator);
+    try mock.setResponse(allocator, "jobs/42", .{
+        .status = .ok,
+        .body = "{\"error\": \"job missing\"}",
+    });
+
+    const resolved = ResolvedJobRef{
+        .from_url = try allocator.dupe(u8, "http://localhost"),
+        .host_url = try allocator.dupe(u8, "http://localhost"),
+        .job_id = 42,
+        .skip_download = false,
+        .jobref_consumed_positional = false,
+    };
+    defer resolved.deinit(allocator);
+
+    const retry_cfg = cli_env.RetryConfig{
+        .retries = 0,
+        .connect_timeout_s = 0,
+        .retry_sleep_s = 0,
+        .retry_factor = 1.0,
+    };
+    const clone_opts = zoqa.clone_job.CloneOptions{
+        .from_url = "http://localhost",
+    };
+
+    try std.testing.expectError(error.WalkFailed, walkDependencyGraph(
+        allocator,
+        arena_alloc,
+        &resolved,
+        null,
+        retry_cfg,
+        clone_opts,
+        false,
+        false,
+        &mock,
+    ));
 }
