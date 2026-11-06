@@ -628,6 +628,7 @@ test "extractJobIds: negative integer is rejected" {
 const ScheduleMockHead = struct {
     status: std.http.Status = .ok,
     content_type: ?[]const u8 = "application/json",
+    location: ?[]const u8 = null,
     content_length: ?u64 = null,
 
     const HeaderIterator = struct {

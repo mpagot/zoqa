@@ -55,6 +55,9 @@ pub const ProgrammableMockClient = struct {
         // detection and LengthRequired checks. Null means no Content-Length
         // header was sent. Not used by execute() (which ignores it).
         content_length: ?u64 = null,
+        // Redirect target exposed to execute()/executeStream(). Read only when
+        // `status` is 301/302/303/307/308. Null means no Location header.
+        location: ?[]const u8 = null,
 
         const HeaderIterator = struct {
             use_gzip: bool,
