@@ -147,6 +147,47 @@ e2e_sleep() {
 }
 
 # ---------------------------------------------------------------------------
+# set_require_for_assets 0|1 — toggle asset authentication requirement
+#
+# Updates [auth] require_for_assets in 99-force-fake-auth.ini and restarts
+# the WebUI daemon so Mojolicious re-evaluates the asset route bridge at
+# runtime.  Measures and logs the elapsed time until the expected HTTP status
+# (200 when 0, 403 when 1) is active on /assets/iso/dummy.iso.
+# ---------------------------------------------------------------------------
+set_require_for_assets() {
+	local val="$1"
+	log "set_require_for_assets: setting require_for_assets=${val}"
+	if [[ "${DRY_RUN:-false}" == "true" ]]; then
+		return 0
+	fi
+	local expected_status="403"
+	if [[ "$val" == "0" ]]; then
+		expected_status="200"
+	fi
+	local t_start
+	t_start=$(date +%s%3N)
+	container_exec bash -c "
+		echo -e '[auth]\nmethod = Fake\nrequire_for_assets = ${val}' > /etc/openqa/openqa.ini.d/99-force-fake-auth.ini
+		pkill -u geekotest -f openqa-webui-daemon || true
+		pkill -u geekotest -f 'openqa.*prefork' || true
+		nohup setsid su geekotest -c '/usr/share/openqa/script/openqa-webui-daemon' >/dev/null 2>&1 &
+		for _ in {1..60}; do
+			status=\$(curl -s -o /dev/null -w '%{http_code}' http://localhost/assets/iso/dummy.iso 2>/dev/null || true)
+			if [[ \"\$status\" == \"$expected_status\" ]]; then
+				exit 0
+			fi
+			sleep 0.2
+		done
+		echo 'WebUI failed to apply require_for_assets=${val} within timeout' >&2
+		exit 1
+	"
+	local t_end
+	t_end=$(date +%s%3N)
+	local elapsed_ms=$(( t_end - t_start ))
+	log "set_require_for_assets: reload completed in ${elapsed_ms}ms (expected status=${expected_status})"
+}
+
+# ---------------------------------------------------------------------------
 # cd_to_project_root() — cd to the repository root from a caller's location
 #
 # Must be called with the caller's BASH_SOURCE[0]:

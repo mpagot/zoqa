@@ -644,8 +644,12 @@ assert_path_exists "ZIG : hdd/ directory exists" -d /tmp/arc_zig_rich/hdd
 
 # Test ARC-40: Asset file size is non-zero (CirrOS image).
 echo "--- Test: ZIG : CirrOS image size is non-zero ---"
+IMG_SIZE=""
 if [[ "$DRY_RUN" == "true" ]]; then
 	echo "PASS (DRY-RUN)"
+elif ! container_exec test -f "/tmp/arc_zig_rich/hdd/$CIRROS_IMG"; then
+	echo "FAIL: CirrOS image not found (/tmp/arc_zig_rich/hdd/$CIRROS_IMG)"
+	failed_tests=$((failed_tests + 1))
 else
 	IMG_SIZE=$(container_exec stat -c%s "/tmp/arc_zig_rich/hdd/$CIRROS_IMG")
 	if [[ "$IMG_SIZE" -gt 20000000 ]]; then
@@ -660,6 +664,12 @@ fi
 echo "--- Test: DIFF asset file size parity ---"
 if [[ "$DRY_RUN" == "true" ]]; then
 	echo "PASS (DRY-RUN)"
+elif [[ -z "$IMG_SIZE" ]]; then
+	echo "FAIL: Cannot compare asset size (Zig CirrOS image missing)"
+	failed_tests=$((failed_tests + 1))
+elif ! container_exec test -f "/tmp/arc_perl_rich/hdd/$CIRROS_IMG"; then
+	echo "FAIL: Cannot compare asset size (Perl CirrOS image missing)"
+	failed_tests=$((failed_tests + 1))
 else
 	P_IMG_SIZE=$(container_exec stat -c%s "/tmp/arc_perl_rich/hdd/$CIRROS_IMG")
 	if [[ "$P_IMG_SIZE" -eq "$IMG_SIZE" ]]; then

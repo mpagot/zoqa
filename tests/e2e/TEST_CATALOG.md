@@ -64,6 +64,9 @@ of the harness and how to run it, see [README.md](README.md).
 | AUT-5 | Env var credentials | `OPENQA_API_KEY`+`OPENQA_API_SECRET` as sole credential source. |
 | AUT-6 | Wrong env var secret (403) | Invalid `OPENQA_API_SECRET` env var is rejected by server. |
 | AUT-7 | CLI flags override env vars | `--apikey`/`--apisecret` override wrong env var credentials. |
+| AUT-8 | Asset download `require_for_assets = 1` | Unauthenticated returns 403; authenticated with valid HMAC follows 302 and returns 200. |
+| AUT-9 | Runtime toggle `require_for_assets = 0` | Unauthenticated asset request succeeds with 200 OK. |
+| AUT-10 | Restore `require_for_assets = 1` | Unauthenticated asset request is rejected again with 403 Forbidden. |
 
 ### Seeded Data (`tests_data.sh`)
 | # | Test | Verification |
@@ -75,17 +78,6 @@ of the harness and how to run it, see [README.md](README.md).
 | DAT-22 | Resource Discovery | Retrieving seeded job groups and verifying data persistence. |
 | DAT-23 | Output Parity | Hard `diff` comparison between Perl and Zig output for a nested object. |
 | DAT-24 | Relative vs Absolute Path | `zoqa api jobs/1` and `zoqa api http://localhost/api/v1/jobs/1` produce identical output. |
-
-### Authentication (`tests_auth.sh`)
-| # | Test | Verification |
-|---|---|---|
-| AUT-1 | DELETE HMAC | Correct signature generation for `DELETE` requests (verified via 404). |
-| AUT-2 | POST HMAC | Correct signature generation for `POST` requests via config file credentials. |
-| AUT-3 | Wrong `--apisecret` (403) | Graceful handling of invalid secrets/signatures. |
-| AUT-4 | CLI flags override config | `--apikey`/`--apisecret` override wrong `client.conf` credentials. |
-| AUT-5 | Env var credentials | `OPENQA_API_KEY`+`OPENQA_API_SECRET` as sole credential source. |
-| AUT-6 | Wrong env var secret (403) | Invalid `OPENQA_API_SECRET` env var is rejected by server. |
-| AUT-7 | CLI flags override env vars | `--apikey`/`--apisecret` override wrong env var credentials. |
 
 ### Output Formatting (`tests_output.sh`)
 | # | Test | Verification |
@@ -335,7 +327,7 @@ of the harness and how to run it, see [README.md](README.md).
 | GAT-5 | R3 — `408`/`500`/`504` ×1 each | Both exit 0 with 2 hits per status. |
 | GAT-6 | R3 — persistent `429` | Both exit non-zero with 3 hits (retries exhausted). |
 | GAT-7 | R4 — `Retry-After: 2` (seconds) | `429`×2, `SLEEP=0`: both exit 0, per-leg elapsed ≥ 4 s (proxy started before the timer). |
-| GAT-8 | R4 — `Retry-After: date:+2` (HTTP date) | `429`×2: both exit 0; Perl elapsed ≥ 2 s (honours HTTP date); Zig elapsed < 2 s (ignores non-integer Retry-After, falls back to computed 0 s delay). |
+| GAT-8 | R4 — `Retry-After: date:+5` (HTTP date, relative to each response) | `429`×2: both exit 0; Perl elapsed ≥ 5 s (honours HTTP date, ~10 s total); Zig elapsed < 5 s (ignores non-integer Retry-After, falls back to computed 0 s delay). |
 | GAT-9 | R4 — unparsable `Retry-After` falls back | `429`×2, `Retry-After: soon`, `SLEEP=1`: both exit 0, per-leg elapsed ≥ 2 s (computed delay). |
 | GAT-10 | R4 control — no `Retry-After` | `503`×2, `SLEEP=0`: both exit 0, per-leg elapsed < 5 s (proves GAT-7/8/9 measured the header, not backoff). |
 | GAT-11 | R4 — `Retry-After` on 404 ignored | `404` + `Retry-After: 30`: both exit non-zero with 1 hit, per-leg elapsed < 5 s. |

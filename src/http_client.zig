@@ -262,6 +262,112 @@ fn buildHeaders(
     return headers;
 }
 
+/// Maximum redirect hops followed per request. Matches the Perl client
+/// (`max_redirects(3)` in `OpenQA::Script::CloneJob`).
+const max_redirects: u8 = 3;
+
+/// Return true for the redirect statuses that `execute()` and
+/// `executeStream()` follow (301, 302, 303, 307, 308).
+fn isFollowableRedirect(status: std.http.Status) bool {
+    return switch (status) {
+        .moved_permanently, .found, .see_other, .temporary_redirect, .permanent_redirect => true,
+        else => false,
+    };
+}
+
+/// Return true for errors raised by `RedirectState.follow`. They are permanent:
+/// retrying the same URL produces the same redirect chain.
+fn isRedirectError(err: anyerror) bool {
+    return err == error.TooManyHttpRedirects or
+        err == error.HttpRedirectLocationMissing or
+        err == error.HttpRedirectLocationInvalid;
+}
+
+/// Return the port used for `uri`, filling in the scheme default.
+fn effectivePort(uri: std.Uri) ?u16 {
+    if (uri.port) |p| return p;
+    if (std.ascii.eqlIgnoreCase(uri.scheme, "https")) return 443;
+    if (std.ascii.eqlIgnoreCase(uri.scheme, "http")) return 80;
+    return null;
+}
+
+/// Return true when `a` and `b` share scheme, host and port.
+fn sameOrigin(a: std.Uri, b: std.Uri) bool {
+    if (!std.ascii.eqlIgnoreCase(a.scheme, b.scheme)) return false;
+    var a_buf: [std.Uri.host_name_max]u8 = undefined;
+    var b_buf: [std.Uri.host_name_max]u8 = undefined;
+    const a_host = a.getHost(&a_buf) catch return false;
+    const b_host = b.getHost(&b_buf) catch return false;
+    return std.ascii.eqlIgnoreCase(a_host, b_host) and effectivePort(a) == effectivePort(b);
+}
+
+/// Redirect state for the request loops of `execute()` and `executeStream()`.
+///
+/// WHY manual redirects: `std.http.Client` follows a redirect by re-sending the
+/// same `extra_headers`, so the `X-API-Hash` signed for `/tests/<id>/asset/...`
+/// reaches `/assets/...`. openQA with `[auth] require_for_assets = 1` (e.g.
+/// OSD) rejects that with 403. The loops therefore request with
+/// `.redirect_behavior = .unhandled`, call `follow()` on a 3xx, and rebuild the
+/// headers on the next iteration, so every hop is signed for its own path.
+/// Perl does the same: it resolves the final URL first, then signs it.
+const RedirectState = struct {
+    allocator: std.mem.Allocator,
+    /// Current target: `Request.url` until the first hop, then `owned_url`.
+    url: []const u8,
+    /// Heap copy of the last resolved target. Freed on the next hop or by `deinit`.
+    owned_url: ?[]u8 = null,
+    /// Credentials for the current target. Cleared for good once a hop leaves
+    /// the origin (scheme, host, port), so the API key is never sent to
+    /// another server.
+    credentials: ?config.Credentials,
+    /// Number of redirects followed so far.
+    hops: u8 = 0,
+
+    /// Start at `req.url` with `req.credentials`.
+    fn init(req: Request) RedirectState {
+        return .{ .allocator = req.allocator, .url = req.url, .credentials = req.credentials };
+    }
+
+    /// Free the resolved target URL, if any.
+    fn deinit(self: *RedirectState) void {
+        if (self.owned_url) |u| self.allocator.free(u);
+    }
+
+    /// Resolve `location` against the current target and make it the new target.
+    ///
+    /// `location` usually points into the connection buffer of the current
+    /// request; it is copied here, so the caller can release the request after.
+    fn follow(self: *RedirectState, location: ?[]const u8) !void {
+        if (self.hops >= max_redirects) return error.TooManyHttpRedirects;
+        const loc = location orelse return error.HttpRedirectLocationMissing;
+        const base = std.Uri.parse(self.url) catch return error.HttpRedirectLocationInvalid;
+
+        // resolveInPlace expects the location at the start of the buffer and
+        // may write a merged path (base path + location) after it.
+        const aux = try self.allocator.alloc(u8, 2 * loc.len + self.url.len);
+        defer self.allocator.free(aux);
+        @memcpy(aux[0..loc.len], loc);
+        var aux_free: []u8 = aux;
+        const target = std.Uri.resolveInPlace(base, loc.len, &aux_free) catch
+            return error.HttpRedirectLocationInvalid;
+
+        // `target` borrows from `aux` and `self.url`: serialise it before
+        // either is released. The fragment is dropped (never sent on the wire).
+        const new_url = try std.fmt.allocPrint(self.allocator, "{f}", .{target.fmt(.{
+            .scheme = true,
+            .authority = true,
+            .path = true,
+            .query = true,
+        })});
+
+        if (!sameOrigin(base, target)) self.credentials = null;
+        if (self.owned_url) |old| self.allocator.free(old);
+        self.owned_url = new_url;
+        self.url = new_url;
+        self.hops += 1;
+    }
+};
+
 /// Perform an HTTP request using the provided client.
 ///
 /// Parameters:
@@ -309,28 +415,41 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         return error.BodyOnBodilessMethod;
     }
 
+    var redirect = RedirectState.init(req);
+    defer redirect.deinit();
+    // A 303 (or a 301/302 answering a POST) turns the next hop into a bodiless GET.
+    var method = req.method;
+    var body = req.body;
+
     var attempt: u32 = 0;
-    while (true) : (attempt += 1) {
-        // Build request headers fresh on each attempt so the HMAC timestamp
-        // is current. hash_buf and timestamp_buf are declared here so they
-        // outlive the headers list (auth headers borrow from them).
-        const uri = try std.Uri.parse(req.url);
+    // Redirect hops are not retries: they must not consume the retry budget.
+    var followed_redirect = false;
+    while (true) : (attempt += @intFromBool(!followed_redirect)) {
+        followed_redirect = false;
+
+        // Build request headers fresh on each attempt and each redirect hop so
+        // the HMAC covers the current path and timestamp. hash_buf and
+        // timestamp_buf are declared here so they outlive the headers list
+        // (auth headers borrow from them).
+        const uri = try std.Uri.parse(redirect.url);
         var hash_buf: [40]u8 = undefined;
         var timestamp_buf: [32]u8 = undefined;
-        var headers = try buildHeaders(req.allocator, req.headers, req.credentials, uri, &hash_buf, &timestamp_buf, true);
+        var headers = try buildHeaders(req.allocator, req.headers, redirect.credentials, uri, &hash_buf, &timestamp_buf, true);
         defer headers.deinit(req.allocator);
 
         if (req.verbose) {
-            std.debug.print("> {s} {s}\n", .{ @tagName(req.method), uri.path.percent_encoded });
+            std.debug.print("> {s} {s}\n", .{ @tagName(method), uri.path.percent_encoded });
             for (headers.items) |h| {
                 std.debug.print("> {s}: {s}\n", .{ h.name, h.value });
             }
             std.debug.print(">\n", .{});
         }
 
-        // Issue the request via the injected client
-        var http_req = client.request(req.method, uri, .{
+        // Issue the request via the injected client. Redirects are handled
+        // below (see `RedirectState`), never by the client.
+        var http_req = client.request(method, uri, .{
             .extra_headers = headers.items,
+            .redirect_behavior = .unhandled,
         }) catch |err| {
             if (!req.quiet) std.debug.print("Connection error: {s}\n", .{@errorName(err)});
             if (attempt >= req.retries) return err;
@@ -340,7 +459,7 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
         defer http_req.deinit();
 
         // Send request (with or without body)
-        if (req.body) |body_bytes| {
+        if (body) |body_bytes| {
             const body_mut = try req.allocator.dupe(u8, body_bytes);
             defer req.allocator.free(body_mut);
             http_req.sendBodyComplete(body_mut) catch |err| {
@@ -349,30 +468,43 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
                 try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
                 continue;
             };
-        } else if (req.method.requestHasBody()) {
+        } else if (method.requestHasBody()) {
             http_req.sendBodyComplete(&.{}) catch |err| {
-                if (!req.quiet) std.debug.print("sendBodyComplere error: {s}\n", .{@errorName(err)});
+                if (!req.quiet) std.debug.print("sendBodyComplete error: {s}\n", .{@errorName(err)});
                 if (attempt >= req.retries) return err;
                 try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
                 continue;
             };
         } else {
             http_req.sendBodiless() catch |err| {
-                if (!req.quiet) std.debug.print("sendBodyLess error: {s}\n", .{@errorName(err)});
+                if (!req.quiet) std.debug.print("sendBodiless error: {s}\n", .{@errorName(err)});
                 if (attempt >= req.retries) return err;
                 try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
                 continue;
             };
         }
 
-        // Receive response headers
-        var redirect_buf: [8 * 1024]u8 = undefined;
-        var response = http_req.receiveHead(&redirect_buf) catch |err| {
+        // Receive response headers. With `.unhandled` redirects the client
+        // needs no redirect buffer.
+        var response = http_req.receiveHead(&.{}) catch |err| {
             if (!req.quiet) std.debug.print("Response error: {s}\n", .{@errorName(err)});
             if (attempt >= req.retries) return err;
             try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
             continue;
         };
+
+        const status = response.head.status;
+        if (isFollowableRedirect(status)) {
+            if (req.verbose) std.debug.print("< {d} Location: {s}\n", .{ @intFromEnum(status), response.head.location orelse "-" });
+            try redirect.follow(response.head.location);
+            // Same rule as std.http.Client (RFC 9110 §15.4).
+            if (status == .see_other or (method == .POST and (status == .moved_permanently or status == .found))) {
+                method = .GET;
+                body = null;
+            }
+            followed_redirect = true;
+            continue;
+        }
 
         // Retry on transient statuses (408, 429, 500, 502, 503, 504).
         if (isRetryableStatus(response.head.status)) {
@@ -502,7 +634,10 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
 ///  * connection errors,
 ///  * send errors,
 ///  * response-header errors,
-///  * 502/503 status codes.
+///  * retryable status codes (408, 429, 500, 502, 503, 504).
+/// Redirects (301/302/303/307/308, at most `max_redirects`) are followed here,
+/// also before any body byte is written; each hop is signed for its own path
+/// (see `RedirectState`).
 /// Because the status is known before any byte is written to `writer`,
 /// these retries never corrupt the caller's sink.
 /// A failure DURING body streaming is NOT retried and is returned to the caller,
@@ -535,16 +670,22 @@ pub fn executeStream(
 ) !StreamResult {
     _ = req.connect_timeout_s;
 
-    const uri = try std.Uri.parse(req.url);
+    var redirect = RedirectState.init(req);
+    defer redirect.deinit();
 
     var attempt: u32 = 0;
-    while (true) : (attempt += 1) {
-        // Rebuild headers on each attempt so the HMAC timestamp stays current.
-        // hash_buf and timestamp_buf must outlive the headers list (the auth
-        // headers borrow from them).
+    // Redirect hops are not retries: they must not consume the retry budget.
+    var followed_redirect = false;
+    while (true) : (attempt += @intFromBool(!followed_redirect)) {
+        followed_redirect = false;
+
+        // Rebuild headers on each attempt and each redirect hop so the HMAC
+        // covers the current path and timestamp. hash_buf and timestamp_buf
+        // must outlive the headers list (the auth headers borrow from them).
+        const uri = try std.Uri.parse(redirect.url);
         var hash_buf: [40]u8 = undefined;
         var timestamp_buf: [32]u8 = undefined;
-        var headers = try buildHeaders(req.allocator, req.headers, req.credentials, uri, &hash_buf, &timestamp_buf, false);
+        var headers = try buildHeaders(req.allocator, req.headers, redirect.credentials, uri, &hash_buf, &timestamp_buf, false);
         defer headers.deinit(req.allocator);
 
         if (req.verbose) {
@@ -557,6 +698,7 @@ pub fn executeStream(
 
         var http_req = client.request(req.method, uri, .{
             .extra_headers = headers.items,
+            .redirect_behavior = .unhandled,
         }) catch |err| {
             if (attempt < req.retries) {
                 try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
@@ -576,8 +718,7 @@ pub fn executeStream(
             return err;
         };
 
-        var redirect_buf: [8 * 1024]u8 = undefined;
-        var response = http_req.receiveHead(&redirect_buf) catch |err| {
+        var response = http_req.receiveHead(&.{}) catch |err| {
             if (attempt < req.retries) {
                 try sleepForRetry(attempt, req.retry_sleep_s, req.retry_factor, null);
                 continue;
@@ -585,6 +726,15 @@ pub fn executeStream(
             if (!req.quiet) std.debug.print("Response error: {s}\n", .{@errorName(err)});
             return err;
         };
+
+        // Follow redirects before anything reaches `writer`; the redirect
+        // body is discarded by `http_req.deinit()`.
+        if (isFollowableRedirect(response.head.status)) {
+            if (req.verbose) std.debug.print("< {d} Location: {s}\n", .{ @intFromEnum(response.head.status), response.head.location orelse "-" });
+            try redirect.follow(response.head.location);
+            followed_redirect = true;
+            continue;
+        }
 
         // Retry transient statuses (408, 429, 500, 502, 503, 504). This
         // happens before the body is streamed, so `writer` is still
@@ -742,6 +892,7 @@ test "execute: MockClient returns APIResponse" {
         const MockHead = struct {
             status: std.http.Status = .ok,
             content_type: ?[]const u8 = "application/json",
+            location: ?[]const u8 = null,
             content_length: ?u64 = null,
 
             const HeaderIterator = struct {
@@ -1254,11 +1405,10 @@ pub fn touchFile(path: []const u8) !void {
 /// never touched here. Returns an error only on a transport failure, letting the
 /// caller fall back to a full download.
 ///
-/// A plain HEAD cannot be used for this: this std version's `receiveHead`
-/// returns immediately for HEAD requests **without following redirects**
-/// (`std.http.Client`), and openQA 302-redirects `/tests/{id}/asset/...` →
-/// `/assets/...`. A ranged GET follows the redirect exactly like the real
-/// download does.
+/// The probe is a ranged GET, not a HEAD, so it goes through the same
+/// `executeStream` path as the real download: openQA 302-redirects
+/// `/tests/{id}/asset/...` → `/assets/...`, and the redirect is followed and
+/// re-signed exactly as for the download (see `RedirectState`).
 fn isRemoteComplete(url: []const u8, size: u64, opts: RawGetOptions, client: anytype) !bool {
     var range_buf: [64]u8 = undefined;
     const range_val = try std.fmt.bufPrint(&range_buf, "bytes={d}-", .{size});
@@ -1391,7 +1541,8 @@ pub fn openQADownloadToFile(
                     // LengthRequired is a policy violation (strict mode rejects
                     // responses without Content-Length or expected_size). Retrying
                     // would defeat the policy when the fault is transient.
-                    if (err == error.LengthRequired or err == error.UnexpectedHtmlResponse) break :blk .{ .failed = err };
+                    // Redirect errors are permanent: the same chain comes back.
+                    if (err == error.LengthRequired or err == error.UnexpectedHtmlResponse or isRedirectError(err)) break :blk .{ .failed = err };
                     // Local disk write failure (NoSpaceLeft, DiskQuota, ...): the
                     // real file writer stashes the specific error in file_writer.err;
                     // a mock may also return it directly. Retrying would re-download
@@ -1436,7 +1587,8 @@ pub fn openQADownloadToFile(
                     // LengthRequired is a policy violation (strict mode rejects
                     // responses without Content-Length or expected_size). Retrying
                     // would defeat the policy when the fault is transient.
-                    if (err == error.LengthRequired or err == error.UnexpectedHtmlResponse) break :blk .{ .failed = err };
+                    // Redirect errors are permanent: the same chain comes back.
+                    if (err == error.LengthRequired or err == error.UnexpectedHtmlResponse or isRedirectError(err)) break :blk .{ .failed = err };
                     // Local disk write failure (NoSpaceLeft, DiskQuota, ...): the
                     // real file writer stashes the specific error in file_writer.err;
                     // a mock may also return it directly. Retrying would re-download
@@ -1570,6 +1722,7 @@ const TestMockClient = struct {
     const MockHead = struct {
         status: std.http.Status = .ok,
         content_type: ?[]const u8 = "application/json",
+        location: ?[]const u8 = null,
         content_length: ?u64 = null,
 
         const HeaderIterator = struct {
@@ -1911,6 +2064,7 @@ test "execute: hop-by-hop headers are excluded from response_headers" {
         const MockHead = struct {
             status: std.http.Status = .ok,
             content_type: ?[]const u8 = "application/json",
+            location: ?[]const u8 = null,
             content_length: ?u64 = null,
 
             // Emits: Content-Type, Connection, Keep-Alive, Transfer-Encoding,
@@ -2041,6 +2195,7 @@ const SkipProbeHead = struct {
     status: std.http.Status,
     content_length: ?u64 = null,
     content_type: ?[]const u8 = null,
+    location: ?[]const u8 = null,
     const HeaderIterator = struct {
         /// The probe ignores response headers, so yield none.
         fn next(_: *HeaderIterator) ?std.http.Header {
@@ -2059,6 +2214,8 @@ const SkipProbeResponse = struct {
     pub fn deinit(_: *SkipProbeResponse) void {}
     /// Accept a bodiless request (no-op for the probe).
     fn sendBodiless(_: *SkipProbeResponse) !void {}
+    /// Accept a request body (no-op; used by `execute` POST tests).
+    fn sendBodyComplete(_: *SkipProbeResponse, _: []u8) !void {}
     /// Return the canned no-op body reader for this response.
     fn reader(self: *SkipProbeResponse, _: []u8) *SkipProbeReader {
         return &self.rdr;
@@ -2068,6 +2225,249 @@ const SkipProbeResponse = struct {
         return self;
     }
 };
+
+/// Scripted mock for redirect tests. Call `i` is answered with `hops[i]` (the
+/// last entry repeats) and what the client sent is recorded in `calls[i]`, so
+/// tests can check that every hop is signed for its own path.
+const RedirectTestMock = struct {
+    const Self = @This();
+    const max_calls = 16;
+
+    const Hop = struct {
+        status: std.http.Status,
+        location: ?[]const u8 = null,
+    };
+
+    /// What the client sent on one call.
+    const Call = struct {
+        method: std.http.Method = .GET,
+        /// `scheme://host[:port]/path[?query]` of the request.
+        target_buf: [256]u8 = undefined,
+        target_len: usize = 0,
+        microtime_buf: [32]u8 = undefined,
+        microtime_len: usize = 0,
+        /// `X-API-Hash` value, or null when no auth headers were sent.
+        hash: ?[40]u8 = null,
+        /// True when the request disabled the client's own redirect handling.
+        unhandled: bool = false,
+
+        fn target(self: *const Call) []const u8 {
+            return self.target_buf[0..self.target_len];
+        }
+
+        /// Fail unless this call carries an `X-API-Hash` signed for `path_and_query`.
+        fn expectSignedFor(self: *const Call, creds: config.Credentials, path_and_query: []const u8) !void {
+            const hash = self.hash orelse return error.TestExpectedAuthHeaders;
+            var buf: [40]u8 = undefined;
+            const expected = auth.buildAuthHeaders(creds.key, creds.secret, path_and_query, self.microtime_buf[0..self.microtime_len], &buf);
+            try std.testing.expectEqualStrings(expected[2].value, &hash);
+        }
+    };
+
+    hops: []const Hop,
+    calls: [max_calls]Call = undefined,
+    call_count: usize = 0,
+    response: SkipProbeResponse = .{ .head = .{ .status = .ok } },
+
+    /// Record the request, then answer with the next scripted hop.
+    fn request(self: *Self, method: std.http.Method, uri: std.Uri, options: anytype) !*SkipProbeResponse {
+        if (self.call_count >= max_calls) return error.TestUnexpectedResult;
+        var c: Call = .{ .method = method, .unhandled = options.redirect_behavior == .unhandled };
+        var w: std.Io.Writer = .fixed(&c.target_buf);
+        w.print("{f}", .{uri.fmt(.{ .scheme = true, .authority = true, .path = true, .query = true })}) catch {};
+        c.target_len = w.buffered().len;
+        for (options.extra_headers) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "X-API-Hash")) c.hash = h.value[0..40].*;
+            if (std.ascii.eqlIgnoreCase(h.name, "X-API-Microtime")) {
+                @memcpy(c.microtime_buf[0..h.value.len], h.value);
+                c.microtime_len = h.value.len;
+            }
+        }
+        self.calls[self.call_count] = c;
+        const hop = self.hops[@min(self.call_count, self.hops.len - 1)];
+        self.call_count += 1;
+        self.response = .{ .head = .{ .status = hop.status, .location = hop.location } };
+        return &self.response;
+    }
+};
+
+/// Credentials shared by the redirect tests.
+const redirect_test_creds = config.Credentials{
+    .allocator = std.testing.allocator,
+    .key = "FAKEKEY",
+    .secret = "FAKESECRET",
+};
+
+/// Build a streaming GET for the redirect tests.
+fn redirectTestRequest(url: []const u8) Request {
+    return .{
+        .allocator = std.testing.allocator,
+        .method = .GET,
+        .url = url,
+        .headers = &.{},
+        .body = null,
+        .credentials = redirect_test_creds,
+        .retries = 0,
+        .quiet = true,
+        .retry_sleep_s = 0,
+        .allow_lengthless = true,
+    };
+}
+
+test "executeStream: 302 hop is re-signed for the redirect target" {
+    const testing = std.testing;
+    var mock: RedirectTestMock = .{ .hops = &.{
+        .{ .status = .found, .location = "/assets/iso/x.iso" },
+        .{ .status = .ok },
+    } };
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+
+    const res = try executeStream(redirectTestRequest("http://localhost/tests/1/asset/iso/x.iso"), &mock, &sink.writer, null);
+
+    try testing.expectEqual(std.http.Status.ok, res.status);
+    try testing.expectEqual(@as(usize, 2), mock.call_count);
+    try testing.expect(mock.calls[0].unhandled and mock.calls[1].unhandled);
+    try testing.expectEqualStrings("http://localhost/tests/1/asset/iso/x.iso", mock.calls[0].target());
+    try mock.calls[0].expectSignedFor(redirect_test_creds, "/tests/1/asset/iso/x.iso");
+    try testing.expectEqualStrings("http://localhost/assets/iso/x.iso", mock.calls[1].target());
+    try mock.calls[1].expectSignedFor(redirect_test_creds, "/assets/iso/x.iso");
+}
+
+test "executeStream: cross-origin redirect drops credentials" {
+    const testing = std.testing;
+    const locations = [_][]const u8{
+        "https://mirror.example.com/assets/iso/x.iso", // other host and scheme
+        "http://localhost:8080/assets/iso/x.iso", // other port
+    };
+    for (locations) |loc| {
+        var mock: RedirectTestMock = .{
+            .hops = &.{
+                .{ .status = .found, .location = loc },
+                .{ .status = .found, .location = "http://localhost/assets/iso/x.iso" }, // back to the origin
+                .{ .status = .ok },
+            },
+        };
+        var sink: std.Io.Writer.Discarding = .init(&.{});
+
+        _ = try executeStream(redirectTestRequest("http://localhost/tests/1/asset/iso/x.iso"), &mock, &sink.writer, null);
+
+        try testing.expectEqual(@as(usize, 3), mock.call_count);
+        try testing.expect(mock.calls[0].hash != null);
+        try testing.expectEqualStrings(loc, mock.calls[1].target());
+        try testing.expect(mock.calls[1].hash == null);
+        // Once dropped, credentials stay dropped for the rest of the chain.
+        try testing.expect(mock.calls[2].hash == null);
+    }
+}
+
+test "executeStream: more than max_redirects hops returns TooManyHttpRedirects" {
+    const testing = std.testing;
+    var mock: RedirectTestMock = .{ .hops = &.{.{ .status = .found, .location = "/loop" }} };
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+
+    try testing.expectError(error.TooManyHttpRedirects, executeStream(redirectTestRequest("http://localhost/start"), &mock, &sink.writer, null));
+    try testing.expectEqual(@as(usize, max_redirects + 1), mock.call_count);
+}
+
+test "executeStream: redirect without Location returns HttpRedirectLocationMissing" {
+    var mock: RedirectTestMock = .{ .hops = &.{.{ .status = .found }} };
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+
+    try std.testing.expectError(error.HttpRedirectLocationMissing, executeStream(redirectTestRequest("http://localhost/start"), &mock, &sink.writer, null));
+}
+
+test "executeStream: redirect hops do not consume the retry budget" {
+    const testing = std.testing;
+    // One retry is allowed. The redirect must not use it up, so the 503 on
+    // the target is still retried and the request succeeds.
+    var mock: RedirectTestMock = .{ .hops = &.{
+        .{ .status = .found, .location = "/assets/iso/x.iso" },
+        .{ .status = .service_unavailable },
+        .{ .status = .ok },
+    } };
+    var req = redirectTestRequest("http://localhost/tests/1/asset/iso/x.iso");
+    req.retries = 1;
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+
+    const res = try executeStream(req, &mock, &sink.writer, null);
+
+    try testing.expectEqual(std.http.Status.ok, res.status);
+    try testing.expectEqual(@as(usize, 3), mock.call_count);
+    // The retry goes to the redirect target, freshly signed.
+    try testing.expectEqualStrings("http://localhost/assets/iso/x.iso", mock.calls[2].target());
+    try mock.calls[2].expectSignedFor(redirect_test_creds, "/assets/iso/x.iso");
+}
+
+test "execute: 302 hop is re-signed for the redirect target, query included" {
+    const testing = std.testing;
+    var mock: RedirectTestMock = .{ .hops = &.{
+        .{ .status = .found, .location = "http://localhost/api/v1/jobs/overview?state=done" },
+        .{ .status = .ok },
+    } };
+    var req = redirectTestRequest("http://localhost/api/v1/jobs?state=done");
+    req.allow_lengthless = false;
+
+    const resp = try execute(req, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqual(std.http.Status.ok, resp.status);
+    try testing.expectEqual(@as(usize, 2), mock.call_count);
+    try testing.expect(mock.calls[0].unhandled and mock.calls[1].unhandled);
+    try mock.calls[0].expectSignedFor(redirect_test_creds, "/api/v1/jobs?state=done");
+    try mock.calls[1].expectSignedFor(redirect_test_creds, "/api/v1/jobs/overview?state=done");
+}
+
+test "execute: 303 turns a POST into a bodiless GET" {
+    const testing = std.testing;
+    var mock: RedirectTestMock = .{ .hops = &.{
+        .{ .status = .see_other, .location = "/api/v1/jobs/1" },
+        .{ .status = .ok },
+    } };
+    var req = redirectTestRequest("http://localhost/api/v1/jobs");
+    req.method = .POST;
+    req.body = "a=b";
+
+    const resp = try execute(req, &mock);
+    defer resp.deinit();
+
+    try testing.expectEqual(std.http.Method.POST, mock.calls[0].method);
+    try testing.expectEqual(std.http.Method.GET, mock.calls[1].method);
+    try mock.calls[1].expectSignedFor(redirect_test_creds, "/api/v1/jobs/1");
+}
+
+test "RedirectState.follow: resolves relative, absolute-path and absolute locations" {
+    const testing = std.testing;
+    var state = RedirectState.init(redirectTestRequest("http://localhost/tests/1/asset/iso/a.iso?x=1"));
+    defer state.deinit();
+
+    try state.follow("b.iso"); // relative: merged with the base directory
+    try testing.expectEqualStrings("http://localhost/tests/1/asset/iso/b.iso", state.url);
+    try state.follow("/assets/iso/../hdd/c.qcow2#frag"); // dot segments removed, fragment dropped
+    try testing.expectEqualStrings("http://localhost/assets/hdd/c.qcow2", state.url);
+    try testing.expect(state.credentials != null);
+    try state.follow("HTTP://LOCALHOST:80/assets/d.iso"); // same origin, spelled differently
+    try testing.expectEqualStrings("HTTP://LOCALHOST:80/assets/d.iso", state.url);
+    try testing.expect(state.credentials != null);
+    try testing.expectError(error.TooManyHttpRedirects, state.follow("/e.iso"));
+}
+
+test "openQADownloadToFile: redirect errors are not retried" {
+    const testing = std.testing;
+    var mock: RedirectTestMock = .{ .hops = &.{.{ .status = .found, .location = "/loop" }} };
+    const dest_path = "temp_redirect_loop_test.bin";
+    defer std.fs.cwd().deleteFile(dest_path) catch {};
+
+    try testing.expectError(error.TooManyHttpRedirects, openQADownloadToFile("http://localhost", "/tests/1/asset/iso/x.iso", dest_path, .{
+        .allocator = testing.allocator,
+        .credentials = null,
+        .quiet = true,
+        .retries = 2,
+        .retry_sleep_s = 0,
+    }, &mock));
+    // One chain only (not one per retry), and no partial file left behind.
+    try testing.expectEqual(@as(usize, max_redirects + 1), mock.call_count);
+    try testing.expectError(error.FileNotFound, std.fs.cwd().access(dest_path, .{}));
+}
 
 test "openQADownloadToFile: skips re-download when source replies 416 directly" {
     const testing = std.testing;
@@ -2123,24 +2523,10 @@ test "openQADownloadToFile: skip probe follows the 302 redirect via a ranged GET
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    // Reproduce openQA's redirecting asset route AND this std version's rule that
-    // a redirect is followed for GET but NOT for HEAD:
-    //   HEAD → caller sees the bare 302 Found (not followed).
-    //   GET  → the client follows the 302, caller sees the final 416.
-    // The skip must use a GET so it reaches the 416; reverting to a HEAD would
-    // see the 302, fail the skip, and overwrite the sentinel (which this test
-    // guards against).
-    const RedirectMock = struct {
-        const Self = @This();
-        last_method: std.http.Method = .GET,
-        response: SkipProbeResponse = .{ .head = .{ .status = .found } },
-        pub fn request(self: *Self, method: std.http.Method, _: std.Uri, _: anytype) !*SkipProbeResponse {
-            self.last_method = method;
-            const status: std.http.Status = if (method == .HEAD) .found else .range_not_satisfiable;
-            self.response = .{ .head = .{ .status = status } };
-            return &self.response;
-        }
-    };
+    // openQA's asset route: the ranged probe GET gets a 302 to /assets/...,
+    // and only the redirect target answers 416. The probe must follow the
+    // redirect (re-signed) to see the 416; otherwise the skip fails and the
+    // sentinel is overwritten (which this test guards against).
 
     const dest_path = "temp_skip_complete_redirect_test.bin";
     defer std.fs.cwd().deleteFile(dest_path) catch {};
@@ -2154,17 +2540,23 @@ test "openQADownloadToFile: skip probe follows the 302 redirect via a ranged GET
         try f.updateTimes(old_ns, old_ns);
     }
 
-    var mock: RedirectMock = .{};
+    var mock: RedirectTestMock = .{ .hops = &.{
+        .{ .status = .found, .location = "/assets/hdd/x.qcow2" },
+        .{ .status = .range_not_satisfiable },
+    } };
     const res = try openQADownloadToFile("http://localhost", "/tests/1/asset/hdd/x.qcow2", dest_path, .{
         .allocator = allocator,
-        .credentials = null,
+        .credentials = redirect_test_creds,
         .quiet = true,
         .retries = 0,
     }, &mock);
 
     try testing.expect(res.status == .ok);
-    // The probe must be a GET (so redirects are followed), never a HEAD.
-    try testing.expect(mock.last_method == .GET);
+    // The probe is a GET that followed the redirect, signed for the target.
+    try testing.expectEqual(@as(usize, 2), mock.call_count);
+    try testing.expectEqual(std.http.Method.GET, mock.calls[0].method);
+    try testing.expectEqualStrings("http://localhost/assets/hdd/x.qcow2", mock.calls[1].target());
+    try mock.calls[1].expectSignedFor(redirect_test_creds, "/assets/hdd/x.qcow2");
 
     // Sentinel content preserved: the skip engaged despite the redirect.
     var buf: [64]u8 = undefined;
@@ -2218,6 +2610,7 @@ test "executeStream: returns error.HttpTransferTruncated on short read" {
         const MockHead = struct {
             status: std.http.Status = .ok,
             content_type: ?[]const u8 = "application/json",
+            location: ?[]const u8 = null,
             content_length: ?u64 = 10, // Exceeds body length (2)
 
             const HeaderIterator = struct {
@@ -2293,6 +2686,7 @@ test "openQADownloadToFile: retries on error.HttpTransferTruncated and deletes p
         const MockHead = struct {
             status: std.http.Status = .ok,
             content_type: ?[]const u8 = "application/json",
+            location: ?[]const u8 = null,
             content_length: ?u64 = 10, // Exceeds body length (2)
 
             const HeaderIterator = struct {
@@ -2377,6 +2771,7 @@ test "openQADownloadToFile: NoSpaceLeft is terminal (no retry)" {
             status: std.http.Status = .ok,
             content_length: ?u64 = 100,
             content_type: ?[]const u8 = "application/octet-stream",
+            location: ?[]const u8 = null,
 
             const HeaderIterator = struct {
                 done: bool = false,
@@ -2453,6 +2848,7 @@ test "executeStream: fails with LengthRequired if lengthless and not allowed" {
         const MockHead = struct {
             status: std.http.Status = .ok,
             content_type: ?[]const u8 = "application/json",
+            location: ?[]const u8 = null,
             content_length: ?u64 = null, // Missing Content-Length
 
             const HeaderIterator = struct {
@@ -2522,6 +2918,7 @@ test "executeStream: succeeds when lengthless and allowed" {
         const MockHead = struct {
             status: std.http.Status = .ok,
             content_type: ?[]const u8 = "application/json",
+            location: ?[]const u8 = null,
             content_length: ?u64 = null,
 
             const HeaderIterator = struct {
@@ -2592,6 +2989,7 @@ test "executeStream: fails with HttpTransferTruncated when bytes written < expec
             status: std.http.Status = .ok,
             content_length: ?u64 = null,
             content_type: ?[]const u8 = null,
+            location: ?[]const u8 = null,
 
             const HeaderIterator = struct {
                 pub fn next(_: *HeaderIterator) ?std.http.Header {
@@ -2658,6 +3056,7 @@ test "executeStream: lengthless 404 response with expected_size set returns not_
             status: std.http.Status = .not_found,
             content_length: ?u64 = null,
             content_type: ?[]const u8 = null,
+            location: ?[]const u8 = null,
 
             const HeaderIterator = struct {
                 pub fn next(_: *HeaderIterator) ?std.http.Header {
@@ -3061,6 +3460,7 @@ test "executeStream: reject_html returns error.UnexpectedHtmlResponse on text/ht
             status: std.http.Status = .ok,
             content_length: ?u64 = 100,
             content_type: ?[]const u8 = "text/html; charset=utf-8",
+            location: ?[]const u8 = null,
 
             const HeaderIterator = struct {
                 pub fn next(_: *HeaderIterator) ?std.http.Header {

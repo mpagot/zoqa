@@ -153,8 +153,9 @@ scheme, matching Perl.
   shell-out-to-curl architecture: it needs the final URL as a string to
   compose the second curl command line. Both requests carry auth headers
   and are subject to `--retry`.
-- **Zig:** follows redirects in-process (`std.http.Client`) and issues a
-  **single** ranged GET per asset. No separate HEAD is needed.
+- **Zig:** follows redirects in-process and issues a **single** ranged GET
+  per asset. No separate HEAD is needed. Redirects are handled by zoqa, not
+  by `std.http.Client` (see the next section).
 - **Net effect:** the downloaded file is byte-identical (same MD5); the
   difference is request count only (Perl: 2, Zig: 1 per asset). This is
   observable in rate-limit / fault-proxy testing (e.g. GAT-26: Perl gets
@@ -162,6 +163,27 @@ scheme, matching Perl.
   divergence — the user-visible result (the file on disk) is the same.
 - **Source:** `CloneJob.pm:196-204`; SPEC §18.18 step 4 note; e2e GAT-26
   (`tests_gatekeeper.sh`).
+
+### Redirect signing — HMAC per hop, credentials kept on the same origin only
+- **Perl:** resolves the final URL with `curl --head --location`, then calls
+  `_auth_args` again on the **resolved** URL, so the GET is signed for
+  `/assets/...`. It follows at most 3 redirects (`max_redirects(3)`,
+  CloneJob.pm:286,301). The resolved URL is signed with the `--from` host's
+  credentials, even when it is on another host.
+- **Zig:** `execute()` and `executeStream()` disable `std.http.Client`'s own
+  redirect handling (it re-sends the first hop's `X-API-Hash`). They follow at
+  most 3 redirects (301/302/303/307/308) themselves and sign each hop for its
+  own path and query. When a hop goes to another scheme, host or port, the
+  auth headers are dropped for the rest of the chain. A 303, or a 301/302 that
+  answers a POST, becomes a bodiless GET. Redirect errors
+  (`TooManyHttpRedirects`, missing or invalid `Location`) are not retried.
+- **Net effect:** same result as Perl for openQA's same-host
+  `/tests/<id>/asset/...` → `/assets/...` redirect, also when the server sets
+  `[auth] require_for_assets = 1` (OSD). Before this fix Zig got 403 there.
+  Zig never sends the API key to another host (deliberate divergence).
+- **Source:** `src/http_client.zig` (`RedirectState`); e2e AUT-8
+  (`tests_auth.sh`), GAT-20 (`tests_gatekeeper.sh`), and all faultproxy asset
+  tests (the proxy now passes 3xx responses to the client).
 
 ### Omission of deprecated `--skip-checks` option
 - **Perl:** `openqa-clone-job` accepts `--skip-checks`, but marks it as a deprecated no-op in `--help` ("Deprecated option. The logic was inverted, so currently the check is skipped by default. If you were using it, just remove it and the behavior will remain the same.").
