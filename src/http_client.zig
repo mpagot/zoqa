@@ -1,32 +1,15 @@
-//! Functions that send HTTP requests to the openQA API.
+//! HTTP client for the openQA API.
 //!
-//! ## Streaming and retry architecture
-//!
-//! Two public streaming functions exist, split by sink ownership:
-//!
-//! - `executeStream` streams into a caller-supplied `*std.Io.Writer`. It retries
-//!   only failures that occur BEFORE the body stream begins (connection errors,
-//!   send errors, header errors, 502/503). It cannot retry a mid-stream failure
-//!   because a generic writer has no way to rewind or truncate bytes already
-//!   committed to the sink; re-streaming would concatenate a second copy onto
-//!   the first.
-//!
-//! - `openQADownloadToFile` owns its sink (a local file). It is the sole retry
-//!   authority for that sink: it re-creates (truncates) the file between
-//!   attempts, which is what makes mid-stream retry safe. It calls
-//!   `executeStream` with `retries = 0` so the inner loop does not double-retry.
-//!   This is the one place in this module that touches `std.fs`, by design.
-//!
-//! - `openQARawGet` is a thin wrapper over `executeStream` for callers that
-//!   stream into a generic writer and do not need file-ownership semantics.
-//!   It passes the caller's retry policy through to `executeStream`.
-//!
-//! `sleepForRetry` is a private implementation detail shared by `execute`,
-//! `executeStream`, and `openQADownloadToFile`. It is not exported.
+//! Provides buffered (`execute`, `openQAReq`) and streaming
+//! (`executeStream`, `openQARawGet`, `openQADownloadToFile`) request
+//! functions with HMAC-SHA1 authentication, retry with exponential
+//! backoff, and gzip decompression. The HTTP client is injected
+//! (`client: anytype`) so tests and fuzz harnesses can substitute a mock.
 
 const std = @import("std");
 const config = @import("config.zig");
 const auth = @import("auth.zig");
+const fs_utils = @import("fs_utils.zig");
 
 /// A single HTTP response header name/value pair.
 /// Both fields are heap-allocated and owned by the `APIResponse`
@@ -81,7 +64,7 @@ pub const APIResponse = struct {
 ///
 /// `execute()` does not own any of the slices stored here; all borrowed
 /// memory must remain valid for the duration of the call.
-pub const Request = struct {
+const Request = struct {
     /// General-purpose allocator used for all internal allocations (header list,
     /// body buffer, HMAC scratch buffers). The returned `APIResponse` is also allocated
     /// with this allocator and must be freed by the caller via `APIResponse.deinit()`.
@@ -384,7 +367,7 @@ const RedirectState = struct {
 /// Errors: connection or send failures (after exhausting retries) are returned
 /// as errors rather than as an `APIResponse` with a non-2xx status, so callers
 /// can distinguish network failures from HTTP-level failures.
-pub fn execute(req: Request, client: anytype) !APIResponse {
+fn execute(req: Request, client: anytype) !APIResponse {
     // connect_timeout_s is passed in from the caller (resolved from env in main).
     // TODO: wire req.connect_timeout_s into the HTTP client once std.http.Client
     // exposes per-connection timeout support.
@@ -623,46 +606,88 @@ pub fn execute(req: Request, client: anytype) !APIResponse {
     }
 }
 
-/// Perform an HTTP request and stream the response body directly to `writer`.
+/// Performs an HTTP request and streams the response body directly into `writer`.
 ///
-/// Unlike `execute()`, this function does not buffer the body in memory:
-/// it is intended for large file downloads (e.g. the `archive` subcommand and
-/// clone-job asset downloads) where buffering would use too much memory.
+/// Designed for large downloads (such as archive artifacts and clone-job assets)
+/// where buffering the full payload in memory would be prohibitive.
 ///
-/// Retries (up to `req.retries`) are attempted only for failures that occur
-/// BEFORE the body stream begins:
-///  * connection errors,
-///  * send errors,
-///  * response-header errors,
-///  * retryable status codes (408, 429, 500, 502, 503, 504).
-/// Redirects (301/302/303/307/308, at most `max_redirects`) are followed here,
-/// also before any body byte is written; each hop is signed for its own path
-/// (see `RedirectState`).
-/// Because the status is known before any byte is written to `writer`,
-/// these retries never corrupt the caller's sink.
-/// A failure DURING body streaming is NOT retried and is returned to the caller,
-/// because the generic `writer` cannot be rewound to discard partially-written bytes.
-/// The caller, which owns the sink (e.g. a file it can re-create/truncate),
-/// must handle that case if it wants to retry.
+/// ## The Sink Pollution Contract (Non-2xx Responses)
 ///
-/// If `req.size_limit` is set and the `Content-Length` response header is
-/// present and exceeds the limit, `error.FileTooLarge` is returned before
-/// any body bytes are written to `writer`.
+/// Streaming into `writer` is **unconditional** once pre-stream gates pass.
+/// If the server returns a non-2xx status code that is not retried (such as
+/// a 404, or an exhausted 500/502/503), `executeStream` **still streams the
+/// response body into `writer`**. In these cases, the sink will contain an
+/// error payload (such as an HTML/JSON error document) rather than the
+/// expected asset.
+///
+/// The caller owns the sink and **must inspect `result.status`**:
+/// - If `result.status` indicates failure, the caller is responsible for
+///   truncating, unlinking, or discarding the polluted sink.
+/// - Higher-level helpers like `openQADownloadToFile` handle this by
+///   deleting the destination file on terminal non-2xx outcomes.
+///
+/// ## Retry Architecture & Pre-Stream Gates
+///
+/// Retries and validations are strictly partitioned by **sink ownership**:
+///
+/// 1. **Pre-stream retries (internal):**
+///    Failures occurring before any bytes reach `writer` are retried up to
+///    `req.retries`. These include:
+///    - Connection and send errors (`client.request`, `sendBodiless`).
+///    - Header receive/parse errors (`receiveHead`).
+///    - Retryable HTTP statuses: 408, 429, 500, 502, 503, 504.
+///    If the retry budget is exhausted on a retryable status, the request falls
+///    through and its error body is streamed directly into `writer`.
+///
+/// 2. **Pre-stream validation gates:**
+///    Before body transfer begins, the response must pass several checks:
+///    - Redirects (301, 302, 303, 307, 308) are followed up to `max_redirects`
+///      and re-signed per hop.
+///    - If `req.reject_html` is set, HTML responses on 200 OK are rejected with
+///      `error.UnexpectedHtmlResponse`.
+///    - If `req.size_limit` is set and `Content-Length` exceeds it,
+///      `error.FileTooLarge` is returned before writing to `writer`.
+///    - `error.LengthRequired` is enforced on `.ok` and `.partial_content` when
+///      neither `Content-Length` nor `req.expected_size` is present (unless
+///      `req.allow_lengthless` is true).
+///
+/// 3. **Mid-stream failures & integrity check (caller responsibility):**
+///    Once `streamRemaining` begins writing to `writer`, no retries are attempted.
+///    Because a generic `*std.Io.Writer` cannot be rewound or truncated, retrying
+///    mid-stream would corrupt output by appending duplicate chunks. Mid-stream
+///    read/write errors are returned immediately.
+///    After streaming finishes, if fewer bytes were transferred than advertised by
+///    `Content-Length` (or `req.expected_size` on 200/206), `error.HttpTransferTruncated`
+///    is returned.
+///
+/// 4. **Interaction with `openQADownloadToFile`:**
+///    `openQADownloadToFile` owns its sink (a local file). It acts as the outer
+///    retry authority, safely re-creating/truncating the file between attempts
+///    and unlinking on terminal failure. It invokes `executeStream` with
+///    `retries = 0` to prevent redundant nested retries.
 ///
 /// Parameters:
-///   - req: the request to perform (see `Request`).
-///   - client: an HTTP client compatible with `std.http.Client.request`.
-///   - writer: sink the response body is streamed into.
-///   - content_length_out: optional out-param; when non-null it receives the
-///     `Content-Length` header value (or null if absent) before streaming.
+///   - req: Request configuration (headers, retry budget, size limits).
+///   - client: HTTP client compatible with `std.http.Client.request`.
+///   - writer: Output sink receiving the streamed body (asset payload or error page).
+///   - content_length_out: Optional out-parameter populated with the advertised
+///     `Content-Length` (or `null` if absent) before streaming begins.
 ///
-/// Returns: a `StreamResult` with the HTTP status and content length. The caller
-/// is responsible for checking `result.status` and handling non-2xx responses.
+/// Returns:
+///   A `StreamResult` containing `status`, `content_length`, and optional `retry_after_s`.
+///   The caller **must** inspect `result.status` to determine whether the written bytes
+///   represent valid data or an error document.
 ///
-/// Errors: transport failures (connection/send/receive) surviving all retries,
-/// `error.FileTooLarge` when the advertised size exceeds `req.size_limit`, and
-/// any write error from `writer` while streaming the body.
-pub fn executeStream(
+/// Errors:
+///   - Transport errors surviving all retry attempts prior to streaming.
+///   - Redirect errors: `error.TooManyHttpRedirects`, `error.HttpRedirectLocationMissing`,
+///     or `error.HttpRedirectLocationInvalid`.
+///   - `error.UnexpectedHtmlResponse` if `req.reject_html` rejects an HTML response on 200.
+///   - `error.FileTooLarge` if advertised `Content-Length` exceeds `req.size_limit`.
+///   - `error.LengthRequired` if required length headers are absent on 200/206.
+///   - `error.HttpTransferTruncated` if fewer bytes were read than expected.
+///   - Any read error from the response stream or write error from `writer`.
+fn executeStream(
     req: Request,
     client: anytype,
     writer: *std.Io.Writer,
@@ -746,9 +771,11 @@ pub fn executeStream(
         }
 
         if (req.reject_html and response.head.status == .ok) {
-            if (response.head.content_type) |ct| {
-                if (std.ascii.startsWithIgnoreCase(ct, "text/html")) {
-                    return error.UnexpectedHtmlResponse;
+            if (@hasField(@TypeOf(response.head), "content_type")) {
+                if (response.head.content_type) |ct| {
+                    if (std.ascii.startsWithIgnoreCase(ct, "text/html")) {
+                        return error.UnexpectedHtmlResponse;
+                    }
                 }
             }
         }
@@ -1373,24 +1400,6 @@ pub fn openQARawGet(
     return executeStream(req, client, writer, content_length_out);
 }
 
-/// Update a file's access and modification times to the current system time.
-///
-/// Called after a successful download or a skip-if-complete to delay openQA's
-/// asset-cleanup cron. On a fresh write the filesystem already stamps
-/// mtime to now, so the touch is only *observable* on the skip path.
-///
-/// Parameters:
-///   - path: filesystem path of the file to touch (relative to the cwd).
-///
-/// Errors: returns an error if the file cannot be opened for writing or its
-/// timestamps cannot be updated.
-pub fn touchFile(path: []const u8) !void {
-    const file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
-    defer file.close();
-    const now_ns: i128 = std.time.nanoTimestamp();
-    try file.updateTimes(now_ns, now_ns);
-}
-
 /// Probe whether an on-disk file is already the full asset.
 ///
 /// Return `true` when the source already considers a `size`-byte local file to
@@ -1439,6 +1448,11 @@ fn isRemoteComplete(url: []const u8, size: u64, opts: RawGetOptions, client: any
 ///   3. Transient failures (connection, 5xx, mid-stream reset) are retried
 ///      with backoff; non-5xx statuses are terminal.
 ///
+/// Retry architecture: see `executeStream`. This function is the file-owning
+/// variant that adds mid-stream retry by re-creating the file between
+/// attempts. It calls `executeStream` with `retries = 0` to avoid
+/// double-retrying.
+///
 /// Parameters:
 ///   - host: bare hostname or full base URL of the source openQA instance.
 ///   - absolute_path: request path of the asset; must start with "/".
@@ -1453,12 +1467,20 @@ fn isRemoteComplete(url: []const u8, size: u64, opts: RawGetOptions, client: any
 /// Errors: host-resolution/allocation failures, filesystem errors creating or
 /// touching the destination, and transport errors surviving all retries. On any
 /// error no partial destination file is left behind.
+///
+/// Parameters:
+///   - backend: a file backend providing `stat`, `create`, and `delete`
+///     methods (see `fs_utils.RealFileBackend`). `create` returns a
+///     `FileSink` (see `fs_utils.RealFileSink`) that the state machine
+///     uses for the data path. Production code passes
+///     `fs_utils.RealFileBackend`; unit tests pass a mock.
 pub fn openQADownloadToFile(
     host: []const u8,
     absolute_path: []const u8, // must start with "/"
     dest_path: []const u8,
     opts: RawGetOptions,
     client: anytype,
+    backend: anytype,
 ) !StreamResult {
     const host_res = try config.resolveHost(opts.allocator, false, false, false, host);
     defer if (host_res.allocated) opts.allocator.free(host_res.url);
@@ -1473,22 +1495,24 @@ pub fn openQADownloadToFile(
     // This avoids re-fetching large already-present assets (multi-GB HDD images)
     // on every re-clone. The check is gated on the file existing with size > 0,
     // so fresh downloads (empty destination) take the normal streaming path below.
-    if (std.fs.cwd().statFile(dest_path)) |st| {
-        if (st.size > 0) {
-            if (isRemoteComplete(url, st.size, opts, client)) |complete| {
-                if (complete) {
-                    // Already complete on disk: skip the body transfer and touch
-                    // mtime to delay openQA's asset-cleanup cron.
-                    try touchFile(dest_path);
-                    if (opts.progress) |prog| {
-                        var r = ProgressTerminalRenderer.init(prog.label, prog.out);
-                        try r.renderSkip();
+    if (backend.stat(dest_path)) |maybe_size| {
+        if (maybe_size) |size| {
+            if (size > 0) {
+                if (isRemoteComplete(url, size, opts, client)) |complete| {
+                    if (complete) {
+                        // Already complete on disk: skip the body transfer and touch
+                        // mtime to delay openQA's asset-cleanup cron.
+                        try backend.touch(dest_path);
+                        if (opts.progress) |prog| {
+                            var r = ProgressTerminalRenderer.init(prog.label, prog.out);
+                            try r.renderSkip();
+                        }
+                        return StreamResult{ .status = .ok, .content_length = size };
                     }
-                    return StreamResult{ .status = .ok, .content_length = st.size };
+                } else |_| {
+                    // Probe failed (transport error): fall through to a full
+                    // download, which is authoritative on its own.
                 }
-            } else |_| {
-                // Probe failed (transport error): fall through to a full
-                // download, which is authoritative on its own.
             }
         }
     } else |_| {
@@ -1523,18 +1547,18 @@ pub fn openQADownloadToFile(
     var attempt: u32 = 0;
     while (true) : (attempt += 1) {
         const outcome: Outcome = blk: {
-            const file = std.fs.cwd().createFile(dest_path, .{}) catch |err| break :blk .{ .failed = err };
-            defer file.close();
+            var sink = backend.create(dest_path) catch |err| break :blk .{ .failed = err };
+            defer sink.close();
 
             var file_buf: [65536]u8 = undefined;
-            var file_writer = file.writer(&file_buf);
+            const w = sink.writer(&file_buf);
 
             var cl: ?u64 = null;
             const outcome_inner: Outcome = if (opts.progress) |prog| with_progress: {
                 var meter = ProgressMeter.init(opts.expected_size);
                 var renderer = ProgressTerminalRenderer.init(prog.label, prog.out);
                 var tap_buf: [65536]u8 = undefined;
-                var tap = ProgressStreamTap.init(&file_writer.interface, &meter, &renderer, &tap_buf);
+                var tap = ProgressStreamTap.init(w, &meter, &renderer, &tap_buf);
 
                 const res = executeStream(req, client, &tap.w, &cl) catch |err| {
                     renderer.abort() catch {};
@@ -1544,10 +1568,10 @@ pub fn openQADownloadToFile(
                     // Redirect errors are permanent: the same chain comes back.
                     if (err == error.LengthRequired or err == error.UnexpectedHtmlResponse or isRedirectError(err)) break :blk .{ .failed = err };
                     // Local disk write failure (NoSpaceLeft, DiskQuota, ...): the
-                    // real file writer stashes the specific error in file_writer.err;
-                    // a mock may also return it directly. Retrying would re-download
-                    // the whole asset against a filesystem that cannot store it.
-                    if (file_writer.err) |disk_err| break :blk .{ .failed = disk_err };
+                    // real file writer stashes the specific error; the sink exposes
+                    // it via writeError(). Retrying would re-download the whole
+                    // asset against a filesystem that cannot store it.
+                    if (sink.writeError()) |disk_err| break :blk .{ .failed = disk_err };
                     if (err == error.NoSpaceLeft or err == error.DiskQuota or err == error.ReadOnlyFilesystem or err == error.WriteFailed) {
                         break :blk .{ .failed = err };
                     }
@@ -1561,13 +1585,13 @@ pub fn openQADownloadToFile(
                         renderer.abort() catch {};
                         break :blk .{ .failed = err };
                     };
-                    file_writer.interface.flush() catch |err| {
+                    w.flush() catch |err| {
                         renderer.abort() catch {};
                         break :blk .{ .failed = err };
                     };
                     // Update file timestamps to current system time to delay openQA's asset-cleanup cron.
                     const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
-                    file.updateTimes(now_ns, now_ns) catch |err| {
+                    sink.updateTimes(now_ns, now_ns) catch |err| {
                         renderer.abort() catch {};
                         break :blk .{ .failed = err };
                     };
@@ -1583,17 +1607,17 @@ pub fn openQADownloadToFile(
                 }
                 break :with_progress .{ .terminal = res };
             } else no_progress: {
-                const res = executeStream(req, client, &file_writer.interface, &cl) catch |err| {
+                const res = executeStream(req, client, w, &cl) catch |err| {
                     // LengthRequired is a policy violation (strict mode rejects
                     // responses without Content-Length or expected_size). Retrying
                     // would defeat the policy when the fault is transient.
                     // Redirect errors are permanent: the same chain comes back.
                     if (err == error.LengthRequired or err == error.UnexpectedHtmlResponse or isRedirectError(err)) break :blk .{ .failed = err };
                     // Local disk write failure (NoSpaceLeft, DiskQuota, ...): the
-                    // real file writer stashes the specific error in file_writer.err;
-                    // a mock may also return it directly. Retrying would re-download
-                    // the whole asset against a filesystem that cannot store it.
-                    if (file_writer.err) |disk_err| break :blk .{ .failed = disk_err };
+                    // real file writer stashes the specific error; the sink exposes
+                    // it via writeError(). Retrying would re-download the whole
+                    // asset against a filesystem that cannot store it.
+                    if (sink.writeError()) |disk_err| break :blk .{ .failed = disk_err };
                     if (err == error.NoSpaceLeft or err == error.DiskQuota or err == error.ReadOnlyFilesystem or err == error.WriteFailed) {
                         break :blk .{ .failed = err };
                     }
@@ -1603,10 +1627,10 @@ pub fn openQADownloadToFile(
 
                 if (res.status == .ok) {
                     // Flush before the deferred close so the file is complete on disk.
-                    file_writer.interface.flush() catch |err| break :blk .{ .failed = err };
+                    w.flush() catch |err| break :blk .{ .failed = err };
                     // Update file timestamps to current system time to delay openQA's asset-cleanup cron.
                     const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
-                    file.updateTimes(now_ns, now_ns) catch |err| break :blk .{ .failed = err };
+                    sink.updateTimes(now_ns, now_ns) catch |err| break :blk .{ .failed = err };
                     break :no_progress .{ .done = res };
                 }
 
@@ -1623,15 +1647,15 @@ pub fn openQADownloadToFile(
         switch (outcome) {
             .done => |result| return result,
             .terminal => |result| {
-                std.fs.cwd().deleteFile(dest_path) catch {};
+                backend.delete(dest_path);
                 return result;
             },
             .failed => |err| {
-                std.fs.cwd().deleteFile(dest_path) catch {};
+                backend.delete(dest_path);
                 return err;
             },
             .retry => |ra| {
-                std.fs.cwd().deleteFile(dest_path) catch {};
+                backend.delete(dest_path);
                 try sleepForRetry(attempt, opts.retry_sleep_s, opts.retry_factor, ra);
             },
         }
@@ -2152,34 +2176,102 @@ test "execute: hop-by-hop headers are excluded from response_headers" {
     try testing.expectEqualStrings("TestServer/1.0", resp.response_headers[1].value);
 }
 
+// Fully in-memory, no-FS mock sink for openQADownloadToFile unit tests.
+//
+// Wraps std.Io.Writer.Allocating so the stdlib enforces the writer contract
+// (drain, splat, buffered bytes). No hand-written vtable, no @fieldParentPtr.
+const MockFileSink = struct {
+    aw: std.Io.Writer.Allocating,
+    updated: bool = false,
+    write_error: ?anyerror = null,
+
+    pub fn init(allocator: std.mem.Allocator) MockFileSink {
+        return .{ .aw = .init(allocator) };
+    }
+
+    /// Return the type-erased writer interface.
+    pub fn writer(self: *MockFileSink, _: []u8) *std.Io.Writer {
+        return &self.aw.writer;
+    }
+
+    /// Return the pre-set write error, if any.
+    pub fn writeError(self: *MockFileSink) ?anyerror {
+        return self.write_error;
+    }
+
+    /// Record that timestamps were updated.
+    pub fn updateTimes(self: *MockFileSink, _: u64, _: u64) !void {
+        self.updated = true;
+    }
+
+    /// No-op close (the state machine calls this after each attempt).
+    pub fn close(_: *MockFileSink) void {}
+
+    /// Free the allocating writer. Tests call this via `defer` right after
+    /// `MockFileBackend.init`, so error paths do not leak.
+    pub fn deinit(self: *MockFileSink) void {
+        self.aw.deinit();
+    }
+
+    /// Bytes written so far.
+    pub fn written(self: *MockFileSink) []const u8 {
+        return self.aw.writer.buffered();
+    }
+};
+
+// Fully in-memory, no-FS mock backend for openQADownloadToFile unit tests.
+const MockFileBackend = struct {
+    stat_size: ?u64 = null,
+    sink: MockFileSink,
+    touched: bool = false,
+    deleted: bool = false,
+
+    pub fn init(allocator: std.mem.Allocator) MockFileBackend {
+        return .{ .sink = .init(allocator) };
+    }
+
+    pub fn stat(self: *MockFileBackend, _: []const u8) !?u64 {
+        return self.stat_size;
+    }
+
+    // Truncate in place rather than re-init: re-init would leak the bytes of
+    // a previous attempt and wipe a pre-set `write_error`.
+    pub fn create(self: *MockFileBackend, _: []const u8) !*MockFileSink {
+        self.sink.aw.clearRetainingCapacity();
+        self.sink.updated = false;
+        return &self.sink;
+    }
+
+    pub fn delete(self: *MockFileBackend, _: []const u8) void {
+        self.deleted = true;
+    }
+
+    pub fn touch(self: *MockFileBackend, _: []const u8) !void {
+        self.touched = true;
+    }
+};
+
 test "openQADownloadToFile: successful download and mtime touch" {
     const testing = std.testing;
     const allocator = testing.allocator;
     var mock: TestMockClient = .{};
+    var backend = MockFileBackend.init(allocator);
+    defer backend.sink.deinit();
 
-    const dest_path = "temp_download_touch_test.txt";
-    defer std.fs.cwd().deleteFile(dest_path) catch {};
-
-    const res = try openQADownloadToFile("http://localhost", "/tests/123/file.txt", dest_path, .{
+    const res = try openQADownloadToFile("http://localhost", "/tests/123/file.txt", "dest.txt", .{
         .allocator = allocator,
         .credentials = null,
         .quiet = true,
         .retries = 0,
         .allow_lengthless = true,
-    }, &mock);
+    }, &mock, &backend);
 
     try testing.expect(res.status == .ok);
 
-    // Verify file exists and has content from mock reader (TestMockClient's MockReader returns "{}")
-    const file = try std.fs.cwd().openFile(dest_path, .{});
-    defer file.close();
-    const stat = try file.stat();
-    try testing.expect(stat.size > 0);
-
-    // The file should have a very recent modification time (within the last 5 seconds)
-    const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
-    const diff = if (now_ns >= stat.mtime) now_ns - stat.mtime else stat.mtime - now_ns;
-    try testing.expect(diff < 5 * std.time.ns_per_s);
+    // Verify the sink received data (TestMockClient's MockReader returns "{}")
+    try testing.expect(backend.sink.written().len > 0);
+    // Verify timestamps were updated
+    try testing.expect(backend.sink.updated);
 }
 
 // Shared reusable pieces for the skip-probe mocks below: a response whose
@@ -2453,20 +2545,21 @@ test "RedirectState.follow: resolves relative, absolute-path and absolute locati
 
 test "openQADownloadToFile: redirect errors are not retried" {
     const testing = std.testing;
+    const allocator = testing.allocator;
     var mock: RedirectTestMock = .{ .hops = &.{.{ .status = .found, .location = "/loop" }} };
-    const dest_path = "temp_redirect_loop_test.bin";
-    defer std.fs.cwd().deleteFile(dest_path) catch {};
+    var backend = MockFileBackend.init(allocator);
+    defer backend.sink.deinit();
 
-    try testing.expectError(error.TooManyHttpRedirects, openQADownloadToFile("http://localhost", "/tests/1/asset/iso/x.iso", dest_path, .{
-        .allocator = testing.allocator,
+    try testing.expectError(error.TooManyHttpRedirects, openQADownloadToFile("http://localhost", "/tests/1/asset/iso/x.iso", "dest.iso", .{
+        .allocator = allocator,
         .credentials = null,
         .quiet = true,
         .retries = 2,
         .retry_sleep_s = 0,
-    }, &mock));
+    }, &mock, &backend));
     // One chain only (not one per retry), and no partial file left behind.
     try testing.expectEqual(@as(usize, max_redirects + 1), mock.call_count);
-    try testing.expectError(error.FileNotFound, std.fs.cwd().access(dest_path, .{}));
+    try testing.expect(backend.deleted);
 }
 
 test "openQADownloadToFile: skips re-download when source replies 416 directly" {
@@ -2484,39 +2577,22 @@ test "openQADownloadToFile: skips re-download when source replies 416 directly" 
         }
     };
 
-    const dest_path = "temp_skip_complete_direct_test.bin";
-    defer std.fs.cwd().deleteFile(dest_path) catch {};
-
-    // Pre-place a "complete" sentinel of a known size with an OLD mtime.
-    const sentinel = "SENTINELSENTINEL"; // 16 bytes
-    {
-        const f = try std.fs.cwd().createFile(dest_path, .{});
-        defer f.close();
-        try f.writeAll(sentinel);
-        const old_ns: i128 = std.time.nanoTimestamp() - 2 * std.time.ns_per_hour;
-        try f.updateTimes(old_ns, old_ns);
-    }
+    // Pre-place a "complete" sentinel of a known size (16 bytes).
+    var backend = MockFileBackend.init(allocator);
+    defer backend.sink.deinit();
+    backend.stat_size = 16;
 
     var mock: CompleteMock = .{};
-    const res = try openQADownloadToFile("http://localhost", "/tests/1/asset/iso/x.iso", dest_path, .{
+    const res = try openQADownloadToFile("http://localhost", "/tests/1/asset/iso/x.iso", "dest.iso", .{
         .allocator = allocator,
         .credentials = null,
         .quiet = true,
         .retries = 0,
-    }, &mock);
+    }, &mock, &backend);
 
     try testing.expect(res.status == .ok);
-
-    // Sentinel content preserved (not overwritten by a re-download).
-    var buf: [64]u8 = undefined;
-    const on_disk = try std.fs.cwd().readFile(dest_path, &buf);
-    try testing.expectEqualStrings(sentinel, on_disk);
-
-    // mtime refreshed to now: observable on the skip path.
-    const st = try std.fs.cwd().statFile(dest_path);
-    const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
-    const diff = if (now_ns >= st.mtime) now_ns - st.mtime else st.mtime - now_ns;
-    try testing.expect(diff < 5 * std.time.ns_per_s);
+    // Skip path: no data written to the sink.
+    try testing.expectEqual(@as(usize, 0), backend.sink.written().len);
 }
 
 test "openQADownloadToFile: skip probe follows the 302 redirect via a ranged GET" {
@@ -2528,45 +2604,33 @@ test "openQADownloadToFile: skip probe follows the 302 redirect via a ranged GET
     // redirect (re-signed) to see the 416; otherwise the skip fails and the
     // sentinel is overwritten (which this test guards against).
 
-    const dest_path = "temp_skip_complete_redirect_test.bin";
-    defer std.fs.cwd().deleteFile(dest_path) catch {};
-
-    const sentinel = "SENTINELSENTINEL"; // 16 bytes
-    {
-        const f = try std.fs.cwd().createFile(dest_path, .{});
-        defer f.close();
-        try f.writeAll(sentinel);
-        const old_ns: i128 = std.time.nanoTimestamp() - 2 * std.time.ns_per_hour;
-        try f.updateTimes(old_ns, old_ns);
-    }
+    // Pre-place a "complete" sentinel of a known size (16 bytes).
+    var backend = MockFileBackend.init(allocator);
+    defer backend.sink.deinit();
+    backend.stat_size = 16;
 
     var mock: RedirectTestMock = .{ .hops = &.{
         .{ .status = .found, .location = "/assets/hdd/x.qcow2" },
         .{ .status = .range_not_satisfiable },
     } };
-    const res = try openQADownloadToFile("http://localhost", "/tests/1/asset/hdd/x.qcow2", dest_path, .{
+    const res = try openQADownloadToFile("http://localhost", "/tests/1/asset/hdd/x.qcow2", "dest.qcow2", .{
         .allocator = allocator,
         .credentials = redirect_test_creds,
         .quiet = true,
         .retries = 0,
-    }, &mock);
+    }, &mock, &backend);
 
     try testing.expect(res.status == .ok);
     // The probe is a GET that followed the redirect, signed for the target.
     try testing.expectEqual(@as(usize, 2), mock.call_count);
     try testing.expectEqual(std.http.Method.GET, mock.calls[0].method);
+    try testing.expectEqual(std.http.Method.GET, mock.calls[1].method);
     try testing.expectEqualStrings("http://localhost/assets/hdd/x.qcow2", mock.calls[1].target());
     try mock.calls[1].expectSignedFor(redirect_test_creds, "/assets/hdd/x.qcow2");
 
-    // Sentinel content preserved: the skip engaged despite the redirect.
-    var buf: [64]u8 = undefined;
-    const on_disk = try std.fs.cwd().readFile(dest_path, &buf);
-    try testing.expectEqualStrings(sentinel, on_disk);
-
-    const st = try std.fs.cwd().statFile(dest_path);
-    const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
-    const diff = if (now_ns >= st.mtime) now_ns - st.mtime else st.mtime - now_ns;
-    try testing.expect(diff < 5 * std.time.ns_per_s);
+    // Skip path: mtime touched and no data written to the sink.
+    try testing.expect(backend.touched);
+    try testing.expectEqual(@as(usize, 0), backend.sink.written().len);
 }
 
 test "openQADownloadToFile: re-downloads when source does not report complete" {
@@ -2576,28 +2640,22 @@ test "openQADownloadToFile: re-downloads when source does not report complete" {
     // reports the file as NOT complete → a full download must overwrite it.
     var mock: TestMockClient = .{};
 
-    const dest_path = "temp_skip_incomplete_test.bin";
-    defer std.fs.cwd().deleteFile(dest_path) catch {};
+    // Pre-place a wrong-content file (18 bytes); the download must overwrite it.
+    var backend = MockFileBackend.init(allocator);
+    defer backend.sink.deinit();
+    backend.stat_size = 18;
 
-    // Pre-place a wrong-content file; the download must overwrite it with "{}".
-    {
-        const f = try std.fs.cwd().createFile(dest_path, .{});
-        defer f.close();
-        try f.writeAll("STALE-PARTIAL-BYTES");
-    }
-
-    const res = try openQADownloadToFile("http://localhost", "/tests/1/asset/iso/x.iso", dest_path, .{
+    const res = try openQADownloadToFile("http://localhost", "/tests/1/asset/iso/x.iso", "dest.iso", .{
         .allocator = allocator,
         .credentials = null,
         .quiet = true,
         .retries = 0,
         .allow_lengthless = true,
-    }, &mock);
+    }, &mock, &backend);
 
     try testing.expect(res.status == .ok);
-    var buf: [64]u8 = undefined;
-    const on_disk = try std.fs.cwd().readFile(dest_path, &buf);
-    try testing.expectEqualStrings("{}", on_disk);
+    // The sink should contain "{}" (the mock's body), not the stale content.
+    try testing.expectEqualStrings("{}", backend.sink.written());
 }
 
 test "executeStream: returns error.HttpTransferTruncated on short read" {
@@ -2738,26 +2796,25 @@ test "openQADownloadToFile: retries on error.HttpTransferTruncated and deletes p
     };
 
     var mock: TruncatedMockClient = .{};
-    const dest_path = "temp_download_truncated_test.txt";
-    defer std.fs.cwd().deleteFile(dest_path) catch {};
+    var backend = MockFileBackend.init(allocator);
+    defer backend.sink.deinit();
 
-    const result = openQADownloadToFile("http://localhost", "/tests/123/file.txt", dest_path, .{
+    const result = openQADownloadToFile("http://localhost", "/tests/123/file.txt", "dest.txt", .{
         .allocator = allocator,
         .credentials = null,
         .quiet = true,
         .retries = 2, // 2 retries = 3 total attempts
         .retry_sleep_s = 0.001, // extremely fast
         .retry_factor = 1.0,
-    }, &mock);
+    }, &mock, &backend);
 
     // Should exhaust retries and propagate the error.
     try testing.expectError(error.HttpTransferTruncated, result);
 
     // Verify that 3 attempts were made.
     try testing.expectEqual(@as(u32, 3), mock.attempts);
-
-    // Verify that no partial file remains on disk after terminal failure.
-    try testing.expectError(error.FileNotFound, std.fs.cwd().access(dest_path, .{}));
+    // Verify the partial file was deleted.
+    try testing.expect(backend.deleted);
 }
 
 test "openQADownloadToFile: NoSpaceLeft is terminal (no retry)" {
@@ -2820,23 +2877,188 @@ test "openQADownloadToFile: NoSpaceLeft is terminal (no retry)" {
     };
 
     var mock: DiskFullMockClient = .{};
-    const dest_path = "temp_download_diskfull_test.txt";
-    defer std.fs.cwd().deleteFile(dest_path) catch {};
+    var backend = MockFileBackend.init(allocator);
+    defer backend.sink.deinit();
+    // Pre-set the sink's write error to simulate a full disk.
+    backend.sink.write_error = error.NoSpaceLeft;
 
-    const result = openQADownloadToFile("http://localhost", "/tests/123/file.txt", dest_path, .{
+    const result = openQADownloadToFile("http://localhost", "/tests/123/file.txt", "dest.txt", .{
         .allocator = allocator,
         .credentials = null,
         .quiet = true,
         .retries = 2, // 2 retries = 3 total attempts (if buggy)
         .retry_sleep_s = 0.001,
         .retry_factor = 1.0,
-    }, &mock);
+    }, &mock, &backend);
 
     // NoSpaceLeft is terminal: exactly 1 attempt, no retry.
     try testing.expectEqual(@as(u32, 1), mock.attempts);
     try testing.expectError(error.NoSpaceLeft, result);
-    // Partial file must be deleted.
-    try testing.expectError(error.FileNotFound, std.fs.cwd().access(dest_path, .{}));
+    // The partial file must be deleted.
+    try testing.expect(backend.deleted);
+}
+
+test "openQADownloadToFile: body larger than 64 KiB exercises the drain path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const BigBodyMockClient = struct {
+        const Self = @This();
+        const body_len: usize = 128 * 1024; // 128 KiB
+
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_length: ?u64 = body_len,
+            location: ?[]const u8 = null,
+
+            const HeaderIterator = struct {
+                done: bool = false,
+                fn next(self: *HeaderIterator) ?std.http.Header {
+                    if (self.done) return null;
+                    self.done = true;
+                    return .{ .name = "Content-Type", .value = "application/octet-stream" };
+                }
+            };
+
+            fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            // Like std.Io.Reader.streamRemaining, stream the whole body in
+            // one call; executeStream calls this exactly once.
+            fn streamRemaining(_: *MockReader, w: anytype) anyerror!usize {
+                var buf: [65536]u8 = undefined;
+                @memset(&buf, 0x42);
+                var pos: usize = 0;
+                while (pos < body_len) {
+                    const chunk = @min(buf.len, body_len - pos);
+                    try w.writeAll(buf[0..chunk]);
+                    pos += chunk;
+                }
+                return pos;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        response: MockResponse = .{},
+
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            return &self.response;
+        }
+    };
+
+    var mock: BigBodyMockClient = .{};
+    var backend = MockFileBackend.init(allocator);
+    defer backend.sink.deinit();
+
+    const res = try openQADownloadToFile("http://localhost", "/tests/123/big.bin", "dest.bin", .{
+        .allocator = allocator,
+        .credentials = null,
+        .quiet = true,
+        .retries = 0,
+    }, &mock, &backend);
+
+    try testing.expect(res.status == .ok);
+    // All 128 KiB must be in the sink (no truncation, no reordering).
+    try testing.expectEqual(@as(usize, 128 * 1024), backend.sink.written().len);
+    // Spot-check: first and last bytes are 0x42.
+    try testing.expectEqual(@as(u8, 0x42), backend.sink.written()[0]);
+    try testing.expectEqual(@as(u8, 0x42), backend.sink.written()[backend.sink.written().len - 1]);
+}
+
+test "openQADownloadToFile: writeError NoSpaceLeft is terminal and deletes the file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const GenericErrorMockClient = struct {
+        const Self = @This();
+
+        const MockHead = struct {
+            status: std.http.Status = .ok,
+            content_length: ?u64 = 100,
+            location: ?[]const u8 = null,
+
+            const HeaderIterator = struct {
+                done: bool = false,
+                fn next(self: *HeaderIterator) ?std.http.Header {
+                    if (self.done) return null;
+                    self.done = true;
+                    return .{ .name = "Content-Type", .value = "application/octet-stream" };
+                }
+            };
+
+            fn iterateHeaders(_: *const MockHead) HeaderIterator {
+                return .{};
+            }
+        };
+
+        const MockReader = struct {
+            fn streamRemaining(_: *MockReader, w: anytype) anyerror!usize {
+                const partial = "partial-data";
+                try w.writeAll(partial);
+                return error.WriteFailed;
+            }
+        };
+
+        const MockResponse = struct {
+            head: MockHead = .{},
+            mock_reader: MockReader = .{},
+
+            pub fn deinit(_: *MockResponse) void {}
+            pub fn sendBodiless(_: *MockResponse) !void {}
+            pub fn reader(self: *MockResponse, _: []u8) *MockReader {
+                return &self.mock_reader;
+            }
+            pub fn receiveHead(self: *MockResponse, _: []u8) !*MockResponse {
+                return self;
+            }
+        };
+
+        attempts: u32 = 0,
+        response: MockResponse = .{},
+
+        pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+            self.attempts += 1;
+            return &self.response;
+        }
+    };
+
+    var mock: GenericErrorMockClient = .{};
+    var backend = MockFileBackend.init(allocator);
+    defer backend.sink.deinit();
+    // Pre-set the sink's write error to simulate a full disk.
+    backend.sink.write_error = error.NoSpaceLeft;
+
+    const result = openQADownloadToFile("http://localhost", "/tests/123/file.txt", "dest.txt", .{
+        .allocator = allocator,
+        .credentials = null,
+        .quiet = true,
+        .retries = 2,
+        .retry_sleep_s = 0.001,
+        .retry_factor = 1.0,
+    }, &mock, &backend);
+
+    // writeError() takes precedence: the result is NoSpaceLeft, not WriteFailed.
+    try testing.expectError(error.NoSpaceLeft, result);
+    // Terminal: exactly 1 attempt, no retry.
+    try testing.expectEqual(@as(u32, 1), mock.attempts);
+    // The partial file must be deleted.
+    try testing.expect(backend.deleted);
 }
 
 test "executeStream: fails with LengthRequired if lengthless and not allowed" {

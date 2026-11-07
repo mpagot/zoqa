@@ -1293,8 +1293,8 @@ fn downloadAssets(
                 .label = basename,
                 .out = &stderr_w.interface,
             } else null,
-        }, client) catch |err| {
-            // Connection error, mid-stream reset, or HTML challenge on asset;
+        }, client, zoqa.fs_utils.RealFileBackend) catch |err| {
+            // Connection error, mid-stream reset, or HTML challenge on asset that survived all retries;
             // the helper has already removed any partial file.
             if (err == error.UnexpectedHtmlResponse) {
                 printStderr("Error: asset download failed for '{s}': server returned an HTML page instead of the asset (bot challenge?)\n", .{asset.filename});
