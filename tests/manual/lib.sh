@@ -1,22 +1,22 @@
 # shellcheck shell=bash
-# tests/manual/lib.sh — Shared helpers for manual test scripts.
+# tests/manual/lib.sh - Shared helpers for manual test scripts.
 #
 # This file is sourced, not executed.  Each sourcing script is responsible for
 # its own `set` options, cleanup trap, and test-specific logic.
 #
-# Required environment variables (no defaults — scripts fail immediately if unset):
-#   OPENQA_HOST   — base URL of the openQA instance (e.g. https://openqa.opensuse.org)
-#   OPENQA_JOB_ID — a known-good completed job ID   (e.g. 12345)
+# Required environment variables (no defaults - scripts fail immediately if unset):
+#   OPENQA_HOST   - base URL of the openQA instance (e.g. https://openqa.opensuse.org)
+#   OPENQA_JOB_ID - a known-good completed job ID   (e.g. 12345)
 #
 # Optional overrides:
-#   ZOQA          — path to the zoqa binary            (default: ./zig-out/bin/zoqa)
-#   RUNS          — number of timing repetitions       (default: 3)
+#   ZOQA          - path to the zoqa binary            (default: ./zig-out/bin/zoqa)
+#   RUNS          - number of timing repetitions       (default: 3)
 
 # =============================================================================
 # Default configuration
 # =============================================================================
 
-# Require OPENQA_HOST and OPENQA_JOB_ID — no hardcoded defaults.
+# Require OPENQA_HOST and OPENQA_JOB_ID - no hardcoded defaults.
 if [[ -z "${OPENQA_HOST:-}" ]]; then
 	echo "FATAL: OPENQA_HOST is not set."
 	echo "       Export it before running this script, e.g.:"
@@ -293,7 +293,7 @@ _run_rss() {
 
 	if [[ "$HAS_GNU_TIME" != "true" ]]; then
 		_rss_report+=("$label")
-		_rss_report+=("  (skipped — /usr/bin/time not available)")
+		_rss_report+=("  (skipped - /usr/bin/time not available)")
 		_rss_report+=("")
 		return
 	fi

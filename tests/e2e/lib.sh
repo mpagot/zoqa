@@ -1,66 +1,66 @@
 #!/usr/bin/env bash
-# lib.sh — Shared library for openQA E2E test scripts.
+# lib.sh - Shared library for openQA E2E test scripts.
 #
 # Source this file near the top of each script (after set -eo pipefail):
 #
 #   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 #
 # Provides (directly):
-#   CONTAINER_NAME  — default container name (overridable before sourcing)
-#   COLLECT_LOGS    — default false (overridable before sourcing)
-#   DRY_RUN         — default false (set before sourcing or via --dryrun parsing)
-#   ENV_FILE        — path to the shell env file written by setup.sh
-#   LOG_PREFIX      — prefix used by die() and log(); set before sourcing, e.g. "setup"
-#   log()           — echo "[LOG_PREFIX] $*" to stdout
-#   run_cmd()       — eval a command string, or print it in dry-run mode
-#   container_exec()— run a command inside the container, or print it in dry-run mode
-#   die()           — print a prefixed error to stderr and exit 1
-#   cd_to_project_root() — cd to the project root; pass "${BASH_SOURCE[0]}" of the caller
+#   CONTAINER_NAME  - default container name (overridable before sourcing)
+#   COLLECT_LOGS    - default false (overridable before sourcing)
+#   DRY_RUN         - default false (set before sourcing or via --dryrun parsing)
+#   ENV_FILE        - path to the shell env file written by setup.sh
+#   LOG_PREFIX      - prefix used by die() and log(); set before sourcing, e.g. "setup"
+#   log()           - echo "[LOG_PREFIX] $*" to stdout
+#   run_cmd()       - eval a command string, or print it in dry-run mode
+#   container_exec() - run a command inside the container, or print it in dry-run mode
+#   die()           - print a prefixed error to stderr and exit 1
+#   cd_to_project_root() - cd to the project root; pass "${BASH_SOURCE[0]}" of the caller
 #
 # Auto-sourced from lib_fixtures.sh (job management):
-#   schedule_job()  — POST /api/v1/isos, prints job ID
-#   wait_for_job()  — poll until terminal state, prints state
-#   cancel_job()    — POST cancel for a job
-#   get_job_state() — query and print a job's state
-#   _ensure_job()       — generic lazy-init for any named job variable
-#   _E2E_JOB_COMMON_ARGS — shared schedule_job args (DISTRI/FLAVOR/ARCH/…)
-#   dump_job_logs()     — fetch and print per-job diagnostics on failure
-#   register_deletable_asset() — create a file-backed asset, prints asset ID
+#   schedule_job()  - POST /api/v1/isos, prints job ID
+#   wait_for_job()  - poll until terminal state, prints state
+#   cancel_job()    - POST cancel for a job
+#   get_job_state() - query and print a job's state
+#   _ensure_job()       - generic lazy-init for any named job variable
+#   _E2E_JOB_COMMON_ARGS - shared schedule_job args (DISTRI/FLAVOR/ARCH/…)
+#   dump_job_logs()     - fetch and print per-job diagnostics on failure
+#   register_deletable_asset() - create a file-backed asset, prints asset ID
 #
-# Sourced on demand from lib_topology.sh (topology fixtures — tests_clone_job.sh only):
-#   schedule_topology_jobs() — generic multi-job topology scheduler
-#   ensure_chained_jobs()    — lazy-init CHAIN_*_ID variables
-#   ensure_fanout_jobs()     — lazy-init FANOUT_*_ID variables
-#   ensure_multilayer_jobs() — lazy-init LAYER_*_ID variables
-#   ensure_diamond_jobs()    — lazy-init DIAMOND_*_ID variables
-#   ensure_parallel_jobs()   — lazy-init PARALLEL_*_ID variables
-#   assert_job_has_chained_parent() — verify chained dependency
+# Sourced on demand from lib_topology.sh (topology fixtures - tests_clone_job.sh only):
+#   schedule_topology_jobs() - generic multi-job topology scheduler
+#   ensure_chained_jobs()    - lazy-init CHAIN_*_ID variables
+#   ensure_fanout_jobs()     - lazy-init FANOUT_*_ID variables
+#   ensure_multilayer_jobs() - lazy-init LAYER_*_ID variables
+#   ensure_diamond_jobs()    - lazy-init DIAMOND_*_ID variables
+#   ensure_parallel_jobs()   - lazy-init PARALLEL_*_ID variables
+#   assert_job_has_chained_parent() - verify chained dependency
 #
 # Performance helpers:
-#   _perf_wall_time_s()  — measure wall-clock time of a container command
-#   _perf_peak_rss_kb()  — measure peak RSS via /usr/bin/time -v
-#   _perf_timev_field()  — read a field from the saved /usr/bin/time -v output
+#   _perf_wall_time_s()  - measure wall-clock time of a container command
+#   _perf_peak_rss_kb()  - measure peak RSS via /usr/bin/time -v
+#   _perf_timev_field()  - read a field from the saved /usr/bin/time -v output
 #
 # Test-side capture helpers:
-#   run_capture()        — run one command, capture stdout/stderr/exit
-#   run_perl_and_zig()   — run the same args against PERL_EXE and ZIG_EXE
-#   run_capture_both()   — like run_perl_and_zig but with explicit full commands
-#   run_sigpipe_test()   — run CMD | head -c 1, capture CMD's exit via PIPESTATUS
-#   assert_capture_exits() — check _PERL_EXIT/_ZIG_EXIT, PASS/FAIL
-#   assert_stdout_pattern() — check both impl stdout logs for a pattern, PASS/FAIL
+#   run_capture()        - run one command, capture stdout/stderr/exit
+#   run_perl_and_zig()   - run the same args against PERL_EXE and ZIG_EXE
+#   run_capture_both()   - like run_perl_and_zig but with explicit full commands
+#   run_sigpipe_test()   - run CMD | head -c 1, capture CMD's exit via PIPESTATUS
+#   assert_capture_exits() - check _PERL_EXIT/_ZIG_EXIT, PASS/FAIL
+#   assert_stdout_pattern() - check both impl stdout logs for a pattern, PASS/FAIL
 #
 # Test runner functions (the canonical home of these; tests.sh sources lib.sh):
-#   run_test()           — run one command, check exit + optional grep, PASS/FAIL
-#   run_test_exit_nonzero() — run one command, assert non-zero exit code, PASS/FAIL
-#   run_comparison_api()     — run the same api args against PERL_EXE and ZIG_EXE
-#   run_diff_test()      — diff stdout of both impls, PASS/FAIL
+#   run_test()           - run one command, check exit + optional grep, PASS/FAIL
+#   run_test_exit_nonzero() - run one command, assert non-zero exit code, PASS/FAIL
+#   run_comparison_api()     - run the same api args against PERL_EXE and ZIG_EXE
+#   run_diff_test()      - diff stdout of both impls, PASS/FAIL
 #
 # Clone-job test helpers (require PERL_CLONE_EXE/ZIG_CLONE_EXE set by caller):
-#   run_comparison_clone()   — run same args against both clone-job binaries
-#   run_clone_both()         — run_capture_both with shared clone-job args
-#   run_clone_diff_test()    — diff stdout of both clone-job impls, PASS/FAIL
-#   wait_for_cloned_jobs()   — extract job IDs from logs, wait for all
-#   assert_impl_log_pattern()— check one impl's log file for a pattern
+#   run_comparison_clone()   - run same args against both clone-job binaries
+#   run_clone_both()         - run_capture_both with shared clone-job args
+#   run_clone_diff_test()    - diff stdout of both clone-job impls, PASS/FAIL
+#   wait_for_cloned_jobs()   - extract job IDs from logs, wait for all
+#   assert_impl_log_pattern() - check one impl's log file for a pattern
 
 # Guard against double-sourcing
 [[ -n "${_OPENQA_E2E_LIB_LOADED:-}" ]] && return 0
@@ -87,7 +87,7 @@ CIRROS_TESTDIR="/var/lib/openqa/share/tests/cirros"
 export CIRROS_VERSION CIRROS_ARCH CIRROS_ORIG CIRROS_IMG CIRROS_URL CIRROS_TESTDIR
 
 # ---------------------------------------------------------------------------
-# log() — print a prefixed informational message to stdout
+# log() - print a prefixed informational message to stdout
 #
 # Uses $LOG_PREFIX (default: "e2e").
 # Usage: log "Container is ready"
@@ -95,7 +95,7 @@ export CIRROS_VERSION CIRROS_ARCH CIRROS_ORIG CIRROS_IMG CIRROS_URL CIRROS_TESTD
 log() { echo "[$LOG_PREFIX] $*"; }
 
 # ---------------------------------------------------------------------------
-# run_cmd() — eval a command string, or print it (dry-run)
+# run_cmd() - eval a command string, or print it (dry-run)
 #
 # Usage: run_cmd "podman rm -f $CONTAINER_NAME"
 # ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ run_cmd() {
 }
 
 # ---------------------------------------------------------------------------
-# container_exec() — run a command inside the container, or print it (dry-run)
+# container_exec() - run a command inside the container, or print it (dry-run)
 #
 # Usage: container_exec cat /etc/openqa/client.conf
 # ---------------------------------------------------------------------------
@@ -121,7 +121,7 @@ container_exec() {
 }
 
 # ---------------------------------------------------------------------------
-# die() — print a prefixed error message to stderr and exit 1
+# die() - print a prefixed error message to stderr and exit 1
 #
 # Uses $LOG_PREFIX (default: "e2e").
 # Usage: die "Could not read client.conf"
@@ -132,7 +132,7 @@ die() {
 }
 
 # ---------------------------------------------------------------------------
-# e2e_sleep SECONDS — sleep unless in dry-run mode
+# e2e_sleep SECONDS - sleep unless in dry-run mode
 #
 # Wrapper around `sleep` that skips the actual delay when DRY_RUN is true.
 # Use this instead of bare `sleep` in test scripts so that dry-run completes
@@ -147,7 +147,7 @@ e2e_sleep() {
 }
 
 # ---------------------------------------------------------------------------
-# set_require_for_assets 0|1 — toggle asset authentication requirement
+# set_require_for_assets 0|1 - toggle asset authentication requirement
 #
 # Updates [auth] require_for_assets in 99-force-fake-auth.ini and restarts
 # the WebUI daemon so Mojolicious re-evaluates the asset route bridge at
@@ -188,7 +188,7 @@ set_require_for_assets() {
 }
 
 # ---------------------------------------------------------------------------
-# cd_to_project_root() — cd to the repository root from a caller's location
+# cd_to_project_root() - cd to the repository root from a caller's location
 #
 # Must be called with the caller's BASH_SOURCE[0]:
 #   cd_to_project_root "${BASH_SOURCE[0]}"
@@ -204,7 +204,7 @@ cd_to_project_root() {
 }
 
 # ===========================================================================
-# Job Management Functions — extracted to lib_fixtures.sh
+# Job Management Functions - extracted to lib_fixtures.sh
 #
 # Sourced automatically below.  Provides: schedule_job, wait_for_job,
 # cancel_job, cancel_pending_jobs, get_job_state, _ensure_job,
@@ -311,11 +311,11 @@ _perf_timev_field() {
 # Captures stdout to $LOG_DIR/${TAG}_${IMPL}_stdout.log and stderr to
 # $LOG_DIR/${TAG}_${IMPL}_stderr.log.
 # The command's exit code is left in the global _LAST_EXIT for the caller to inspect.
-# Command composition accepts any CMD string — fully generic.
+# Command composition accepts any CMD string - fully generic.
 #
-# TAG  — short identifier shared across one logical test (e.g. "mon_cancel")
-# IMPL — "perl" or "zig" (used in the log filenames; any string is accepted)
-# CMD  — the full command line passed to `container_exec bash -c`
+# TAG  - short identifier shared across one logical test (e.g. "mon_cancel")
+# IMPL - "perl" or "zig" (used in the log filenames; any string is accepted)
+# CMD  - the full command line passed to `container_exec bash -c`
 #
 # Usage:
 #   run_capture "mon_cancel" perl "timeout 60 $PERL_EXE monitor $JOB_ID"
@@ -342,10 +342,10 @@ run_capture() {
 #     $LOG_DIR/${TAG}_perl_stdout.log  / _perl_stderr.log
 #     $LOG_DIR/${TAG}_zig_stdout.log   / _zig_stderr.log
 #
-# TAG       — short identifier shared by the perl and zig invocations
-# ARGS      — everything that follows the binary name
+# TAG       - short identifier shared by the perl and zig invocations
+# ARGS      - everything that follows the binary name
 #             (e.g. "monitor $JOB_ID" or "schedule --host http://localhost …")
-# TIMEOUT_S — optional; wraps each invocation in `timeout N`. Omit for none.
+# TIMEOUT_S - optional; wraps each invocation in `timeout N`. Omit for none.
 #
 # Usage:
 #   run_perl_and_zig "mon_cancel" "monitor $MONITOR_JOB_ID" 60
@@ -376,7 +376,7 @@ run_perl_and_zig() {
 # Tests that CMD survives a broken pipe (SIGPIPE / EPIPE) without crashing.
 #
 # Runs  CMD | head -c 1  inside the container and captures CMD's own exit
-# code — not head's — via bash PIPESTATUS[0].  This is critical: without
+# code - not head's - via bash PIPESTATUS[0].  This is critical: without
 # PIPESTATUS the pipeline would always return head's exit code (0),
 # silently masking a SIGPIPE crash in CMD (exit 141) or an unhandled EPIPE
 # propagation (exit 1).
@@ -516,10 +516,10 @@ assert_stdout_pattern() {
 # the combined stdout+stderr output for GREP_PATTERN.
 #
 # Parameters:
-#   LABEL         — human-readable test name printed in the --- Test: --- line
-#   CMD           — command string passed to container_exec (eval'd)
-#   EXPECTED_EXIT — expected exit code (default: 0)
-#   GREP_PATTERN  — optional grep pattern; FAIL if not found in output
+#   LABEL         - human-readable test name printed in the --- Test: --- line
+#   CMD           - command string passed to container_exec (eval'd)
+#   EXPECTED_EXIT - expected exit code (default: 0)
+#   GREP_PATTERN  - optional grep pattern; FAIL if not found in output
 #
 # Side effects: increments failed_tests on failure.
 # ---------------------------------------------------------------------------
@@ -565,8 +565,8 @@ run_test() {
 # in a shell snippet that inverts the success condition (exits 0 if CMD fails).
 #
 # Parameters:
-#   LABEL — human-readable test name printed in the --- Test: --- line
-#   CMD   — command string passed to container_exec (eval'd via bash -c)
+#   LABEL - human-readable test name printed in the --- Test: --- line
+#   CMD   - command string passed to container_exec (eval'd via bash -c)
 #
 # Side effects: increments failed_tests on failure (via run_test).
 # ---------------------------------------------------------------------------
@@ -814,15 +814,15 @@ assert_downloaded_assets_md5() {
 			"md5sum '${source_file}' 2>/dev/null | awk '{print \$1}'" || echo "")
 
 		if [[ -z "$downloaded_md5" ]]; then
-			echo "FAIL: ${label} MD5 — cannot compute hash of downloaded file: ${downloaded_file}"
+			echo "FAIL: ${label} MD5 - cannot compute hash of downloaded file: ${downloaded_file}"
 			_md5_pass=false
 		elif [[ -z "$source_md5" ]]; then
-			echo "FAIL: ${label} MD5 — cannot compute hash of source file: ${source_file}"
+			echo "FAIL: ${label} MD5 - cannot compute hash of source file: ${source_file}"
 			_md5_pass=false
 		elif [[ "$downloaded_md5" == "$source_md5" ]]; then
-			echo "PASS: ${label} MD5 OK — ${rel_path} (${downloaded_md5})"
+			echo "PASS: ${label} MD5 OK - ${rel_path} (${downloaded_md5})"
 		else
-			echo "FAIL: ${label} MD5 mismatch — ${rel_path}: downloaded=${downloaded_md5} expected=${source_md5}"
+			echo "FAIL: ${label} MD5 mismatch - ${rel_path}: downloaded=${downloaded_md5} expected=${source_md5}"
 			_md5_pass=false
 		fi
 	done <<< "$file_list"
@@ -841,7 +841,7 @@ assert_downloaded_assets_md5() {
 #
 # Sentinels have the correct SIZE but wrong CONTENT: a client that skips
 # re-downloading an already-complete asset (Perl's `curl --continue-at -`, which
-# gets HTTP 416 on a full-size file — CloneJob.pm:203) leaves the sentinel bytes
+# gets HTTP 416 on a full-size file - CloneJob.pm:203) leaves the sentinel bytes
 # intact, whereas a client that re-downloads overwrites them with the real asset.
 # The aged mtime lets a caller detect the post-download `touch`.
 #
@@ -866,8 +866,8 @@ skip_if_complete_populate() {
 # After a clone into TEST_DIR (pre-populated by skip_if_complete_populate and run
 # between epoch seconds START and END), assert for every asset that:
 #   * SKIP:  the on-disk md5 still equals the all-zero sentinel md5 AND differs
-#            from the real source asset md5 — i.e. the body was NOT re-fetched.
-#   * TOUCH: the file mtime falls within [START-2, END+2] — refreshed to now.
+#            from the real source asset md5 - i.e. the body was NOT re-fetched.
+#   * TOUCH: the file mtime falls within [START-2, END+2] - refreshed to now.
 #
 # REF_DIR is the reference clone used both to enumerate the assets and (via the
 # real factory copy) to know the "real" md5 each sentinel must NOT match.
@@ -891,9 +891,9 @@ assert_skip_if_complete() {
 		_mtime=$(container_exec stat -c %Y "$_test_file" 2>/dev/null)
 
 		if [[ -n "$_now_md5" && "$_now_md5" == "$_sent_md5" && "$_now_md5" != "$_real_md5" ]]; then
-			echo "PASS: ${label} skipped re-download of complete asset ${_rel} (content preserved — curl -C -)"
+			echo "PASS: ${label} skipped re-download of complete asset ${_rel} (content preserved - curl -C -)"
 		else
-			echo "  FAIL: ${label} re-downloaded ${_rel} (md5 now=${_now_md5} sentinel=${_sent_md5} real=${_real_md5} — expected sentinel)"
+			echo "  FAIL: ${label} re-downloaded ${_rel} (md5 now=${_now_md5} sentinel=${_sent_md5} real=${_real_md5} - expected sentinel)"
 			pass=false
 		fi
 
@@ -915,7 +915,7 @@ assert_skip_if_complete() {
 #
 # Verifies that no files remain in ASSET_DIR after a failed download.  Both
 # Perl and Zig must clean up (delete or never create) the destination file
-# when a download attempt fails — leaving a partial or empty file behind is
+# when a download attempt fails - leaving a partial or empty file behind is
 # incorrect because it would silently replace a previously good copy.
 #
 # Any file found (regardless of size, including 0-byte stubs left by a
@@ -936,11 +936,11 @@ assert_no_partial_files() {
 	leftover_files=$(container_exec find "$asset_dir" -type f 2>/dev/null | sort)
 
 	if [[ -z "$leftover_files" ]]; then
-		echo "PASS: ${label} — no partial files left after failed download"
+		echo "PASS: ${label} - no partial files left after failed download"
 	else
 		local count
 		count=$(echo "$leftover_files" | grep -c .)
-		echo "FAIL: ${label} — ${count} partial/leftover file(s) found after failed download (expected none):"
+		echo "FAIL: ${label} - ${count} partial/leftover file(s) found after failed download (expected none):"
 		while IFS= read -r f; do
 			if [[ -z "$f" ]]; then continue; fi
 			local sz
@@ -963,7 +963,7 @@ assert_no_partial_files() {
 _AUDIT_COOKIE_JAR="/tmp/e2e_audit_cookies.txt"
 
 # ---------------------------------------------------------------------------
-# audit_login — Authenticate as the Demo user inside the container.
+# audit_login - Authenticate as the Demo user inside the container.
 #
 # Creates a session cookie at $_AUDIT_COOKIE_JAR that subsequent audit_*
 # helpers reuse.  Safe to call multiple times (overwrites the cookie).
@@ -974,7 +974,7 @@ audit_login() {
 }
 
 # ---------------------------------------------------------------------------
-# audit_max_id — Print the highest audit event ID currently in the log.
+# audit_max_id - Print the highest audit event ID currently in the log.
 #
 # Returns "0" if the log is empty.
 # ---------------------------------------------------------------------------

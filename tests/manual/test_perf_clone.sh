@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/manual/test_perf_clone.sh — Performance benchmark for clone-job asset
+# tests/manual/test_perf_clone.sh - Performance benchmark for clone-job asset
 # downloads with --show-progress.
 #
 # Four-way comparison of zoqa-clone-job (with and without --show-progress),
@@ -193,7 +193,7 @@ else
 	exit 1
 fi
 
-# Disk space check — estimate the space needed for all downloads in this run.
+# Disk space check - estimate the space needed for all downloads in this run.
 # Each zoqa/perl run downloads the full asset set (~2.3 GB for job 6300310).
 # curl downloads only the largest asset (~1.4 GB).  We need space for the
 # largest single run (assets are deleted between runs), plus trace files.
@@ -397,7 +397,7 @@ _stop_tcpdump() {
 }
 
 # =============================================================================
-# Sanity check — one run per tool, verify exit code + file count
+# Sanity check - one run per tool, verify exit code + file count
 # =============================================================================
 
 echo "=== Sanity Check (one request per tool) ==="
@@ -499,7 +499,7 @@ _run_tool_timing() {
 		[[ "$rc" -eq 0 ]] && _times_ref+=("$t")
 		if [[ "$rc" -ne 0 ]]; then
 			failures=$((failures + 1))
-			echo "    $label [$i/$RUNS]: ${t}s  (exit=$rc — FAILED)"
+			echo "    $label [$i/$RUNS]: ${t}s  (exit=$rc - FAILED)"
 		else
 			echo "    $label [$i/$RUNS]: ${t}s"
 		fi

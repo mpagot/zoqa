@@ -1,5 +1,5 @@
 =====================================================================
- openQAclient — Fuzz Coverage Report
+ openQAclient - Fuzz Coverage Report
  Generated: 2026-10-27 00:50:45
 =====================================================================
 
@@ -35,7 +35,7 @@
  Uncovered Lines (0 hits)
 ---------------------------------------------------------------------
 
-  Lines with 0/N in codecov.json — code never executed by any seed.
+  Lines with 0/N in codecov.json - code never executed by any seed.
 
   Target: clone_job
     clone_job.zig (42 lines): 110,111,117,212,321,334,342,343,344,345,347,349,355,356,357,358,359,360,362,363,364,365,366,396,397,398,399,401,748,750,944,945,1048,1114,1313,1315,1405,1431,1481,1482,1483,1485

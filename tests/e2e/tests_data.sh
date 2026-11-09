@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# tests_data.sh — Section C: Seeded data tests.
+# tests_data.sh - Section C: Seeded data tests.
 #
 # Tests against real objects created by ensure_basic_job(): jobs, assets,
 # job groups, machines.  Also covers pagination, output parity between Perl
@@ -38,16 +38,16 @@ run_comparison_api "GET jobs/$JOB_ID (nested object)" "" \
 #
 # Intentional behavioral difference: Perl wraps link lines in ANSI colour codes
 # (e.g. "\e[32mnext: <url>\e[0m"); Zig emits plain text.  The helper always
-# strips ANSI escape sequences — this is a no-op for Zig output — so both code
+# strips ANSI escape sequences - this is a no-op for Zig output - so both code
 # paths are identical and the grep pattern is consistent.
 #
 # Stream separation is also asserted here: next: must appear on stderr, not
 # stdout.  This subsumes the check that was previously in Test 43b
 # (tests_output.sh), and fixes that test's missing ANSI strip on the Zig block.
 _run_pagination_test() {
-	local label=$1   # "PERL" or "ZIG " — used verbatim in test output lines
+	local label=$1   # "PERL" or "ZIG " - used verbatim in test output lines
 	local exe=$2     # binary to invoke
-	local log_tag=$3 # "perl" or "zig" — prefix for log filenames
+	local log_tag=$3 # "perl" or "zig" - prefix for log filenames
 
 	echo "--- Test: ${label}: --links and follow pagination ---"
 	container_exec bash -c "$exe api --host http://localhost --links 'machines?limit=2'" \
@@ -84,7 +84,7 @@ _run_pagination_test "ZIG " "$ZIG_EXE" "zig"
 # Test 21: DELETE a real asset (successful authenticated DELETE).
 # Perl and Zig each get their own asset to avoid ordering conflicts.
 if [[ "$ASSET_ID" == "SKIP" || -z "$ASSET_ID" ]]; then
-	echo "--- Test: PERL: DELETE asset (skipped — no ASSET_ID available) ---"
+	echo "--- Test: PERL: DELETE asset (skipped - no ASSET_ID available) ---"
 	warned_tests=$((warned_tests + 1))
 else
 	run_test "PERL: DELETE asset/$ASSET_ID (200)" \
@@ -92,7 +92,7 @@ else
 fi
 
 if [[ "$ZIG_ASSET_ID" == "SKIP" || -z "$ZIG_ASSET_ID" ]]; then
-	echo "--- Test: ZIG : DELETE asset (skipped — no ZIG_ASSET_ID available) ---"
+	echo "--- Test: ZIG : DELETE asset (skipped - no ZIG_ASSET_ID available) ---"
 	warned_tests=$((warned_tests + 1))
 else
 	run_test "ZIG : DELETE asset/$ZIG_ASSET_ID (200)" \

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# tests_core.sh — Section A: Core protocol and CLI flag tests.
+# tests_core.sh - Section A: Core protocol and CLI flag tests.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -90,7 +90,7 @@ run_comparison_api "--param-file with matching distri returns results" "" \
 # the raw body string verbatim. An explicit Content-Type header is required so
 # that the openQA isos endpoint can parse the form parameters.
 # DISTRI=rawtest does not match any registered product, so openQA returns
-# {"count":0,"ids":[]} — confirming the body was parsed but no job is scheduled.
+# {"count":0,"ids":[]} - confirming the body was parsed but no job is scheduled.
 run_comparison_api "--data raw body POST to isos" "" \
 	"-X POST -a 'Content-Type: application/x-www-form-urlencoded' -d 'DISTRI=rawtest&VERSION=1.0&FLAVOR=DVD&ARCH=x86_64&BUILD=raw36&MACHINE=64bit' isos" \
 	0 '"count":0'
@@ -99,7 +99,7 @@ run_comparison_api "--data raw body POST to isos" "" \
 # DISTRI=example VERSION=0 matches the registered product and job group template
 # loaded by seed_fixtures.sh. _GROUP_ID routes the job to the "example" group.
 # The response must contain "count":1 confirming a job was actually scheduled
-# server-side — the only test that verifies a POST to isos has a real effect.
+# server-side - the only test that verifies a POST to isos has a real effect.
 container_exec bash -c "printf 'DISTRI=example&VERSION=0&FLAVOR=DVD&ARCH=x86_64&BUILD=raw36b&ISO=dummy.iso&_GROUP_ID=$GROUP_ID' > /tmp/body36b.txt"
 run_comparison_api "--data-file POST matching product schedules a job (count:1)" "" \
 	"-X POST -a 'Content-Type: application/x-www-form-urlencoded' --data-file /tmp/body36b.txt isos" \
@@ -155,7 +155,7 @@ run_comparison_api "--param-file + positional KV" "" \
 # Tests COR-41a-c: Host resolution and scheme handling.
 # run_comparison_api cannot be used here because these tests supply a custom --host
 # that must replace the harness default (http://localhost). Two run_test calls
-# per sub-test assert identical expected behaviour — same pattern as tests 6/7.
+# per sub-test assert identical expected behavior - same pattern as tests 6/7.
 
 # Test COR-41a: Bare hostname → https://.
 # Both Perl (Command.pm:106) and Zig (config.zig resolveHost) prepend https://

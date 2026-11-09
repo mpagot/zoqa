@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# tests_clone_uefi.sh — UEFI-specific asset filtering tests (CLO-110 to CLO-112).
+# tests_clone_uefi.sh - UEFI-specific asset filtering tests (CLO-110 to CLO-112).
 #
 # Sourced by tests.sh after helper functions are defined.
 # Do NOT execute this file directly.
@@ -211,7 +211,7 @@ else
 
 	# Assertions for Perl (documented divergence, SPEC §18.18.4 / PERL_DEVIATIONS "UEFI vars asset on skipped parents"):
 	# With --skip-deps, Perl does not fetch parent details, so its UEFI vars filter
-	# concludes no parent publishes the asset and SKIPS downloading it — leaving the
+	# concludes no parent publishes the asset and SKIPS downloading it - leaving the
 	# cloned child broken. That skip is the expected upstream bug (like CLO-86/CLO-88
 	# accept Perl's buggy exit-0); Perl actually downloading it would be the surprise.
 	if [[ "$_PERL_EXIT" -eq 0 ]]; then

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# tests_archive.sh — Section H: Archive subcommand tests.
+# tests_archive.sh - Section H: Archive subcommand tests.
 #
 # Tests for the `archive` subcommand which downloads assets and test results
 # from a job into a local directory.
@@ -186,7 +186,7 @@ assert_path_exists "ZIG : archive output directory exists" -d /tmp/arc_zig
 # Section 3: Directory Structure
 # =============================================================================
 
-# Test ARC-6: Directory structure parity — Perl vs Zig.
+# Test ARC-6: Directory structure parity - Perl vs Zig.
 # Run `find` on both output trees, normalize to relative paths, sort, and diff.
 # Both implementations must produce the same directory layout.
 assert_listing_parity "DIFF archive directory structure parity" \
@@ -218,7 +218,7 @@ assert_path_absent "ZIG : no repo/ directory (repo assets skipped)" \
 	-d /tmp/arc_zig/repo \
 	"repo assets must be skipped"
 
-# Test ARC-11: File listing parity — all files created by both must match.
+# Test ARC-11: File listing parity - all files created by both must match.
 assert_listing_parity "DIFF archive file listing parity" \
 	/tmp/arc_perl /tmp/arc_zig "-type f" "files"
 
@@ -256,7 +256,7 @@ run_test "ZIG : archive --asset-size-limit accepted (exit 0)" \
 
 # Test ARC-15: --asset-size-limit 1 causes asset downloads to be skipped.
 # With a 1-byte limit, any file with a Content-Length > 1 is skipped.
-# The archive command still exits 0 — size-limit skips are
+# The archive command still exits 0 - size-limit skips are
 # not fatal.  The "exceeds maximum size limit" message should appear on stdout.
 # Note: The dummy.iso is 0 bytes (created via touch), so it may not be skipped.
 # But the message pattern should still be tested for files that do exceed it.
@@ -362,7 +362,7 @@ run_test "ZIG : archive CLI overrides wrong env vars (exit 0)" \
 	--apikey '$OPENQA_API_KEY' --apisecret '$OPENQA_API_SECRET' \
 	$JOB_ID /tmp/arc_zig_cliovenv\"" 0
 
-# Test ARC-62: Wrong OPENQA_API_SECRET env var — archive still succeeds (GET is public).
+# Test ARC-62: Wrong OPENQA_API_SECRET env var - archive still succeeds (GET is public).
 run_test "PERL: archive wrong env secret still succeeds (exit 0)" \
 	"bash -c \"OPENQA_CONFIG=/tmp/arc_wrongsecret \
 	OPENQA_API_KEY='$OPENQA_API_KEY' OPENQA_API_SECRET='WRONG' \
@@ -382,7 +382,7 @@ container_exec bash -c "OPENQA_CONFIG=/tmp/arc_wrongsecret \
 arc_osd_exit=$?
 set -e
 if [[ "$arc_osd_exit" -eq 1 ]]; then
-	echo "PASS (exit 1 — connection to openqa.suse.de failed as expected)"
+	echo "PASS (exit 1 - connection to openqa.suse.de failed as expected)"
 else
 	echo "FAIL: Expected exit 1 (unreachable host), got $arc_osd_exit"
 	cat "$LOG_DIR/arc_zig_osd_test.log"
@@ -398,7 +398,7 @@ container_exec bash -c "OPENQA_CONFIG=/tmp/arc_wrongsecret \
 arc_osd_perl_exit=$?
 set -e
 if [[ "$arc_osd_perl_exit" -ne 0 ]]; then
-	echo "PASS (exit $arc_osd_perl_exit — connection to openqa.suse.de failed as expected)"
+	echo "PASS (exit $arc_osd_perl_exit - connection to openqa.suse.de failed as expected)"
 else
 	echo "FAIL: Expected non-zero exit (unreachable host), got 0"
 	cat "$LOG_DIR/arc_perl_osd_test.log"
@@ -505,9 +505,9 @@ run_test "ZIG : --host before archive rejected (exit 255)" \
 
 # Test ARC-25: Default --asset-size-limit is 200 MiB (209715200 bytes).
 # Without explicitly passing the flag, files up to 200 MiB should download.
-# This is a behavioural confirmation that the default is applied, not a unit
+# This is a behavioral confirmation that the default is applied, not a unit
 # test of the value itself.  We verify by archiving successfully without the
-# flag — the 0-byte dummy.iso is well within the default limit.
+# flag - the 0-byte dummy.iso is well within the default limit.
 # This test is already covered by ARC-4 implicitly but is here for documentation.
 run_test "PERL: archive default size limit accepts small files (exit 0)" \
 	"$PERL_EXE archive --host http://localhost $JOB_ID /tmp/arc_perl_quiet" 0
@@ -515,7 +515,7 @@ run_test "ZIG : archive default size limit accepts small files (exit 0)" \
 	"$ZIG_EXE archive --host http://localhost $JOB_ID /tmp/arc_zig_quiet" 0
 
 # =============================================================================
-# Section 13: Rich Job — Basic Operation
+# Section 13: Rich Job - Basic Operation
 # =============================================================================
 
 # Test ARC-26: Archive rich job succeeds (exit 0).
@@ -529,7 +529,7 @@ assert_path_exists "PERL: rich archive output directory exists" -d /tmp/arc_perl
 assert_path_exists "ZIG : rich archive output directory exists" -d /tmp/arc_zig_rich
 
 # =============================================================================
-# Section 14: Rich Job — Test Results
+# Section 14: Rich Job - Test Results
 # =============================================================================
 
 # Test ARC-28: details-*.json files exist (Zig).
@@ -562,7 +562,7 @@ else
 fi
 
 # =============================================================================
-# Section 15: Rich Job — Screenshots
+# Section 15: Rich Job - Screenshots
 # =============================================================================
 
 # Test ARC-31: Screenshot .png files exist (Zig).
@@ -592,7 +592,7 @@ else
 fi
 
 # =============================================================================
-# Section 16: Rich Job — Thumbnails
+# Section 16: Rich Job - Thumbnails
 # =============================================================================
 
 # Test ARC-34: --with-thumbnails downloads thumbnail files.
@@ -611,7 +611,7 @@ assert_ls_parity "DIFF thumbnail listing parity" \
 	"*.png" "thumbs"
 
 # =============================================================================
-# Section 17: Rich Job — Logs
+# Section 17: Rich Job - Logs
 # =============================================================================
 
 # Test ARC-36: autoinst-log.txt exists (Zig).
@@ -636,7 +636,7 @@ else
 fi
 
 # =============================================================================
-# Section 18: Rich Job — Assets
+# Section 18: Rich Job - Assets
 # =============================================================================
 
 # Test ARC-39: HDD asset directory exists.
@@ -681,7 +681,7 @@ else
 fi
 
 # =============================================================================
-# Section 19: Rich Job — Size Limit Enforcement
+# Section 19: Rich Job - Size Limit Enforcement
 # =============================================================================
 
 # Test ARC-42: --asset-size-limit 1 skips CirrOS (21 MB).
@@ -713,7 +713,7 @@ else
 fi
 
 # =============================================================================
-# Section 20: Rich Job — Progress Output
+# Section 20: Rich Job - Progress Output
 # =============================================================================
 
 # Capture rich job output for progress tests
@@ -762,7 +762,7 @@ else
 fi
 
 # =============================================================================
-# Section 21: Rich Job — Full Parity
+# Section 21: Rich Job - Full Parity
 # =============================================================================
 
 # Test ARC-46: Complete directory structure parity.
@@ -779,7 +779,7 @@ assert_listing_parity "DIFF rich archive full file listing parity" \
 # API-specific flags (--form, --json, -X/--method, --data) have no meaning for
 # the archive subcommand.  Both Perl and Zig should reject them at parse time.
 # These tests assert exit 255 (argument validation failure) for both
-# implementations to verify behavioural parity.
+# implementations to verify behavioral parity.
 # =============================================================================
 
 # Test ARC-50: --form is api-specific (request body encoding).

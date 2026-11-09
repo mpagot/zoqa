@@ -1,4 +1,4 @@
-# run_windows.ps1 — Windows E2E orchestrator for zoqa.
+# run_windows.ps1 - Windows E2E orchestrator for zoqa.
 #
 # Coordinates the full Windows end-to-end flow:
 #
@@ -64,7 +64,7 @@ function Write-Step([string]$Msg) {
     Write-Host "==> $Msg"
 }
 
-# Invoke-Wsl — run a command inside the chosen WSL distro.
+# Invoke-Wsl - run a command inside the chosen WSL distro.
 #
 # When $WslDistro is non-empty, passes -d <distro> to wsl.exe so that the
 # correct distro is used regardless of the system default.
@@ -83,7 +83,7 @@ function Invoke-Wsl {
     return $result.Trim()
 }
 
-# Start-WslProcess — launch a WSL command in the background (via Start-Job).
+# Start-WslProcess - launch a WSL command in the background (via Start-Job).
 # Returns the job object.
 function Start-WslProcess {
     param([string[]]$WslArgs)
@@ -100,7 +100,7 @@ function Start-WslProcess {
     }
 }
 
-# Signal-WslSentinel — touch a file inside WSL (used to trigger teardown).
+# Signal-WslSentinel - touch a file inside WSL (used to trigger teardown).
 function Signal-WslSentinel {
     param([string]$Path)
     if ($WslDistro -ne "") {
@@ -124,11 +124,11 @@ if ($WslDistro -ne "") {
     Write-Host "    WSL distro: $WslDistro (explicit -WslDistro)"
 } else {
     $defaultDistro = Invoke-Wsl @("--exec", "bash", "-c", 'echo $WSL_DISTRO_NAME')
-    Write-Host "    WSL distro: $defaultDistro (system default — use -WslDistro to override)"
+    Write-Host "    WSL distro: $defaultDistro (system default - use -WslDistro to override)"
 }
 
 # ---------------------------------------------------------------------------
-# Preflight — verify zoqa.exe exists (user must build it natively beforehand)
+# Preflight - verify zoqa.exe exists (user must build it natively beforehand)
 # ---------------------------------------------------------------------------
 $zoqaExe = Join-Path $repoRoot "zig-out\bin\zoqa.exe"
 
@@ -142,7 +142,7 @@ Write-Host "    zoqa.exe: $zoqaExe"
 
 # Print MD5 and last-modified date of zoqa.exe.
 # Get-FileHash is available in PowerShell 4+ (always present on Win 8.1+).
-# (Get-Item) is always available.  Both are optional — errors are silently
+# (Get-Item) is always available.  Both are optional - errors are silently
 # swallowed so a missing tool never aborts the run.
 # Runs unconditionally (including -DryRun) as long as the binary exists.
 try {
@@ -263,7 +263,7 @@ if (-not $DryRun) {
     try {
         $resp = Invoke-WebRequest -Uri "$env:OPENQA_E2E_HOST/api/v1/jobs/overview" `
             -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
-        Write-Host "    Host reachable — HTTP $($resp.StatusCode)"
+        Write-Host "    Host reachable - HTTP $($resp.StatusCode)"
     } catch {
         Write-Host "    WARNING: preflight GET failed: $_" -ForegroundColor Yellow
         Write-Host "    Tests will still run; individual failures will be reported."

@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/manual/test_perf_details.sh — Performance benchmark for jobs/ID/details
+# tests/manual/test_perf_details.sh - Performance benchmark for jobs/ID/details
 #
 # Three-way comparison of zoqa, openqa-cli, and curl (gzip) on the
 # jobs/ID/details endpoint.  Run it twice with different OPENQA_JOB_ID values
@@ -128,7 +128,7 @@ _timed_run() {
 }
 
 # =============================================================================
-# Sanity check — one run per tool, verify exit code + response size
+# Sanity check - one run per tool, verify exit code + response size
 # =============================================================================
 
 echo "=== Sanity Check (one request per tool) ==="
@@ -167,7 +167,7 @@ _run_tool_timing() {
 		_times_ref+=("$t")
 		if [[ "$rc" -ne 0 ]]; then
 			failures=$((failures + 1))
-			echo "    $label [$i/$RUNS]: ${t}s  (exit=$rc — FAILED)"
+			echo "    $label [$i/$RUNS]: ${t}s  (exit=$rc - FAILED)"
 		else
 			echo "    $label [$i/$RUNS]: ${t}s"
 		fi

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests_robustness.sh — Section E: Robustness tests.
+# tests_robustness.sh - Section E: Robustness tests.
 #
 # Covers broken pipe handling, non-2xx error reporting on stderr, and
 # --quiet suppression of error output.
@@ -22,7 +22,7 @@ echo "==> [robustness] Running robustness tests..."
 #
 # run_sigpipe_test uses PIPESTATUS[0] to capture the CLI binary's own exit
 # code, not head's.  Without this, a standard pipeline `cmd | head -c 1`
-# always returns head's exit code (0) — silently masking a SIGPIPE crash in
+# always returns head's exit code (0) - silently masking a SIGPIPE crash in
 # cmd.  See the run_sigpipe_test docstring in lib.sh for details.
 echo "--- Test: broken pipe (stdout | head -c 1) ---"
 run_sigpipe_test "bp" perl "$PERL_EXE api --host http://localhost jobs/overview"
@@ -42,7 +42,7 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# Test ROB-2: Non-2xx error reporting — status line must appear on stderr without --quiet.
+# Test ROB-2: Non-2xx error reporting - status line must appear on stderr without --quiet.
 #
 # on a non-2xx response, the status line must be printed to stderr
 # (unless --quiet is set).
@@ -105,7 +105,7 @@ fi
 # Test ROB-5: --data-file with inaccessible file (wrong permissions).
 #
 # IMPORTANT: the E2E CLI normally runs as root inside the container, and root
-# bypasses file permission bits — a `chmod 000` file is still readable by root.
+# bypasses file permission bits - a `chmod 000` file is still readable by root.
 # Running this test as root would therefore NOT exercise a permission-denied
 # path at all: the file would read fine and the request would proceed (this is
 # exactly how the ROB-5 GET+body panic was originally masked/mis-attributed).
@@ -117,7 +117,7 @@ fi
 echo "--- Test: PERL vs ZIG : --data-file permission denied ---"
 _NOPERM_USER="geekotest"
 if ! container_exec id "$_NOPERM_USER" >/dev/null 2>&1; then
-	echo "--- Test: --data-file permission denied (skipped — no '$_NOPERM_USER' user to drop to) ---"
+	echo "--- Test: --data-file permission denied (skipped - no '$_NOPERM_USER' user to drop to) ---"
 	warned_tests=$((warned_tests + 1))
 else
 	container_exec bash -c \
@@ -145,7 +145,7 @@ fi
 # An empty file is a valid input: the body should be empty. Both
 # implementations must succeed (exit 0) and not crash.  The server may
 # return an error (e.g. 400) because the POST body is empty, but the CLI
-# itself must not crash — so we only assert the same exit code from both.
+# itself must not crash - so we only assert the same exit code from both.
 echo "--- Test: PERL vs ZIG : --data-file empty file ---"
 container_exec bash -c "truncate -s 0 /tmp/e2e_empty.txt"
 run_perl_and_zig "df_empty" \
@@ -168,7 +168,7 @@ fi
 # DELIBERATE DIVERGENCE FROM THE PERL CLIENT (documented in ideas/SPEC.md §7.2):
 #   * Zig (zoqa) enforces a 10 MiB limit on readFileAlloc and must exit
 #     non-zero when the file is too large.
-#   * Perl (openqa-cli) has NO such limit — it reads the entire file. On this
+#   * Perl (openqa-cli) has NO such limit - it reads the entire file. On this
 #     GET route the oversized body is sent and ignored by the server, so Perl
 #     exits 0.
 #
@@ -186,7 +186,7 @@ run_perl_and_zig "df_oversized" \
 echo "PERL exit: $_PERL_EXIT (expected 0, no cap), ZIG exit: $_ZIG_EXIT (expected non-zero, cap enforced)"
 container_exec bash -c "rm -f /tmp/e2e_oversized.txt" || true
 if [[ "$_ZIG_EXIT" -ne 0 && "$_PERL_EXIT" -eq 0 ]]; then
-	echo "PASS (Zig rejects oversized --data-file; Perl accepts it — divergence confirmed)"
+	echo "PASS (Zig rejects oversized --data-file; Perl accepts it - divergence confirmed)"
 else
 	echo "FAIL: expected Zig non-zero (cap) and Perl 0 (no cap)"
 	echo "  Perl stderr: $(cat "$LOG_DIR/df_oversized_perl_stderr.log" 2>/dev/null)"
@@ -197,10 +197,10 @@ fi
 # ---------------------------------------------------------------------------
 # Test ROB-8: readable --data-file on a GET route (no -X POST).
 #
-# This is a DELIBERATE behavioural divergence between the two implementations,
+# This is a DELIBERATE behavioral divergence between the two implementations,
 # documented in ideas/SPEC.md and in src/http_client.zig (execute()):
 #
-#   * Perl (openqa-cli) silently sends the body on a GET and exits 0 — the
+#   * Perl (openqa-cli) silently sends the body on a GET and exits 0 - the
 #     server ignores the body and returns 200.
 #   * Zig (zoqa) rejects the request up front with a clean non-zero exit
 #     (error.BodyOnBodilessMethod), because std.http.Client asserts that the
@@ -209,7 +209,7 @@ fi
 #
 # The critical regression guard here is: Zig must FAIL CLEANLY, i.e. exit
 # non-zero WITHOUT crashing (exit code must NOT be 134 and stderr must not
-# contain a panic).  We assert Zig's behaviour directly rather than requiring
+# contain a panic).  We assert Zig's behavior directly rather than requiring
 # parity with Perl.  A readable file is used on purpose so the read succeeds
 # and the GET+body code path is actually reached (unlike ROB-4/5/7, where the
 # read fails first).

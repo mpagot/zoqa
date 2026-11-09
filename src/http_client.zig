@@ -3739,7 +3739,7 @@ test "executeStream: reject_html returns error.UnexpectedHtmlResponse on text/ht
     try testing.expectError(error.UnexpectedHtmlResponse, result);
 }
 
-test "buildHeaders: R1 regression — always exactly one Accept header" {
+test "buildHeaders: R1 regression - always exactly one Accept header" {
     const testing = std.testing;
     const allocator = testing.allocator;
 

@@ -1,4 +1,4 @@
-// mock_client.zig — duck-typed HTTP client for fuzz harnesses.
+// mock_client.zig - duck-typed HTTP client for fuzz harnesses.
 //
 // Satisfies the protocol consumed by both `http_client.execute` and
 // `http_client.executeStream` (`src/http_client.zig`), and by any function
@@ -6,7 +6,7 @@
 // `runSchedule`, `runMonitor`, `runArchive`). Originally lived inline in
 // fuzz_execute.zig; extracted here so multiple harnesses can share it.
 //
-// Knobs (single-response mode — the default):
+// Knobs (single-response mode - the default):
 //   - fail_attempts:    return error.ConnectionRefused N times before succeeding
 //                       (exercises the retry loop in http_client.execute).
 //   - response_status:  HTTP status code returned on success.
@@ -71,7 +71,7 @@ pub const ProgrammableMockClient = struct {
                     if (self.emit_content_type) {
                         return .{ .name = "Content-Type", .value = "application/json" };
                     }
-                    // Skip Content-Type in headers — let structured field handle it
+                    // Skip Content-Type in headers - let structured field handle it
                     return self.next();
                 }
                 if (self.count == 1 and self.use_gzip) {
@@ -137,7 +137,7 @@ pub const ProgrammableMockClient = struct {
         }
     };
 
-    // Configuration — set before each call to openQAReq.
+    // Configuration - set before each call to openQAReq.
     fail_attempts: u8 = 0,
     response_status: std.http.Status = .ok,
     response_gzip: bool = false,
@@ -154,7 +154,7 @@ pub const ProgrammableMockClient = struct {
     next_bodies: ?[]const []const u8 = null,
     next_statuses: ?[]const std.http.Status = null,
 
-    // Internal state — reset by each call to request().
+    // Internal state - reset by each call to request().
     attempt: usize = 0,
     scripted_index: usize = 0,
     response: MockResponse = undefined,

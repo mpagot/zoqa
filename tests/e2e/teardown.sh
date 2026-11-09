@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# teardown.sh — Generic openQA container cleanup.
+# teardown.sh - Generic openQA container cleanup.
 #
 # Stops and removes the openQA single-instance container and cleans up
 # temporary files created by setup.sh and run.sh.
@@ -87,7 +87,7 @@ if [[ "$COLLECT_LOGS" == "true" ]]; then
 		container_exec cat /var/log/apache2/access_log 2>/dev/null >"$LOG_DIR/apache-access.log" || true
 		container_exec cat /var/log/apache2/error_log 2>/dev/null >"$LOG_DIR/apache-error.log" || true
 		container_exec journalctl --no-pager 2>/dev/null >"$LOG_DIR/journal.log" || true
-		# Gru / Minion worker logs — find then cat each file individually
+		# Gru / Minion worker logs - find then cat each file individually
 		container_exec bash -c "find /var/log -name 'gru*' -o -name 'minion*' 2>/dev/null | xargs -r cat" \
 			>"$LOG_DIR/gru.log" 2>/dev/null || true
 		# Container stdout/stderr (podman-side)

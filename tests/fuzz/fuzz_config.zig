@@ -84,14 +84,14 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     const host_arg: ?[]const u8 = if (hostname_bytes.len > 0) hostname_bytes else null;
 
     // ---------------------------------------------------------------------------
-    // Target 1: resolveHost — exercises all 7 branches
+    // Target 1: resolveHost - exercises all 7 branches
     // ---------------------------------------------------------------------------
     if (config.resolveHost(allocator, flag_osd, flag_o3, flag_odn, host_arg)) |host_res| {
         if (host_res.allocated) allocator.free(host_res.url);
     } else |_| {}
 
     // ---------------------------------------------------------------------------
-    // Target 2: findCredentialsWith — exercises the full credential lookup
+    // Target 2: findCredentialsWith - exercises the full credential lookup
     //           pipeline: path construction → file reading (mocked) → parseIni
     //           → section matching → key/value extraction → Credentials.
     //

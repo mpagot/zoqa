@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run.sh — run afl-fuzz for exactly one fuzz target.
+# run.sh - run afl-fuzz for exactly one fuzz target.
 #
 # Usage:
 #   ./tests/fuzz/run.sh <target>             # fresh run from corpus_<target>_min/
@@ -19,17 +19,17 @@
 #   - For --continue: out_<target>/ must already contain a prior campaign
 #
 # Environment variables honoured (set before calling this script):
-#   AFL_SKIP_CPUFREQ                  — skip CPU frequency check (useful on laptops)
-#   AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES — skip /proc/sys/kernel/core_pattern check
+#   AFL_SKIP_CPUFREQ                  - skip CPU frequency check (useful on laptops)
+#   AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES - skip /proc/sys/kernel/core_pattern check
 #   Any other AFL_* variable is passed through to afl-fuzz unchanged.
 #
 # Target names:
 #
-#     config   — INI parser + resolveHost          (zoqa-fuzz-config, config.dict)
-#     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request, cli.dict)
-#     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute, no dict)
-#     schedule — runSchedule + runMonitor          (zoqa-fuzz-schedule, no dict)
-#     clone_job — clone-job dependency graph       (zoqa-fuzz-clone-job, clone_job.dict)
+#     config   - INI parser + resolveHost          (zoqa-fuzz-config, config.dict)
+#     request  - CLI args + buildRequest + JSON    (zoqa-fuzz-request, cli.dict)
+#     execute  - full pipeline: auth+retry+gzip    (zoqa-fuzz-execute, no dict)
+#     schedule - runSchedule + runMonitor          (zoqa-fuzz-schedule, no dict)
+#     clone_job - clone-job dependency graph       (zoqa-fuzz-clone-job, clone_job.dict)
 
 set -euo pipefail
 

@@ -134,7 +134,7 @@ make zig-doc-lint WITH_PRIVATE=1   # also include private functions
 - `Errors:` section when the return type is an error union (`!T`)
 
 
-## CI Compliance — GitHub Checks at Every PR
+## CI Compliance: GitHub Checks at Every PR
 
 `.github/workflows/ci.yml` defines four required jobs:
 
@@ -167,7 +167,7 @@ git pull
 
 **2. Bump the version in `build.zig.zon`**
 
-Update the `.version` field to match the new release version, commit, and push to `main`. The release workflow pre-flight check enforces that this version matches the pushed tag — the build is aborted if they differ.
+Update the `.version` field to match the new release version, commit, and push to `main`. The release workflow pre-flight check enforces that this version matches the pushed tag; the build is aborted if they differ.
 
 **3. Create and push the tag**
 

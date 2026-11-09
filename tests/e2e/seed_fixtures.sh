@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# seed_fixtures.sh — Seeds the running openQA container with infrastructure.
+# seed_fixtures.sh - Seeds the running openQA container with infrastructure.
 #
 # Sets up templates, images, and the test distribution so that test suites
 # can schedule jobs on demand via lib.sh helper functions (ensure_basic_job,
 # ensure_rich_job, schedule_job, etc.).  This script does NOT schedule any
-# openQA jobs — that responsibility belongs to the individual test suites.
+# openQA jobs - that responsibility belongs to the individual test suites.
 #
 # Designed to be called from setup.sh via:
 #   podman exec openqa-e2e bash /app/tests/e2e/seed_fixtures.sh
@@ -87,7 +87,7 @@ else
 fi
 log "Machine count: $MACHINE_COUNT"
 [[ "$DRY_RUN" == "true" || "$MACHINE_COUNT" -ge 3 ]] ||
-	die "Expected >=3 machines, got $MACHINE_COUNT — check templates.json"
+	die "Expected >=3 machines, got $MACHINE_COUNT - check templates.json"
 
 # ---------------------------------------------------------------------------
 # 3. Capture the job group ID
@@ -122,7 +122,7 @@ HDD_DIR="/var/lib/openqa/share/factory/hdd"
 
 if [[ "$DRY_RUN" == "false" ]]; then
 	if [[ ! -f "$HDD_DIR/$CIRROS_IMG" ]]; then
-		die "CirrOS image not found at $HDD_DIR/$CIRROS_IMG — setup.sh should have injected it"
+		die "CirrOS image not found at $HDD_DIR/$CIRROS_IMG - setup.sh should have injected it"
 	fi
 	log "CirrOS image present at $HDD_DIR/$CIRROS_IMG"
 else

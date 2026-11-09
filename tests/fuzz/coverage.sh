@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# coverage.sh — build, run kcov, and analyse coverage for all fuzz targets.
+# coverage.sh - build, run kcov, and analyse coverage for all fuzz targets.
 #
 # Usage:
 #   ./tests/fuzz/coverage.sh                  # build + run + analyse all targets
@@ -26,7 +26,7 @@
 #                    - Partial branch coverage (M/N where M < N)
 #
 # Output files (written alongside this script):
-#   coverage_report.txt  — the full text report (also printed to stdout)
+#   coverage_report.txt  - the full text report (also printed to stdout)
 #
 # Requirements:
 #   - kcov installed and on PATH
@@ -41,11 +41,11 @@
 #                   analyse. Useful for CI syntax checks of the harnesses.
 #
 # Target names:
-#   config   — INI parser + resolveHost          (corpus_config/)
-#   request  — CLI args + buildRequest + JSON    (corpus_request/)
-#   execute  — full pipeline: auth+retry+gzip    (corpus_execute/)
-#   schedule — runSchedule + runMonitor          (corpus_schedule/)
-#   clone_job — clone-job dependency graph       (corpus_clone_job/)
+#   config   - INI parser + resolveHost          (corpus_config/)
+#   request  - CLI args + buildRequest + JSON    (corpus_request/)
+#   execute  - full pipeline: auth+retry+gzip    (corpus_execute/)
+#   schedule - runSchedule + runMonitor          (corpus_schedule/)
+#   clone_job - clone-job dependency graph       (corpus_clone_job/)
 
 set -euo pipefail
 
@@ -178,12 +178,12 @@ if [[ $SKIP_BUILD -eq 0 ]]; then
 	}
 
 	if [[ ${#TARGETS[@]} -eq ${#ALL_TARGETS[@]} ]]; then
-		# All targets — use the aggregate "coverage" step.
+		# All targets - use the aggregate "coverage" step.
 		echo "==> zig build -Dcoverage coverage"
 		echo ""
 		run_coverage_build "zig build -Dcoverage coverage" -Dcoverage coverage
 	else
-		# Specific targets — run each coverage-<name> step.
+		# Specific targets - run each coverage-<name> step.
 		for target in "${TARGETS[@]}"; do
 			echo "==> zig build -Dcoverage coverage-${target}"
 			echo ""
@@ -214,7 +214,7 @@ declare -A CODECOV_JSON # target -> path to codecov.json
 for target in "${TARGETS[@]}"; do
 	target_dir="$COV_DIR/$target"
 	if [[ ! -d "$target_dir" ]]; then
-		echo "    WARNING: $target_dir not found — skipping '$target'." >&2
+		echo "    WARNING: $target_dir not found - skipping '$target'." >&2
 		continue
 	fi
 
@@ -235,7 +235,7 @@ for target in "${TARGETS[@]}"; do
 	done
 
 	if [[ -z "$latest" ]]; then
-		echo "    WARNING: no valid coverage.json found for '$target' — skipping." >&2
+		echo "    WARNING: no valid coverage.json found for '$target' - skipping." >&2
 		continue
 	fi
 
@@ -267,7 +267,7 @@ trap 'rm -f "$REPORT"' EXIT
 
 {
 	echo "====================================================================="
-	echo " openQAclient — Fuzz Coverage Report"
+	echo " openQAclient - Fuzz Coverage Report"
 	echo " Generated: $(date '+%Y-%m-%d %H:%M:%S')"
 	echo "====================================================================="
 	echo ""
@@ -366,7 +366,7 @@ trap 'rm -f "$REPORT"' EXIT
 	echo " Uncovered Lines (0 hits)"
 	echo "---------------------------------------------------------------------"
 	echo ""
-	echo "  Lines with 0/N in codecov.json — code never executed by any seed."
+	echo "  Lines with 0/N in codecov.json - code never executed by any seed."
 	echo ""
 
 	for target in "${TARGETS[@]}"; do

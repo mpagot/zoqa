@@ -1102,7 +1102,7 @@ test "parseArgs: unknown subcommand returns UnknownSubcommand" {
 test "parseArgs: stop flag -- at position 1 is rejected" {
     const allocator = std.testing.allocator;
     // -- at argv[1] is now treated as any other flag-like token → InvalidCommand.
-    // (The old behaviour accepted it and treated everything after as positionals,
+    // (The old behavior accepted it and treated everything after as positionals,
     // but the resulting "subcommand" was never valid anyway.)
     const argv: []const []const u8 = &.{
         "zoqa", "--", "--osd", "jobs",
@@ -1234,7 +1234,7 @@ test "parseArgs: -L alias for --links" {
 // ---------------------------------------------------------------------------
 // Regression guards: confirm that combined short flags and archive-specific
 // flags used with the api subcommand are correctly rejected.  These tests
-// should PASS with the current code : they lock in existing correct behaviour.
+// should PASS with the current code : they lock in existing correct behavior.
 // ---------------------------------------------------------------------------
 
 test "parseArgs: combined short flags -vp rejected" {

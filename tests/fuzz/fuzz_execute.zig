@@ -31,28 +31,28 @@
 //     Any other value → GET (fallback)
 //
 //   ctrl_byte bits:
-//     bits 0-1 (0x03): fail_attempts — number of times request() returns error
+//     bits 0-1 (0x03): fail_attempts - number of times request() returns error
 //                      before succeeding (0–3). Exercises the retry loop.
-//     bit 2 (0x04):    use_gzip — if set, mock returns Content-Encoding: gzip
+//     bit 2 (0x04):    use_gzip - if set, mock returns Content-Encoding: gzip
 //                      header and the section 4 bytes as body.
-//     bit 3 (0x08):    emit_link_header — if set, mock emits a Link header
+//     bit 3 (0x08):    emit_link_header - if set, mock emits a Link header
 //                      whose value is section 5 content after stream_ctrl bytes.
-//     bit 4 (0x10):    use_structured_ct — if CLEAR, the mock's head.content_type
+//     bit 4 (0x10):    use_structured_ct - if CLEAR, the mock's head.content_type
 //                      is set to null, exercising the structured-field fallback
 //                      path in http_client.zig.
-//     bit 5 (0x20):    inject_read_failed — if set, streamRemaining returns
+//     bit 5 (0x20):    inject_read_failed - if set, streamRemaining returns
 //                      error.ReadFailed on first call.
-//     bit 6 (0x40):    include_accept_header — if set, an Accept header is
+//     bit 6 (0x40):    include_accept_header - if set, an Accept header is
 //                      added to extra_headers, exercising the "Accept already
 //                      present" check in buildHeaders.
-//     bit 7 (0x80):    use_streaming — if set, also exercise the streaming
+//     bit 7 (0x80):    use_streaming - if set, also exercise the streaming
 //                      path (openQARawGet → executeStream). Section 5 bytes
 //                      control content_length and partial delivery.
 //
 //   status_hi, status_lo: u16 HTTP status code (big-endian). If both are 0,
 //   defaults to 200. Values outside 100–599 are clamped to 200.
 //
-//   stream_ctrl_byte (section 5, byte 0 — only when ctrl bit 7 set):
+//   stream_ctrl_byte (section 5, byte 0 - only when ctrl bit 7 set):
 //     bits 0-1 (0x03): content_length mode:
 //                      0 = null (no Content-Length)
 //                      1 = exact match (body.len)
@@ -76,7 +76,7 @@
 // ---------------------------------------------------------------------------
 //
 // No setup needed. The harness sets `retry_sleep_s = 0` directly on the
-// CallOptions passed to openQAReq below — env vars (OPENQA_CLI_RETRY_*) are
+// CallOptions passed to openQAReq below - env vars (OPENQA_CLI_RETRY_*) are
 // only read by main.zig's CLI parsing layer and never reach the library code.
 //
 // ---------------------------------------------------------------------------
@@ -103,13 +103,13 @@ const mock_client = @import("mock_client.zig");
 const ProgrammableMockClient = mock_client.ProgrammableMockClient;
 
 // ---------------------------------------------------------------------------
-// zig_fuzz_init — called once per AFL++ worker process
+// zig_fuzz_init - called once per AFL++ worker process
 // ---------------------------------------------------------------------------
 
 pub export fn zig_fuzz_init() void {}
 
 // ---------------------------------------------------------------------------
-// zig_fuzz_test — called in a tight loop by AFL++ persistent mode
+// zig_fuzz_test - called in a tight loop by AFL++ persistent mode
 // ---------------------------------------------------------------------------
 
 pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
@@ -269,7 +269,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
             .params = params,
             .credentials = creds,
             .headers = extra_headers,
-            // Up to 3 retries — matches fail_attempts range (0–3).
+            // Up to 3 retries - matches fail_attempts range (0–3).
             .retries = 3,
             .quiet = true,
             // Skip the production 3-second backoff between retry attempts so
@@ -288,7 +288,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     // When ctrl bit 7 is set, also exercise the streaming execution path.
     // This covers: Content-Length validation, HttpTransferTruncated,
     // LengthRequired, FileTooLarge, and the pre-stream retry loop in
-    // executeStream — none of which are reachable via openQAReq/execute.
+    // executeStream - none of which are reachable via openQAReq/execute.
     if (use_streaming) {
         // Reset mock state for the second call (attempt counter, scripted index).
         mock.attempt = 0;

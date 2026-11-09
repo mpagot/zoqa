@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# tests_gatekeeper.sh — Gatekeeper and rate-limit robustness tests (GAT-1 to GAT-44).
+# tests_gatekeeper.sh - Gatekeeper and rate-limit robustness tests (GAT-1 to GAT-44).
 #
 # Verifies the three real gaps found against openqa.opensuse.org (o3), whose
 # traffic is routed through the Anubis bot gatekeeper plus NGINX rate
@@ -15,7 +15,7 @@
 #       replaces the computed backoff delay; non-integer values (e.g. HTTP dates)
 #       are ignored and fall back to computed delay.
 #
-# Pattern: Perl leg first (openqa-cli / openqa-clone-job as the behavioural
+# Pattern: Perl leg first (openqa-cli / openqa-clone-job as the behavioral
 # oracle), then reset_faultproxy, then the Zig leg.  Both exit code and
 # proxy hit count are asserted for both implementations.
 #
@@ -34,7 +34,7 @@
 
 echo "==> [gatekeeper] Running gatekeeper / rate-limit tests (GAT-1 to GAT-44)..."
 
-# Local binary handles — same convention as tests_clone_single.sh.
+# Local binary handles - same convention as tests_clone_single.sh.
 PERL_CLONE_EXE="openqa-clone-job"
 ZIG_CLONE_EXE="/app/zig-out/bin/zoqa-clone-job"
 
@@ -54,9 +54,9 @@ ZIG_CLONE_EXE="/app/zig-out/bin/zoqa-clone-job"
 #
 # NOTE: start_faultproxy (pkill + truncate + podman exec -d + sleep 1) takes
 # several seconds.  For tests that assert on wall-clock elapsed time, the
-# caller must start the proxy BEFORE taking the timestamp — otherwise the
+# caller must start the proxy BEFORE taking the timestamp - otherwise the
 # proxy startup is counted as client delay and the assertion measures
-# harness overhead, not client behaviour.
+# harness overhead, not client behavior.
 # -----------------------------------------------------------------------------
 _gat_run_both() {
 	local tag=$1
@@ -88,7 +88,7 @@ _gat_run_both() {
 #
 # Runs one implementation's leg against an ALREADY-RUNNING fault proxy and
 # stops the proxy afterwards.  For timed tests: start the proxy, take the
-# timestamp, then call this — so the measured window covers only the client
+# timestamp, then call this - so the measured window covers only the client
 # run, not proxy startup.
 #
 # Exit code in _GAT_LEG_EXIT, hit count for PATH in _GAT_LEG_HITS.
@@ -105,14 +105,14 @@ _gat_run_leg() {
 }
 
 # =============================================================================
-# Part A — zoqa api ↔ openqa-cli api (GAT-1 to GAT-12)
+# Part A - zoqa api ↔ openqa-cli api (GAT-1 to GAT-12)
 # =============================================================================
 #
 # All Part A tests run against the live container API through the fault
 # proxy.  The proxy's fault path is /api/v1/ so the faulted route is the
 # one the api subcommand hits.
 
-# GAT-1: R1 — every request carries an Accept header.
+# GAT-1: R1 - every request carries an Accept header.
 # Test GAT-1: api request header log shows Accept on every request
 #
 # The header log records one line per request: "METHOD PATH accept=<v|->".
@@ -136,7 +136,7 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-2: R1 — caller-supplied Accept replaces the default (exactly one).
+# GAT-2: R1 - caller-supplied Accept replaces the default (exactly one).
 # Test GAT-2: caller-supplied Accept header wins, no duplicate
 #
 # Both implementations must send exactly one Accept header with the
@@ -166,8 +166,8 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-3: R2 — challenge page on /api/v1/ does not change API behaviour.
-# Test GAT-3: challenge on /api/v1/ — API path unchanged (both exit 0)
+# GAT-3: R2 - challenge page on /api/v1/ does not change API behavior.
+# Test GAT-3: challenge on /api/v1/ - API path unchanged (both exit 0)
 #
 # The challenge mode returns 200 text/html on the fault path.  For the api
 # subcommand the body is simply printed (the API path does not reject HTML),
@@ -186,8 +186,8 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-4: R3 — 429 is retried.
-# Test GAT-4: 429x2 then success — both retry
+# GAT-4: R3 - 429 is retried.
+# Test GAT-4: 429x2 then success - both retry
 #
 # With OPENQA_CLI_RETRIES=2 (Zig) / --retries 2 (Perl) and SLEEP=0, both
 # must make 3 hits (1 + 2 retries) and exit 0.
@@ -211,8 +211,8 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-5: R3 — 408 / 500 / 504 are retried.
-# Test GAT-5: 408/500/504 x1 each — both retry
+# GAT-5: R3 - 408 / 500 / 504 are retried.
+# Test GAT-5: 408/500/504 x1 each - both retry
 #
 # One faulted attempt per status, then success.  Both must make 2 hits and
 # exit 0 for each status.
@@ -238,8 +238,8 @@ for _gat5_status in 408 500 504; do
 	fi
 done
 
-# GAT-6: R3 — persistent 429 exhausts retries.
-# Test GAT-6: 429 always — both exhaust retries
+# GAT-6: R3 - persistent 429 exhausts retries.
+# Test GAT-6: 429 always - both exhaust retries
 #
 # With RETRIES=2 both must make 3 hits and exit non-zero.
 _gat_run_both "gat6" 429 99 /api/v1/ "" \
@@ -262,8 +262,8 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-7: R4 — Retry-After in seconds replaces the computed delay.
-# Test GAT-7: 429x2 + Retry-After: 2 — both honour the delay
+# GAT-7: R4 - Retry-After in seconds replaces the computed delay.
+# Test GAT-7: 429x2 + Retry-After: 2 - both honour the delay
 #
 # SLEEP=0 makes the computed delay 0, so any measurable sleep comes from
 # Retry-After.  Two retried responses × 2 s = per-leg elapsed >= 4 s.
@@ -309,8 +309,8 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-8: R4 — Retry-After as HTTP date (non-integer ignored by Zig).
-# Test GAT-8: 429x2 + Retry-After: date:+5 — Perl honours HTTP-date, Zig ignores and falls back
+# GAT-8: R4 - Retry-After as HTTP date (non-integer ignored by Zig).
+# Test GAT-8: 429x2 + Retry-After: date:+5 - Perl honours HTTP-date, Zig ignores and falls back
 #
 # The proxy renders "date:+5" as an HTTP date 5 s after each 429 response.
 # Perl parses HTTP-date headers and sleeps ~5 s per retry (~10 s total).
@@ -352,8 +352,8 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-9: R4 — unparsable Retry-After falls back to the computed delay.
-# Test GAT-9: 429x2 + Retry-After: soon — fallback to computed delay
+# GAT-9: R4 - unparsable Retry-After falls back to the computed delay.
+# Test GAT-9: 429x2 + Retry-After: soon - fallback to computed delay
 #
 # "soon" is not a valid Retry-After value; both fall back to the computed
 # delay (SLEEP=1 → 1 s per retry).  Two retries → per-leg elapsed >= 2 s.
@@ -393,14 +393,14 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-10: R4 control — no Retry-After, computed delay only.
-# Test GAT-10: 503x2 without Retry-After — computed delay only (control)
+# GAT-10: R4 control - no Retry-After, computed delay only.
+# Test GAT-10: 503x2 without Retry-After - computed delay only (control)
 #
 # SLEEP=0 → computed delay 0 → per-leg elapsed < 5 s.  This is the control
 # that proves GAT-7/8/9 measured the Retry-After sleep, not the backoff.
 # The proxy is started before the timestamp so the measured window covers
 # only the client run (two podman exec round-trips + process startup,
-# typically 2-4 s) — not proxy startup.
+# typically 2-4 s) - not proxy startup.
 _gat10_perl_cmd="bash -c \"OPENQA_CLI_RETRIES=2 OPENQA_CLI_RETRY_SLEEP_TIME_S=0 ${PERL_EXE} api --host http://127.0.0.1:${FAULTPROXY_PORT} jobs/${JOB_ID}\""
 _gat10_zig_cmd="bash -c \"OPENQA_CLI_RETRIES=2 OPENQA_CLI_RETRY_SLEEP_TIME_S=0 ${ZIG_EXE} api --host http://127.0.0.1:${FAULTPROXY_PORT} jobs/${JOB_ID}\""
 
@@ -435,13 +435,13 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-11: R4 — Retry-After on a non-retried status (404) is ignored.
-# Test GAT-11: 404 + Retry-After: 30 — no retry, delay ignored
+# GAT-11: R4 - Retry-After on a non-retried status (404) is ignored.
+# Test GAT-11: 404 + Retry-After: 30 - no retry, delay ignored
 #
 # 404 is never retried; the Retry-After header must be ignored.  Both make
 # exactly 1 hit, exit non-zero, and finish quickly (per-leg elapsed < 5 s).
 # The proxy is started before the timestamp so the measured window covers
-# only the client run — if the 30 s Retry-After were (wrongly) honoured,
+# only the client run - if the 30 s Retry-After were (wrongly) honoured,
 # the leg would take >= 30 s and this would fail.
 _gat11_perl_cmd="bash -c \"OPENQA_CLI_RETRIES=2 OPENQA_CLI_RETRY_SLEEP_TIME_S=0 ${PERL_EXE} api --host http://127.0.0.1:${FAULTPROXY_PORT} jobs/${JOB_ID}\""
 _gat11_zig_cmd="bash -c \"OPENQA_CLI_RETRIES=2 OPENQA_CLI_RETRY_SLEEP_TIME_S=0 ${ZIG_EXE} api --host http://127.0.0.1:${FAULTPROXY_PORT} jobs/${JOB_ID}\""
@@ -485,8 +485,8 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-12: R4 — Retry-After 60s cap divergence (Zig caps at 60s, Perl uncapped).
-# Test GAT-12: 429x1 + Retry-After: 70 — Zig caps delay at 60s and finishes within timeout; Perl uncapped.
+# GAT-12: R4 - Retry-After 60s cap divergence (Zig caps at 60s, Perl uncapped).
+# Test GAT-12: 429x1 + Retry-After: 70 - Zig caps delay at 60s and finishes within timeout; Perl uncapped.
 #
 # The server sends Retry-After: 70 on a 429 error.
 # Zig clamps the delay to RETRY_AFTER_CAP_S = 60s, retries after 60s, and succeeds (finishing in ~60s).
@@ -527,18 +527,18 @@ else
 fi
 
 # =============================================================================
-# Part B — zoqa-clone-job ↔ openqa-clone-job (GAT-20 to GAT-28)
+# Part B - zoqa-clone-job ↔ openqa-clone-job (GAT-20 to GAT-28)
 # =============================================================================
 #
 # Part B needs a job with real assets (the rich job: cirros qcow2 + ISO).
-# ensure_rich_job is idempotent — if an earlier suite already scheduled the
+# ensure_rich_job is idempotent - if an earlier suite already scheduled the
 # rich job, this is a no-op.
 
 ensure_rich_job
 GAT_RICH_JOB_ID="$RICH_JOB_ID"
 
-# GAT-20: R1 — Accept on every request including redirect hops.
-# Test GAT-20: clone-job with --pass-redirects — Accept on every hop
+# GAT-20: R1 - Accept on every request including redirect hops.
+# Test GAT-20: clone-job with --pass-redirects - Accept on every hop
 #
 # The proxy does not follow backend redirects, so the 302 + Location from
 # the /tests/{id}/asset/... route reaches the client.  Both implementations
@@ -590,8 +590,8 @@ if [[ "$DRY_RUN" != "true" ]]; then
 fi
 container_exec rm -rf "$ASSET_DIR_GAT_20_PERL"
 
-# GAT-21: R1 — challenge_no_accept: challenged only when Accept is missing.
-# Test GAT-21: challenge_no_accept on /tests/ + /assets/ — both download OK
+# GAT-21: R1 - challenge_no_accept: challenged only when Accept is missing.
+# Test GAT-21: challenge_no_accept on /tests/ + /assets/ - both download OK
 #
 # The proxy serves the challenge page only to requests WITHOUT an Accept
 # header.  Both implementations send Accept on asset GETs and redirect
@@ -609,7 +609,7 @@ stop_faultproxy
 if [[ "$_GAT21_ZIG_EXIT" -eq 0 ]]; then
 	echo "PASS: GAT-21 Zig exits 0 (Accept sent, no challenge)"
 else
-	echo "FAIL: GAT-21 Zig exit=$_GAT21_ZIG_EXIT (expected 0 — challenged?)"
+	echo "FAIL: GAT-21 Zig exit=$_GAT21_ZIG_EXIT (expected 0 - challenged?)"
 	dump_faultproxy_logs
 	failed_tests=$((failed_tests + 1))
 fi
@@ -631,7 +631,7 @@ stop_faultproxy
 if [[ "$_GAT21_PERL_EXIT" -eq 0 ]]; then
 	echo "PASS: GAT-21 Perl exits 0 (Accept sent, no challenge)"
 else
-	echo "FAIL: GAT-21 Perl exit=$_GAT21_PERL_EXIT (expected 0 — challenged?)"
+	echo "FAIL: GAT-21 Perl exit=$_GAT21_PERL_EXIT (expected 0 - challenged?)"
 	dump_faultproxy_logs
 	failed_tests=$((failed_tests + 1))
 fi
@@ -640,13 +640,13 @@ if [[ "$DRY_RUN" != "true" ]]; then
 fi
 container_exec rm -rf "$ASSET_DIR_GAT_21_PERL"
 
-# GAT-22: R2 — challenge on asset GET.
-# Test GAT-22: challenge on asset GET — Zig rejects, Perl saves (divergence)
+# GAT-22: R2 - challenge on asset GET.
+# Test GAT-22: challenge on asset GET - Zig rejects, Perl saves (divergence)
 #
 # The proxy serves the challenge page (200 text/html) for every attempt of
 # the hdd asset.  Zig must treat this as a permanent error: exit 1, name
 # the asset, make exactly 1 attempt (no retry), and keep no file.  Perl
-# (oracle) saves the HTML as the asset and exits 0 — a documented
+# (oracle) saves the HTML as the asset and exits 0 - a documented
 # divergence (docs/PERL_DEVIATIONS.md).
 start_faultproxy 99 challenge "/tests/${GAT_RICH_JOB_ID}/asset/hdd/" 64
 ASSET_DIR_GAT_22_ZIG="/tmp/e2e-gat22-zig-$$"
@@ -696,7 +696,7 @@ _GAT22_PERL_EXIT=$_LAST_EXIT
 stop_faultproxy
 # Perl saves the challenge HTML as the asset and exits 0 (divergence).
 if [[ "$_GAT22_PERL_EXIT" -eq 0 ]]; then
-	echo "PASS: GAT-22 Perl exits 0 (HTML saved as asset — documented divergence)"
+	echo "PASS: GAT-22 Perl exits 0 (HTML saved as asset - documented divergence)"
 else
 	echo "FAIL: GAT-22 Perl exit=$_GAT22_PERL_EXIT (expected 0)"
 	dump_faultproxy_logs
@@ -704,8 +704,8 @@ else
 fi
 container_exec rm -rf "$ASSET_DIR_GAT_22_PERL"
 
-# GAT-23: R3 — BFS GET 429x2.
-# Test GAT-23: BFS GET 429x2 — both retry
+# GAT-23: R3 - BFS GET 429x2.
+# Test GAT-23: BFS GET 429x2 - both retry
 #
 # The proxy faults the BFS GET (/api/v1/jobs/{id}) with 429 twice.  Both
 # must retry and exit 0.
@@ -733,8 +733,8 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# GAT-24: R3 — asset 429x2.
-# Test GAT-24: asset 429x2 — both retry, MD5 OK
+# GAT-24: R3 - asset 429x2.
+# Test GAT-24: asset 429x2 - both retry, MD5 OK
 #
 # The proxy faults the hdd asset GET with 429 twice, then forwards.  Both
 # must retry, exit 0, and download the asset intact (MD5 OK).
@@ -784,8 +784,8 @@ if [[ "$DRY_RUN" != "true" ]]; then
 fi
 container_exec rm -rf "$ASSET_DIR_GAT_24_PERL"
 
-# GAT-25: R3 — asset 408x2.
-# Test GAT-25: asset 408x2 — both retry, MD5 OK
+# GAT-25: R3 - asset 408x2.
+# Test GAT-25: asset 408x2 - both retry, MD5 OK
 start_faultproxy 2 408 "/tests/${GAT_RICH_JOB_ID}/asset/hdd/" 64
 ASSET_DIR_GAT_25_ZIG="/tmp/e2e-gat25-zig-$$"
 container_exec mkdir -p "$ASSET_DIR_GAT_25_ZIG"
@@ -832,11 +832,11 @@ if [[ "$DRY_RUN" != "true" ]]; then
 fi
 container_exec rm -rf "$ASSET_DIR_GAT_25_PERL"
 
-# GAT-26: R3 — persistent asset 429 with --retry 0.
-# Test GAT-26: asset 429 always, --retry 0 — no retries
+# GAT-26: R3 - persistent asset 429 with --retry 0.
+# Test GAT-26: asset 429 always, --retry 0 - no retries
 #
 # With --retry 0 neither implementation retries.  Zig makes 1 request
-# (GET) and exits 1 (correct).  Perl makes 2 requests (HEAD + GET —
+# (GET) and exits 1 (correct).  Perl makes 2 requests (HEAD + GET -
 # the HEAD is curl's redirect-resolution probe, see SPEC §18.18) and
 # exits 0 (known curl --fail bug, documented in docs/PERL_DEVIATIONS.md).
 start_faultproxy 99 429 "/tests/${GAT_RICH_JOB_ID}/asset/hdd/" 64
@@ -877,7 +877,7 @@ stop_faultproxy
 # is 2, not 1. Zig follows redirects in-process and issues a single
 # GET (1 hit). See SPEC §18.18 step 4 note and PERL_DEVIATIONS.md.
 if [[ "$_GAT26_PERL_EXIT" -eq 0 && "$_GAT26_PERL_HITS" -eq 2 ]]; then
-	echo "PASS: GAT-26 Perl exits 0 with 2 hits (HEAD + GET, curl --fail bug — documented)"
+	echo "PASS: GAT-26 Perl exits 0 with 2 hits (HEAD + GET, curl --fail bug - documented)"
 else
 	echo "FAIL: GAT-26 Perl exit=$_GAT26_PERL_EXIT hits=$_GAT26_PERL_HITS (expected 0 / 2)"
 	dump_faultproxy_logs
@@ -885,8 +885,8 @@ else
 fi
 container_exec rm -rf "$ASSET_DIR_GAT_26_PERL"
 
-# GAT-27: R4 — asset 429x2 + Retry-After: 2.
-# Test GAT-27: asset 429x2 + Retry-After: 2 — both honour the delay
+# GAT-27: R4 - asset 429x2 + Retry-After: 2.
+# Test GAT-27: asset 429x2 + Retry-After: 2 - both honour the delay
 #
 # SLEEP=0 makes the computed delay 0; the 2 s Retry-After on each of the
 # two retried responses dominates.  Each leg's elapsed >= 4 s (2 retried
@@ -950,8 +950,8 @@ if [[ "$DRY_RUN" != "true" ]]; then
 fi
 container_exec rm -rf "$ASSET_DIR_GAT_27_PERL"
 
-# GAT-28: R3 — POST 429x1 (optional).
-# Test GAT-28: POST 429x1 — both retry, job created
+# GAT-28: R3 - POST 429x1 (optional).
+# Test GAT-28: POST 429x1 - both retry, job created
 #
 # The proxy faults the destination POST (/api/v1/jobs) with 429 once.
 # Both must retry and create the job (exit 0).
@@ -982,14 +982,14 @@ fi
 cancel_pending_jobs # clones left by GAT-28
 
 # =============================================================================
-# Part C — o3 symptom reproduction (GAT-40 to GAT-43)
+# Part C - o3 symptom reproduction (GAT-40 to GAT-43)
 # =============================================================================
 #
 # Part C reproduces the openqa.opensuse.org failure mode: the first asset
 # downloads fine, then a later asset faults on every attempt.
 
 # GAT-40 (was CLO-129): partial_cl on EVERY attempt of a LATER asset.
-# Test GAT-40: persistent truncation on a later asset — Zig retries, Perl does not
+# Test GAT-40: persistent truncation on a later asset - Zig retries, Perl does not
 #
 # Reproduces the failure seen against openqa.opensuse.org: the first asset
 # downloads fine, then every attempt of a later, larger asset ends before
@@ -1016,7 +1016,7 @@ cancel_pending_jobs # clones left by GAT-28
 #     asserted only when the ISO is present.
 #
 # ensure_rich_job is idempotent: if an earlier suite already scheduled the
-# rich job, this reuses it.  PARTIAL_JOB_ID is set locally — no cross-suite
+# rich job, this reuses it.  PARTIAL_JOB_ID is set locally - no cross-suite
 # dependency.
 ensure_rich_job
 PARTIAL_JOB_ID="$RICH_JOB_ID"
@@ -1062,7 +1062,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
 		container_exec ls -la "$ASSET_DIR_GAT_40/hdd" || true
 		failed_tests=$((failed_tests + 1))
 	else
-		echo "PASS: GAT-40 Zig — no partial qcow2 left after failed download"
+		echo "PASS: GAT-40 Zig - no partial qcow2 left after failed download"
 	fi
 
 	if container_exec test -s "$ASSET_DIR_GAT_40/iso/seed-nocloud.iso"; then
@@ -1080,12 +1080,12 @@ container_exec rm -rf "$ASSET_DIR_GAT_40"
 # GAT-40 (Perl leg): same persistent partial_cl fault, Perl oracle.
 #
 # curl sees CURLE_PARTIAL_FILE (18) on the length-bearing drop and does not
-# auto-retry (curl's --retry excludes error 18 — see CLO-98b and
+# auto-retry (curl's --retry excludes error 18 - see CLO-98b and
 # docs/PERL_DEVIATIONS.md "Mid-transfer TCP drop").  Expected:
 #   - exit non-zero (curl 18 → "Cloning aborted during asset download")
 #   - >= 1 GET on the hdd path (no retry on error 18; a transient backend
 #     fetch failure in the proxy can add an extra attempt via curl's
-#     error-56 retry, so we assert >= 1 rather than exactly 1 — the
+#     error-56 retry, so we assert >= 1 rather than exactly 1 - the
 #     faultproxy's backend-fetch retry loop minimises but does not
 #     eliminate this)
 #   - the partial qcow2 left behind is informational only (no assertion):
@@ -1097,7 +1097,7 @@ container_exec rm -rf "$ASSET_DIR_GAT_40"
 #     before the faulted qcow2, the ISO is kept and intact (MD5).  If
 #     Perl faults the qcow2 first, the ISO is never downloaded.  Both
 #     outcomes are valid; we assert MD5 only when the ISO is present.
-echo "--- Test GAT-40 (Perl): persistent partial_cl — no retry on length-bearing drop ---"
+echo "--- Test GAT-40 (Perl): persistent partial_cl - no retry on length-bearing drop ---"
 tag="gat-40-perl"
 ASSET_DIR_GAT_40_PERL="/tmp/e2e-${tag}-$$"
 container_exec mkdir -p "$ASSET_DIR_GAT_40_PERL"
@@ -1114,7 +1114,7 @@ stop_faultproxy
 if [[ "$_PERL_EXIT" -ne 0 ]]; then
 	echo "PASS: GAT-40 Perl exits non-zero on persistent length-bearing truncation (no retry)"
 else
-	echo "FAIL: GAT-40 Perl exited 0 (expected non-zero — curl should fail on CURLE_PARTIAL_FILE)"
+	echo "FAIL: GAT-40 Perl exited 0 (expected non-zero - curl should fail on CURLE_PARTIAL_FILE)"
 	dump_faultproxy_logs
 	failed_tests=$((failed_tests + 1))
 fi
@@ -1129,7 +1129,7 @@ else
 fi
 
 if [[ "$DRY_RUN" != "true" ]]; then
-	# Informational: list any partial qcow2 left behind.  No pass/fail — the
+	# Informational: list any partial qcow2 left behind.  No pass/fail - the
 	# length-bearing case is not documented in CLO-98 (which covers the
 	# length-less case only).
 	if container_exec find "$ASSET_DIR_GAT_40_PERL/hdd" -type f 2>/dev/null | grep -q .; then
@@ -1151,17 +1151,17 @@ if [[ "$DRY_RUN" != "true" ]]; then
 		if [[ -n "$_ISO_MD5" && "$_ISO_MD5" == "$_SRC_ISO_MD5" ]]; then
 			echo "PASS: GAT-40 Perl kept the ISO intact (MD5 OK: ${_ISO_MD5})"
 		else
-			echo "FAIL: GAT-40 Perl ISO MD5 mismatch — downloaded=${_ISO_MD5} expected=${_SRC_ISO_MD5}"
+			echo "FAIL: GAT-40 Perl ISO MD5 mismatch - downloaded=${_ISO_MD5} expected=${_SRC_ISO_MD5}"
 			failed_tests=$((failed_tests + 1))
 		fi
 	else
-		echo "INFO: GAT-40 Perl did not download the ISO (qcow2 faulted first — non-deterministic order)"
+		echo "INFO: GAT-40 Perl did not download the ISO (qcow2 faulted first - non-deterministic order)"
 	fi
 fi
 container_exec rm -rf "$ASSET_DIR_GAT_40_PERL"
 
-# GAT-41: challenge on the hdd asset only — likely o3 cause.
-# Test GAT-41: challenge on hdd asset only — Zig rejects, ISO OK
+# GAT-41: challenge on the hdd asset only - likely o3 cause.
+# Test GAT-41: challenge on hdd asset only - Zig rejects, ISO OK
 #
 # The proxy serves the Anubis challenge page for every attempt of the hdd
 # asset only; the ISO downloads cleanly.  This is the most likely shape of
@@ -1226,7 +1226,7 @@ _GAT41_PERL_EXIT=$_LAST_EXIT
 stop_faultproxy
 # Perl saves the challenge HTML as the asset and exits 0 (divergence).
 if [[ "$_GAT41_PERL_EXIT" -eq 0 ]]; then
-	echo "PASS: GAT-41 Perl exits 0 (HTML saved as asset — documented divergence)"
+	echo "PASS: GAT-41 Perl exits 0 (HTML saved as asset - documented divergence)"
 else
 	echo "FAIL: GAT-41 Perl exit=$_GAT41_PERL_EXIT (expected 0)"
 	dump_faultproxy_logs
@@ -1239,14 +1239,14 @@ container_exec rm -rf "$ASSET_DIR_GAT_41_PERL"
 ensure_html_asset_job
 _GAT_HTML_PATH="/tests/${GAT_HTML_JOB_ID}/asset/other/"
 
-# GAT-42: R2 exception — a real *.html asset served as text/html is kept.
-# Test GAT-42: real page.html asset served as text/html — both download it
+# GAT-42: R2 exception - a real *.html asset served as text/html is kept.
+# Test GAT-42: real page.html asset served as text/html - both download it
 #
 # No fault: the asset route redirects to /assets/other/page.html, which the
 # web server answers with 200 Content-Type: text/html.  R2 rejects text/html
 # on asset downloads, except for *.htm/*.html names (Q1), so both
 # implementations must save the file (exit 0, MD5 OK).  A precondition check
-# makes sure the asset really is served as text/html — without it this test
+# makes sure the asset really is served as text/html - without it this test
 # would pass trivially and stop covering the exception.
 #
 # The precondition request must be authenticated: with require_for_assets = 1
@@ -1259,9 +1259,9 @@ if [[ "$DRY_RUN" != "true" ]]; then
 	_gat42_ctype=$(container_exec bash -c \
 		"curl -sL -o /dev/null -D - -b $_AUDIT_COOKIE_JAR http://localhost${_GAT_HTML_PATH}${GAT_HTML_ASSET} | grep -i '^content-type:' | tail -1" || true)
 	if [[ "$_gat42_ctype" == *text/html* ]]; then
-		echo "PASS: GAT-42 precondition — ${GAT_HTML_ASSET} is served as text/html"
+		echo "PASS: GAT-42 precondition - ${GAT_HTML_ASSET} is served as text/html"
 	else
-		echo "FAIL: GAT-42 precondition — ${GAT_HTML_ASSET} served as '${_gat42_ctype}' (expected text/html)"
+		echo "FAIL: GAT-42 precondition - ${GAT_HTML_ASSET} served as '${_gat42_ctype}' (expected text/html)"
 		failed_tests=$((failed_tests + 1))
 	fi
 fi
@@ -1277,7 +1277,7 @@ _GAT42_ZIG_EXIT=$_LAST_EXIT
 if [[ "$_GAT42_ZIG_EXIT" -eq 0 ]]; then
 	echo "PASS: GAT-42 Zig exits 0 (HTML asset not rejected)"
 else
-	echo "FAIL: GAT-42 Zig exit=$_GAT42_ZIG_EXIT (expected 0 — .html exception broken?)"
+	echo "FAIL: GAT-42 Zig exit=$_GAT42_ZIG_EXIT (expected 0 - .html exception broken?)"
 	failed_tests=$((failed_tests + 1))
 fi
 if [[ "$DRY_RUN" != "true" ]]; then
@@ -1316,13 +1316,13 @@ if [[ "$DRY_RUN" != "true" ]]; then
 fi
 container_exec rm -rf "$ASSET_DIR_GAT_42_PERL"
 
-# GAT-43: challenge on a *.html asset — KNOWN GAP, pinned.  [KNOWN GAP]
-# Test GAT-43: challenge on page.html asset — both save the challenge page
+# GAT-43: challenge on a *.html asset - KNOWN GAP, pinned.  [KNOWN GAP]
+# Test GAT-43: challenge on page.html asset - both save the challenge page
 #
 # The proxy serves the challenge page for every attempt of the HTML asset.
 # Because of the *.htm/*.html exception (Q1), Zig cannot tell the challenge
-# from the real page and saves it — exactly like Perl.  This pins TODAY's
-# behaviour so the gap stays visible (plan §5a).  It is NOT a [TDD] test:
+# from the real page and saves it - exactly like Perl.  This pins TODAY's
+# behavior so the gap stays visible (plan §5a).  It is NOT a [TDD] test:
 # when the gap is fixed, flip the Zig assertions to "rejects".
 #
 # Both: exit 0 and the saved page.html is the challenge page (marker
@@ -1342,7 +1342,7 @@ stop_faultproxy
 if [[ "$_GAT43_ZIG_EXIT" -eq 0 && "$_GAT43_ZIG_HITS" -eq 1 ]]; then
 	echo "PASS: GAT-43 Zig exits 0 with 1 hit (challenge on .html asset not detected) [KNOWN GAP]"
 else
-	echo "FAIL: GAT-43 Zig exit=$_GAT43_ZIG_EXIT hits=$_GAT43_ZIG_HITS (expected 0 / 1) [KNOWN GAP — gap fixed? flip this test]"
+	echo "FAIL: GAT-43 Zig exit=$_GAT43_ZIG_EXIT hits=$_GAT43_ZIG_HITS (expected 0 / 1) [KNOWN GAP - gap fixed? flip this test]"
 	dump_faultproxy_logs
 	failed_tests=$((failed_tests + 1))
 fi
@@ -1350,7 +1350,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
 	if container_exec grep -q "Verifying your browser" "$ASSET_DIR_GAT_43_ZIG/other/${GAT_HTML_ASSET}" 2>/dev/null; then
 		echo "PASS: GAT-43 Zig saved the challenge page as ${GAT_HTML_ASSET} [KNOWN GAP]"
 	else
-		echo "FAIL: GAT-43 Zig did not save the challenge page as ${GAT_HTML_ASSET} [KNOWN GAP — gap fixed? flip this test]"
+		echo "FAIL: GAT-43 Zig did not save the challenge page as ${GAT_HTML_ASSET} [KNOWN GAP - gap fixed? flip this test]"
 		failed_tests=$((failed_tests + 1))
 	fi
 fi

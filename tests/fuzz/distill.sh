@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# distill.sh — distill fuzzer queue, minimise files, and promote into the
+# distill.sh - distill fuzzer queue, minimise files, and promote into the
 #               tracked seed corpus for one or all fuzz targets.
 #
 # Usage:
@@ -51,11 +51,11 @@
 #
 # Target names:
 #
-#     config   — INI parser + resolveHost          (zoqa-fuzz-config)
-#     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request)
-#     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute)
-#     schedule — runSchedule + runMonitor          (zoqa-fuzz-schedule)
-#     clone_job — clone-job dependency graph       (zoqa-fuzz-clone-job)
+#     config   - INI parser + resolveHost          (zoqa-fuzz-config)
+#     request  - CLI args + buildRequest + JSON    (zoqa-fuzz-request)
+#     execute  - full pipeline: auth+retry+gzip    (zoqa-fuzz-execute)
+#     schedule - runSchedule + runMonitor          (zoqa-fuzz-schedule)
+#     clone_job - clone-job dependency graph       (zoqa-fuzz-clone-job)
 
 set -euo pipefail
 
@@ -71,7 +71,7 @@ _handle_stop() {
 	if [[ $_stop_notice_shown -eq 0 ]]; then
 		_stop_notice_shown=1
 		echo "" >&2
-		echo "==> Ctrl+C received — will stop after current afl-tmin finishes." >&2
+		echo "==> Ctrl+C received - will stop after current afl-tmin finishes." >&2
 	fi
 }
 trap '_handle_stop' INT TERM
@@ -256,7 +256,7 @@ run_tmin_loop() {
 		if [[ $STOP_REQUESTED -eq 1 ]]; then
 			local remaining=$((total - current))
 			echo "" >&2
-			echo "==> Interrupted — $current/$total files minimised, $remaining remaining (not recorded to .tmin_timeouts)." >&2
+			echo "==> Interrupted - $current/$total files minimised, $remaining remaining (not recorded to .tmin_timeouts)." >&2
 			return 1
 		fi
 
@@ -285,10 +285,10 @@ run_tmin_loop() {
 		tmin_exit=${tmin_exit:-0}
 
 		if [[ $tmin_exit -eq 124 ]]; then
-			# Per-file timeout hit — record for later retry.
+			# Per-file timeout hit - record for later retry.
 			echo "$f" >>"$timeouts_file"
 			timed_out=$((timed_out + 1))
-			echo "    [$current/$total] $basename_f: TIMED OUT (${per_file_timeout}s) — recorded in .tmin_timeouts"
+			echo "    [$current/$total] $basename_f: TIMED OUT (${per_file_timeout}s) - recorded in .tmin_timeouts"
 		elif [[ -f "${f}.tmin" ]]; then
 			mv "${f}.tmin" "$f"
 			local size_after
@@ -321,7 +321,7 @@ cd "$ROOT"
 
 for target in "${TARGETS[@]}"; do
 	if [[ $STOP_REQUESTED -eq 1 ]]; then
-		echo "==> Interrupted — skipping remaining target(s)." >&2
+		echo "==> Interrupted - skipping remaining target(s)." >&2
 		exit 130
 	fi
 
@@ -355,15 +355,15 @@ for target in "${TARGETS[@]}"; do
 		resolved_files=()
 		for entry in "${TMIN_FILES[@]}"; do
 			if [[ "$entry" == */* ]]; then
-				# Looks like a path — use directly.
+				# Looks like a path - use directly.
 				resolved_files+=("$entry")
 			else
-				# Bare basename — resolve against corpus_distilled.
+				# Bare basename - resolve against corpus_distilled.
 				candidate="$corpus_distilled/$entry"
 				if [[ -f "$candidate" ]]; then
 					resolved_files+=("$candidate")
 				else
-					echo "    WARNING: '$entry' not found in $corpus_distilled — skipping." >&2
+					echo "    WARNING: '$entry' not found in $corpus_distilled - skipping." >&2
 				fi
 			fi
 		done
@@ -373,7 +373,7 @@ for target in "${TARGETS[@]}"; do
 		run_tmin_loop "$corpus_distilled" "$corpus_distilled" "$binary" "$GLOBAL_TIMEOUT" "$TMIN_TIMEOUT" "${resolved_files[@]}" || true
 		echo ""
 		if [[ $STOP_REQUESTED -eq 1 ]]; then
-			echo "==> Interrupted — skipping remaining target(s)." >&2
+			echo "==> Interrupted - skipping remaining target(s)." >&2
 			exit 130
 		fi
 		continue
@@ -386,12 +386,12 @@ for target in "${TARGETS[@]}"; do
 	# -- Validate ----------------------------------------------------------
 
 	if [[ ! -d "$queue_dir" ]]; then
-		echo "    WARNING: queue directory '$queue_dir' not found — skipping." >&2
+		echo "    WARNING: queue directory '$queue_dir' not found - skipping." >&2
 		continue
 	fi
 
 	if [[ -z "$(ls -A "$queue_dir" 2>/dev/null)" ]]; then
-		echo "    WARNING: queue directory '$queue_dir' is empty — skipping." >&2
+		echo "    WARNING: queue directory '$queue_dir' is empty - skipping." >&2
 		continue
 	fi
 
@@ -418,7 +418,7 @@ for target in "${TARGETS[@]}"; do
 	echo ""
 
 	if [[ $STOP_REQUESTED -eq 1 ]]; then
-		echo "==> Interrupted after Step 1 — skipping Steps 2–5 for '$target' and all remaining targets." >&2
+		echo "==> Interrupted after Step 1 - skipping Steps 2–5 for '$target' and all remaining targets." >&2
 		exit 130
 	fi
 
@@ -441,7 +441,7 @@ for target in "${TARGETS[@]}"; do
 	echo ""
 
 	if [[ $STOP_REQUESTED -eq 1 ]]; then
-		echo "==> Interrupted after Step 2 — skipping Steps 3–5 for '$target' and all remaining targets." >&2
+		echo "==> Interrupted after Step 2 - skipping Steps 3–5 for '$target' and all remaining targets." >&2
 		echo "    corpus_distilled/ left in place at: $corpus_distilled" >&2
 		exit 130
 	fi
@@ -453,14 +453,14 @@ for target in "${TARGETS[@]}"; do
 		old_count=$(find "$corpus_dst" -maxdepth 1 -type f | wc -l)
 		if [[ "$NO_BACKUP" -eq 1 ]]; then
 			rm -rf "$corpus_dst"
-			echo "    Removed: $corpus_dst ($old_count files) — --no-backup"
+			echo "    Removed: $corpus_dst ($old_count files) - --no-backup"
 		else
 			rm -rf "$corpus_backup"
 			mv "$corpus_dst" "$corpus_backup"
 			echo "    Backup:  $corpus_backup ($old_count files)"
 		fi
 	else
-		echo "    Nothing to back up — $corpus_dst does not exist."
+		echo "    Nothing to back up - $corpus_dst does not exist."
 	fi
 	echo ""
 

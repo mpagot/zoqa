@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests_help.sh — Section I: Help output structure tests.
+# tests_help.sh - Section I: Help output structure tests.
 #
 # Sourced by tests.sh after helper functions are defined.
 # Do NOT execute this file directly.
