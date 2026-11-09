@@ -74,7 +74,7 @@ def find_test_zones(lines: list[str]) -> set[int]:
     test close, a pattern that does not occur in this codebase.
 
     Struct methods or helper functions defined inside test blocks are
-    therefore also skipped, which is the desired behaviour.
+    therefore also skipped, which is the desired behavior.
     """
     in_test = False
     zones: set[int] = set()

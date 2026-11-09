@@ -27,7 +27,7 @@ harnesses without modification.
 
 **Services exposed:**
 
-- `openQAReq(host, path, opts, client)` — authenticated HTTP request to openQA.
+- `openQAReq(host, path, opts, client)`: authenticated HTTP request to openQA.
 - Workflow orchestrators: `runArchive`, `runMonitor`, `runSchedule`.
 - Pure utilities: credential lookup (`config.findCredentials`), host resolution
   (`config.resolveHost`), credential merge (`config.mergeCredentials`), auth
@@ -48,7 +48,7 @@ process-level concerns that do not belong in a reusable library.
 | `arg_match` | Flag matching primitives (`matchBool`, `matchValue`, `tryCommonFlag`) | No |
 | `cli_env` | Runtime-input resolution: credentials (env + config + CLI merge) and retry/timeout env-var parsing | Yes |
 
-**`arg_match`** is purely generic — it knows nothing about openQA. Any CLI tool
+**`arg_match`** is purely generic; it knows nothing about openQA. Any CLI tool
 can use it. `tryCommonFlag` is a comptime-generic dispatch for the five flags
 shared between all openQA executables (`--host`, `--apikey`, `--apisecret`,
 `--verbose`, `--help`), duck-typed against the caller's args struct.
@@ -70,7 +70,7 @@ Each executable owns:
 **Rules:**
 
 - Executables import `zoqa` (library), `arg_match`, and `cli_env`.
-- Business logic lives in the library; executables are thin orchestration shells.
+- Business logic is implemented in the library; executables are thin orchestration shells.
 - Each executable may define its own named helper functions for multi-phase
   workflows (e.g., `walkDependencyGraph` drives the library's `DependencyWalker`
   with HTTP I/O and `process.exit` error handling) that are too I/O-heavy or
@@ -93,8 +93,8 @@ Each executable owns:
 4. **Credential priority.** CLI flags > Environment variables > Config file.
    Resolved per-field (key and secret independently).
 
-5. **Behavioural parity, not architectural parity.** The Perl reference
-   (`openqa-cli`, `openqa-clone-job`) is the oracle for user-visible behaviour.
+5. **Behavioral parity, not architectural parity.** The Perl reference
+   (`openqa-cli`, `openqa-clone-job`) is the oracle for user-visible behavior.
    Internal structure is free to diverge and improve.
 
 6. **I/O-free where possible.** Data-transform modules (`clone_job.zig`,
@@ -134,7 +134,7 @@ clone_job_main.zig -> zoqa (root.zig)
 ```
 
 The library (`root.zig`) has no knowledge of `arg_match` or `cli_env`.
-Those modules depend downward on `zoqa` — never the reverse.
+Those modules depend downward on `zoqa`, never the reverse.
 
 ---
 
@@ -145,7 +145,7 @@ The diagrams below are authored as text (diagram-as-code) under
 [`mpagot/swgraph`](https://github.com/mpagot/swgraph) container. Source
 files are committed alongside their rendered PNGs; SVGs are regenerated on
 demand (gitignored). The committed PNGs are the hand-drawn / xkcd-style
-variants — they were produced with `--sketch`.
+variants; they were produced with `--sketch`.
 
 To re-render everything after edits, run the helper script:
 
@@ -168,7 +168,7 @@ Source: [`zoqa_tiered_modules.d2`](diagrams/zoqa_tiered_modules.d2) · d2
 
 ### 2. Data flow (CLI → server → stdout)
 
-The request path (solid) and the response path (dotted) — argv/env/config in
+The request path (solid) and the response path (dotted): argv/env/config in
 on the left, `stdout` / filesystem out on the right.
 
 ![Data flow](diagrams/zoqa_data_flow.png)
@@ -186,8 +186,8 @@ Source: [`zoqa_user_interaction.d2`](diagrams/zoqa_user_interaction.d2) · d2
 
 ### 4. Dependency injection seam (`client: anytype`)
 
-The same workflow function body is driven by three distinct concrete clients
-— the real `std.http.Client`, a sequenced `MockClient` in tests, and an AFL
+The same workflow function body is driven by three distinct concrete clients:
+the real `std.http.Client`, a sequenced `MockClient` in tests, and an AFL
 fuzz client. This is the cornerstone of the project's testability.
 
 ![DI seam](diagrams/zoqa_di_seam.png)

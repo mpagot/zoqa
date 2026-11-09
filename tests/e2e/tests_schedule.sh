@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests_schedule.sh — Section J: schedule subcommand tests.
+# tests_schedule.sh - Section J: schedule subcommand tests.
 #
 # Sourced by tests.sh after helper functions are defined.
 # Do NOT execute this file directly.
@@ -33,7 +33,7 @@ _SCHED_GROUP="_GROUP_ID=${GROUP_ID:-1}"
 # Section 1: Basic Sync Scheduling (sync response, stdout)
 # =============================================================================
 
-# SCH-1: Sync scheduling — both Perl and Zig should exit 0 and print job URLs.
+# SCH-1: Sync scheduling - both Perl and Zig should exit 0 and print job URLs.
 # This is the primary happy-path comparison test. Both tools schedule via the
 # `schedule` subcommand with inline SCENARIO_DEFINITIONS_YAML.
 echo "--- Test: SCH-1: Sync schedule with inline SCENARIO_DEFINITIONS_YAML ---"
@@ -51,7 +51,7 @@ echo "  Perl exit: $_sch1_perl_exit"
 # Wait for the Perl-scheduled job to complete (free the worker).
 _sch1_perl_jobid=$(grep -oP '(?<=tests/)\d+' "$LOG_DIR/sch1_perl_stdout.log" | head -1) || true
 if [[ -n "$_sch1_perl_jobid" ]]; then
-	echo "  Perl scheduled job ID: $_sch1_perl_jobid — waiting for completion..."
+	echo "  Perl scheduled job ID: $_sch1_perl_jobid - waiting for completion..."
 	wait_for_job "$_sch1_perl_jobid" 300 >/dev/null || echo "  WARNING: timeout waiting for Perl job"
 fi
 
@@ -166,7 +166,7 @@ fi
 # Section 2: Async Scheduling (async response)
 # =============================================================================
 
-# SCH-3: async=1 without --monitor — both exit 0, stdout contains
+# SCH-3: async=1 without --monitor - both exit 0, stdout contains
 # "scheduled_product_id" (since no jobs are created synchronously, no
 # "has been created" line is expected).
 echo "--- Test: SCH-3: Async schedule without --monitor ---"
@@ -212,7 +212,7 @@ e2e_sleep 5
 # Nothing inspects them later.
 cancel_pending_jobs
 
-# SCH-4: async=1 --monitor — both should poll, wait for jobs, and exit 0.
+# SCH-4: async=1 --monitor - both should poll, wait for jobs, and exit 0.
 echo "--- Test: SCH-4: Async schedule with --monitor ---"
 
 # Perl
@@ -251,7 +251,7 @@ fi
 # Section 3: --follow Flag
 # =============================================================================
 
-# SCH-6: --follow without --monitor — both should exit 0 after scheduling,
+# SCH-6: --follow without --monitor - both should exit 0 after scheduling,
 # no monitoring takes place. --follow is just a modifier, not a trigger.
 echo "--- Test: SCH-6: --follow without --monitor (no monitoring) ---"
 
@@ -312,7 +312,7 @@ fi
 # Section 4: --poll-interval
 # =============================================================================
 
-# SCH-7: --poll-interval 1 with async=1 --monitor — both exit 0.
+# SCH-7: --poll-interval 1 with async=1 --monitor - both exit 0.
 # Exercises the explicit poll-interval override combined with async polling.
 echo "--- Test: SCH-7: --poll-interval 1 with async --monitor ---"
 
@@ -388,7 +388,7 @@ fi
 # Valid mandatory params but a FLAVOR that doesn't match any template.
 # NOTE: SCENARIO_DEFINITIONS_YAML is intentionally omitted here.  When it is
 # present, openQA uses the inline YAML as the full job definition and FLAVOR
-# becomes just a job variable — not a template matcher — so jobs are still
+# becomes just a job variable - not a template matcher - so jobs are still
 # created even with FLAVOR=NONEXISTENT.  Without inline YAML, the server
 # falls back to template-based matching and FLAVOR=NONEXISTENT matches nothing.
 echo "--- Test: SCH-9: Zero products scheduled -> exit 1 ---"
@@ -423,7 +423,7 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# SCH-10: Repeated --param-file — two --param-file flags in a single invocation.
+# SCH-10: Repeated --param-file - two --param-file flags in a single invocation.
 # This exercises the ArrayList growth path in tryScheduleFlag: both DISTRI and
 # BUILD are supplied via separate --param-file flags rather than inline KEY=VALUE
 # positionals.  Both Perl and Zig must exit 0 and produce at least one job URL.
@@ -487,7 +487,7 @@ else
 fi
 
 # =============================================================================
-# Section 5b: failed/ids precedence — see SPEC §15.4 (sync) / §15.6 (async)
+# Section 5b: failed/ids precedence - see SPEC §15.4 (sync) / §15.6 (async)
 # =============================================================================
 #
 # Oracle: /usr/share/openqa/lib/OpenQA/CLI/schedule.pm.
@@ -512,10 +512,10 @@ fi
 _SCH_BAD_PATH="/tmp/all-failed-scenario.yaml"
 _SCH_MIX_PATH="/tmp/partial-scenario.yaml"
 
-# _dump_capture TAG IMPL — append the captured stdout/stderr/exit from the
+# _dump_capture TAG IMPL - append the captured stdout/stderr/exit from the
 # given run_capture invocation to the test log. Used by SCH-11..14 so the
 # test log preserves the openQA response even when assertions pass; this is
-# critical because the spec is being derived from observed Perl behaviour.
+# critical because the spec is being derived from observed Perl behavior.
 _dump_capture() {
 	local tag=$1
 	local impl=$2
@@ -583,7 +583,7 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# SCH-12: Sync schedule, partial success — one valid + one invalid entry.
+# SCH-12: Sync schedule, partial success - one valid + one invalid entry.
 # Goal: exercise the §15.4 partial-success rule (URL printed AND exit 1 per
 # Perl _create_jobs ordering). Asserts parity first; then documents which
 # clause the response actually triggered.
@@ -634,7 +634,7 @@ run_capture "sch13" perl "timeout 120 $PERL_EXE schedule --host http://localhost
 _sch13_perl_exit=$_LAST_EXIT
 echo "  Perl exit: $_sch13_perl_exit"
 
-# Drain anything the server scheduled (defensive — the test should not
+# Drain anything the server scheduled (defensive - the test should not
 # create runnable jobs but if openQA permits the malformed YAML it might).
 e2e_sleep 3
 _sch13_perl_jids=$(container_exec openqa-cli api --host http://localhost \
@@ -718,11 +718,11 @@ else
 	failed_tests=$((failed_tests + 1))
 fi
 
-# SCH-15: Cancelled mid-poll — INTENTIONALLY SKIPPED at the e2e layer.
+# SCH-15: Cancelled mid-poll - INTENTIONALLY SKIPPED at the e2e layer.
 #
 # This case requires racing a DELETE /api/v1/isos/{sp_id} against the active
 # poll loop while status is still added/scheduling. With a real openQA
-# scheduler the timing is non-deterministic — by the time the cancel POST
+# scheduler the timing is non-deterministic - by the time the cancel POST
 # lands, the product is often already `scheduled`, and the test flakes.
 #
 # The right home for this is a unit test against a stubbed HTTP server that
@@ -730,7 +730,7 @@ fi
 # Per Perl `_wait_for_jobs`: when status is `cancelled` and successful_job_ids
 # is populated, the IDs are silently dropped and the client returns
 # "Scheduled product N ended up cancelled" → exit 1.
-echo "--- Test: SCH-15: cancelled mid-poll — SKIPPED (see comment / future unit test) ---"
+echo "--- Test: SCH-15: cancelled mid-poll - SKIPPED (see comment / future unit test) ---"
 echo "SKIP"
 
 # =============================================================================
@@ -745,7 +745,7 @@ echo "SKIP"
 # assertions or, if none works, fall back to stubbed unit tests.
 #
 # Each test reuses lib.sh helpers (run_capture, wait_for_job) directly. The
-# only local helper is _drain_capture — it just runs the per-impl drain that
+# only local helper is _drain_capture - it just runs the per-impl drain that
 # SCH-1..SCH-14 already do inline.
 
 echo "==> [schedule] Running failure-trigger experiments (SCH-EX*)..."
@@ -753,7 +753,7 @@ echo "==> [schedule] Running failure-trigger experiments (SCH-EX*)..."
 # Authenticate for audit-log access (used by EX2/EX3 audit assertions).
 audit_login
 
-# _drain_capture TAG IMPL — wait for any job whose URL appears in
+# _drain_capture TAG IMPL - wait for any job whose URL appears in
 # $LOG_DIR/${tag}_${impl}_stdout.log so the single-worker pool is free for
 # the next test. No-op when no job was scheduled.
 _drain_capture() {
@@ -773,9 +773,9 @@ _EX_GROUP="_GROUP_ID=${GROUP_ID:-1}"
 # dump both, parity check + outcome label. Outcome categories:
 #   TRIGGERED   exit !=0 on both impls (good candidate for a real fixture)
 #   PERMISSIVE  exit 0 on both impls (server accepted the bad input)
-#   DIVERGED    impls disagree (parity-broken — surfaced as FAIL)
+#   DIVERGED    impls disagree (parity-broken - surfaced as FAIL)
 
-# --- SCH-EX1: SCH-9 baseline — no YAML, FLAVOR=NONEXISTENT (known exit 1) ---
+# --- SCH-EX1: SCH-9 baseline - no YAML, FLAVOR=NONEXISTENT (known exit 1) ---
 echo "--- Test: SCH-EX1: Sync, no inline YAML, FLAVOR=NONEXISTENT ---"
 run_capture schex1 perl "$PERL_EXE schedule --host http://localhost \
 	FLAVOR=NONEXISTENT $_EX_BASE BUILD=e2e-schex1"
@@ -789,19 +789,19 @@ echo "  Perl exit: $_schex1_perl_exit, Zig exit: $_schex1_zig_exit"
 _dump_capture schex1 perl
 _dump_capture schex1 zig
 if [[ "$_schex1_perl_exit" -ne "$_schex1_zig_exit" ]]; then
-	echo "  outcome: DIVERGED — FAIL"
+	echo "  outcome: DIVERGED - FAIL"
 	failed_tests=$((failed_tests + 1))
 elif [[ "$_schex1_perl_exit" -eq 0 ]]; then
-	echo "  outcome: PERMISSIVE — server accepted, no failure triggered"
+	echo "  outcome: PERMISSIVE - server accepted, no failure triggered"
 	echo "PASS"
 else
-	echo "  outcome: TRIGGERED (exit=$_schex1_perl_exit) — promote candidate"
+	echo "  outcome: TRIGGERED (exit=$_schex1_perl_exit) - promote candidate"
 	echo "PASS"
 fi
 
 # --- SCH-EX2: inline YAML, only job_template references undefined product ---
 # After Option A fix (ISSUE_SCHEDULA_DIVERGED), both Perl and Zig should
-# exit 0 — the server returns {count:0, ids:[], failed:[]} with no error.
+# exit 0 - the server returns {count:0, ids:[], failed:[]} with no error.
 echo "--- Test: SCH-EX2: Sync, inline YAML, undefined product reference ---"
 _audit_before_ex2=$(audit_max_id)
 run_capture schex2 perl "$PERL_EXE schedule --host http://localhost \
@@ -818,11 +818,11 @@ echo "  Perl exit: $_schex2_perl_exit, Zig exit: $_schex2_zig_exit"
 _dump_capture schex2 perl
 _dump_capture schex2 zig
 if [[ "$_schex2_perl_exit" -ne "$_schex2_zig_exit" ]]; then
-	echo "  outcome: DIVERGED — FAIL"; failed_tests=$((failed_tests + 1))
+	echo "  outcome: DIVERGED - FAIL"; failed_tests=$((failed_tests + 1))
 elif [[ "$_schex2_perl_exit" -eq 0 ]]; then
 	echo "  outcome: PERMISSIVE"; echo "PASS"
 else
-	echo "  outcome: TRIGGERED (exit=$_schex2_perl_exit) — promote candidate"; echo "PASS"
+	echo "  outcome: TRIGGERED (exit=$_schex2_perl_exit) - promote candidate"; echo "PASS"
 fi
 # Audit: verify no job_create events; iso_create may be absent for edge cases
 _ex2_iso_creates=$(audit_count_since "$_audit_before_ex2" "iso_create")
@@ -853,11 +853,11 @@ echo "  Perl exit: $_schex3_perl_exit, Zig exit: $_schex3_zig_exit"
 _dump_capture schex3 perl
 _dump_capture schex3 zig
 if [[ "$_schex3_perl_exit" -ne "$_schex3_zig_exit" ]]; then
-	echo "  outcome: DIVERGED — FAIL"; failed_tests=$((failed_tests + 1))
+	echo "  outcome: DIVERGED - FAIL"; failed_tests=$((failed_tests + 1))
 elif [[ "$_schex3_perl_exit" -eq 0 ]]; then
 	echo "  outcome: PERMISSIVE"; echo "PASS"
 else
-	echo "  outcome: TRIGGERED (exit=$_schex3_perl_exit) — promote candidate"; echo "PASS"
+	echo "  outcome: TRIGGERED (exit=$_schex3_perl_exit) - promote candidate"; echo "PASS"
 fi
 # Audit: verify no job_create events; iso_create may be absent for edge cases
 _ex3_iso_creates=$(audit_count_since "$_audit_before_ex3" "iso_create")
@@ -884,11 +884,11 @@ echo "  Perl exit: $_schex4_perl_exit, Zig exit: $_schex4_zig_exit"
 _dump_capture schex4 perl
 _dump_capture schex4 zig
 if [[ "$_schex4_perl_exit" -ne "$_schex4_zig_exit" ]]; then
-	echo "  outcome: DIVERGED — FAIL"; failed_tests=$((failed_tests + 1))
+	echo "  outcome: DIVERGED - FAIL"; failed_tests=$((failed_tests + 1))
 elif [[ "$_schex4_perl_exit" -eq 0 ]]; then
 	echo "  outcome: PERMISSIVE"; echo "PASS"
 else
-	echo "  outcome: TRIGGERED (exit=$_schex4_perl_exit) — promote candidate"; echo "PASS"
+	echo "  outcome: TRIGGERED (exit=$_schex4_perl_exit) - promote candidate"; echo "PASS"
 fi
 
 # --- SCH-EX5: nonexistent HDD_1 asset ---
@@ -907,14 +907,14 @@ echo "  Perl exit: $_schex5_perl_exit, Zig exit: $_schex5_zig_exit"
 _dump_capture schex5 perl
 _dump_capture schex5 zig
 if [[ "$_schex5_perl_exit" -ne "$_schex5_zig_exit" ]]; then
-	echo "  outcome: DIVERGED — FAIL"; failed_tests=$((failed_tests + 1))
+	echo "  outcome: DIVERGED - FAIL"; failed_tests=$((failed_tests + 1))
 elif [[ "$_schex5_perl_exit" -eq 0 ]]; then
 	echo "  outcome: PERMISSIVE"; echo "PASS"
 else
-	echo "  outcome: TRIGGERED (exit=$_schex5_perl_exit) — promote candidate"; echo "PASS"
+	echo "  outcome: TRIGGERED (exit=$_schex5_perl_exit) - promote candidate"; echo "PASS"
 fi
 
-# --- SCH-EX6: PARTIAL CANDIDATE — inline YAML, one valid + one bogus product ---
+# --- SCH-EX6: PARTIAL CANDIDATE - inline YAML, one valid + one bogus product ---
 echo "--- Test: SCH-EX6: Sync, inline YAML, partial (valid + undefined product) ---"
 run_capture schex6 perl "$PERL_EXE schedule --host http://localhost \
 	--param-file SCENARIO_DEFINITIONS_YAML=/tmp/exp-partial-bogus-product-scenario.yaml \
@@ -930,11 +930,11 @@ echo "  Perl exit: $_schex6_perl_exit, Zig exit: $_schex6_zig_exit"
 _dump_capture schex6 perl
 _dump_capture schex6 zig
 if [[ "$_schex6_perl_exit" -ne "$_schex6_zig_exit" ]]; then
-	echo "  outcome: DIVERGED — FAIL"; failed_tests=$((failed_tests + 1))
+	echo "  outcome: DIVERGED - FAIL"; failed_tests=$((failed_tests + 1))
 elif [[ "$_schex6_perl_exit" -eq 0 ]]; then
 	echo "  outcome: PERMISSIVE"; echo "PASS"
 else
-	echo "  outcome: TRIGGERED (exit=$_schex6_perl_exit) — promote partial candidate"; echo "PASS"
+	echo "  outcome: TRIGGERED (exit=$_schex6_perl_exit) - promote partial candidate"; echo "PASS"
 fi
 
 # --- SCH-EX7: ASYNC + --monitor, FLAVOR=NONEXISTENT (captures failed_job_info) ---
@@ -951,11 +951,11 @@ echo "  Perl exit: $_schex7_perl_exit, Zig exit: $_schex7_zig_exit"
 _dump_capture schex7 perl
 _dump_capture schex7 zig
 if [[ "$_schex7_perl_exit" -ne "$_schex7_zig_exit" ]]; then
-	echo "  outcome: DIVERGED — FAIL"; failed_tests=$((failed_tests + 1))
+	echo "  outcome: DIVERGED - FAIL"; failed_tests=$((failed_tests + 1))
 elif [[ "$_schex7_perl_exit" -eq 0 ]]; then
 	echo "  outcome: PERMISSIVE"; echo "PASS"
 else
-	echo "  outcome: TRIGGERED (exit=$_schex7_perl_exit) — async candidate"; echo "PASS"
+	echo "  outcome: TRIGGERED (exit=$_schex7_perl_exit) - async candidate"; echo "PASS"
 fi
 
 # =============================================================================
@@ -980,7 +980,7 @@ run_test "ZIG : schedule --extract rejected" \
 
 echo "==> [schedule] Running schedule retry-knob smoke tests..."
 
-# SCH-RK-1: OPENQA_CLI_RETRIES=0 — explicit zero accepted.
+# SCH-RK-1: OPENQA_CLI_RETRIES=0 - explicit zero accepted.
 run_test "PERL: schedule OPENQA_CLI_RETRIES=0 accepted" \
 	"bash -c \"OPENQA_CLI_RETRIES=0 $PERL_EXE schedule --host http://localhost BOGUS=1\"" \
 	1
@@ -988,7 +988,7 @@ run_test "ZIG : schedule OPENQA_CLI_RETRIES=0 accepted" \
 	"bash -c \"OPENQA_CLI_RETRIES=0 $ZIG_EXE schedule --host http://localhost BOGUS=1\"" \
 	1
 
-# SCH-RK-2: OPENQA_CLI_RETRIES=abc — invalid value falls back gracefully.
+# SCH-RK-2: OPENQA_CLI_RETRIES=abc - invalid value falls back gracefully.
 run_test "PERL: schedule OPENQA_CLI_RETRIES=abc falls back gracefully" \
 	"bash -c \"OPENQA_CLI_RETRIES=abc $PERL_EXE schedule --host http://localhost BOGUS=1\"" \
 	1

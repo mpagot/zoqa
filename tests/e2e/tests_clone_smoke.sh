@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# test_clone_smoke.sh — CLO-1 to CLO-11: pure-CLI smoke tests.
+# test_clone_smoke.sh - CLO-1 to CLO-11: pure-CLI smoke tests.
 #
 # Tests --help, no-args, and bare-integer invocations.  No container or API
-# access required — these run against the binary on PATH only.
+# access required - these run against the binary on PATH only.
 #
 # Sourced by tests.sh after helper functions are defined.
 # Do NOT execute this file directly.
 #
 # Goal: every test here is a PERL vs ZIG comparison against the same input,
-# using the upstream `openqa-clone-job` Perl script as the behavioural oracle
+# using the upstream `openqa-clone-job` Perl script as the behavioral oracle
 # for our new `zoqa-clone-job` Zig binary.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_topology.sh"
@@ -17,7 +17,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 echo "==> [clone_job/smoke] Running clone-job smoke tests (CLO-1 to CLO-11)..."
 
-# Local binary handles — different from the global PERL_EXE/ZIG_EXE which
+# Local binary handles - different from the global PERL_EXE/ZIG_EXE which
 # point at openqa-cli / zoqa.
 PERL_CLONE_EXE="openqa-clone-job"
 ZIG_CLONE_EXE="/app/zig-out/bin/zoqa-clone-job"
@@ -68,10 +68,10 @@ run_test "ZIG : clone-job with no args writes to stderr, not stdout" \
 run_test_exit_nonzero "PERL: bare integer without --from" "$PERL_CLONE_EXE 42"
 run_test_exit_nonzero "ZIG : bare integer without --from" "$ZIG_CLONE_EXE 42"
 
-# CLO-11 Bare integer without --from — output stream routing.
+# CLO-11 Bare integer without --from - output stream routing.
 # NOTE: Perl calls pod2usage(1) here (exitval 1 → stdout by default per Pod::Usage
 # convention: exitval < 2 → STDOUT, exitval >= 2 → STDERR).  So Perl writes its
-# usage text to stdout and nothing to stderr — same routing as --help (test 7).
+# usage text to stdout and nothing to stderr - same routing as --help (test 7).
 # Zig writes the error message to stderr only, keeping stdout clean.
 run_test "PERL: bare integer without --from writes to stdout (pod2usage quirk)" \
 	"bash -c \"$PERL_CLONE_EXE 42 > /tmp/out 2> /tmp/err; test -s /tmp/out && ! test -s /tmp/err\"" 0

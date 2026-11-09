@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# test_clone_topology.sh — Graph-topology clone tests (CLO-20 to CLO-42).
+# test_clone_topology.sh - Graph-topology clone tests (CLO-20 to CLO-42).
 #
 # Tests cloning across chained, fan-out, multi-layer, diamond, and parallel
 # job topologies.  Each section is guarded by its own idempotent ensure_*
@@ -14,7 +14,7 @@
 # Do NOT execute this file directly.
 #
 # Goal: every test here is a PERL vs ZIG comparison against the same input,
-# using the upstream `openqa-clone-job` Perl script as the behavioural oracle
+# using the upstream `openqa-clone-job` Perl script as the behavioral oracle
 # for our new `zoqa-clone-job` Zig binary.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_topology.sh"
@@ -22,7 +22,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 echo "==> [clone_job/topology] Running graph-topology clone tests (CLO-20 to CLO-42)..."
 
-# Local binary handles — different from the global PERL_EXE/ZIG_EXE which
+# Local binary handles - different from the global PERL_EXE/ZIG_EXE which
 # point at openqa-cli / zoqa.
 PERL_CLONE_EXE="openqa-clone-job"
 ZIG_CLONE_EXE="/app/zig-out/bin/zoqa-clone-job"

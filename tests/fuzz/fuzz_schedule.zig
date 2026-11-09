@@ -14,13 +14,13 @@
 //   Section N-1: fallback response body (always returned after scripted bodies are exhausted)
 //
 // option byte bits:
-//   bit 0 (0x01): enable_monitor — if set, monitor_jobs=true. Exercises
+//   bit 0 (0x01): enable_monitor - if set, monitor_jobs=true. Exercises
 //                 the monitoring loop after sync job IDs are extracted.
-//   bit 1 (0x02): non_200_status — if set, POST returns HTTP 500 instead
+//   bit 1 (0x02): non_200_status - if set, POST returns HTTP 500 instead
 //                 of 200. Exercises the non-2xx error path.
-//   bit 2 (0x04): enable_retries — if set, retries=2 and fail_attempts=1
+//   bit 2 (0x04): enable_retries - if set, retries=2 and fail_attempts=1
 //                 so the first request fails then succeeds on retry.
-//   bit 3 (0x08): enable_credentials — if set, provides API key/secret
+//   bit 3 (0x08): enable_credentials - if set, provides API key/secret
 //                 to exercise HMAC-SHA1 auth header construction.
 //
 // When monitor_jobs=true and the POST response contains sync IDs, the
@@ -57,7 +57,7 @@ const mock_client = @import("mock_client.zig");
 const ProgrammableMockClient = mock_client.ProgrammableMockClient;
 
 // ---------------------------------------------------------------------------
-// zig_fuzz_init — called once per AFL++ worker process
+// zig_fuzz_init - called once per AFL++ worker process
 // ---------------------------------------------------------------------------
 
 var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
@@ -71,7 +71,7 @@ pub export fn zig_fuzz_init() void {
 }
 
 // ---------------------------------------------------------------------------
-// zig_fuzz_test — called in a tight loop by AFL++ persistent mode
+// zig_fuzz_test - called in a tight loop by AFL++ persistent mode
 // ---------------------------------------------------------------------------
 
 // Maximum number of scripted response bodies to prevent unbounded stack

@@ -9,13 +9,13 @@ in Persistent Mode with LLVM instrumentation.
 |---|---|---|---|---|
 | `zoqa-fuzz-config` | `fuzz_config.zig` | `corpus_config/` | `config.dict` | INI parser + `resolveHost` all 7 branches (`src/config.zig`) |
 | `zoqa-fuzz-request` | `fuzz_request.zig` | `corpus_request/` | `cli.dict` | CLI args + `buildRequest` + `parseLinkHeader` + JSON (`src/main.zig`, `src/http_client.zig`) |
-| `zoqa-fuzz-execute` | `fuzz_execute.zig` | `corpus_execute/` | — | Full pipeline: auth + retry + gzip + `openQAReq` (`src/http_client.zig`, `src/auth.zig`). Input uses 5 sections: credentials/path, method/params, ctrl-byte/status/body, optional gzip bytes, optional Link header value. ctrl-byte bits 0–6 control fail_attempts, gzip, Link header, structured content_type fallback, ReadFailed injection, and Accept-header pre-presence. |
-| `zoqa-fuzz-schedule` | `fuzz_schedule.zig` | `corpus_schedule/` | — | Sync and async paths of `runSchedule` (`extractJobIds`, `checkFailedEntries`, `asyncPollAndMonitor`) plus `runMonitor`/`checkJobStatus` (`src/schedule.zig`, `src/monitor.zig`). The option byte enables monitor, HTTP 500, retries and credentials. Input is `\x00`-separated sections: scripted POST/poll bodies, then a fallback body. Schedule output goes to a null `output_writer` (AFL++ stability fix, commit `c7a6bc1`). **Known issues:** a fallback body without a terminal `state` makes `runMonitor` poll forever (hangs), and `runMonitor` still writes to the real stdout (lower stability). See `TODO_FUZZ_HANG_SCHEDULE.md`. |
+| `zoqa-fuzz-execute` | `fuzz_execute.zig` | `corpus_execute/` | - | Full pipeline: auth + retry + gzip + `openQAReq` (`src/http_client.zig`, `src/auth.zig`). Input uses 5 sections: credentials/path, method/params, ctrl-byte/status/body, optional gzip bytes, optional Link header value. ctrl-byte bits 0–6 control fail_attempts, gzip, Link header, structured content_type fallback, ReadFailed injection, and Accept-header pre-presence. |
+| `zoqa-fuzz-schedule` | `fuzz_schedule.zig` | `corpus_schedule/` | - | Sync and async paths of `runSchedule` (`extractJobIds`, `checkFailedEntries`, `asyncPollAndMonitor`) plus `runMonitor`/`checkJobStatus` (`src/schedule.zig`, `src/monitor.zig`). The option byte enables monitor, HTTP 500, retries and credentials. Input is `\x00`-separated sections: scripted POST/poll bodies, then a fallback body. Schedule output goes to a null `output_writer` (AFL++ stability fix, commit `c7a6bc1`). **Known issues:** a fallback body without a terminal `state` makes `runMonitor` poll forever (hangs), and `runMonitor` still writes to the real stdout (lower stability). See `TODO_FUZZ_HANG_SCHEDULE.md`. |
 | `zoqa-fuzz-clone-job` | `fuzz_clone_job.zig` | `corpus_clone_job/` | `clone_job.dict` | Clone-job dependency graph algorithm: `DependencyWalker` (BFS with feed cap), `assignExistingDeps`, `applySettings`, `buildPostBody`, `formatOutput`/`formatBadgeOutput`/`formatJsonOutput`/`formatExportCommand`, `appendRepeatSuffix`, `injectReproduceSettings`, `extractAssets`, `isAssetGeneratedByClonedJobs`, `shouldSkipUefiVarsAsset`, `collectRepoUrls` (`src/clone_job.zig`). Input is `\n---\n`-separated sections: jobs JSON array, override lines, 3 control bytes, optional server JSON (`ids`/`vars`). Control byte 0 bits 0–6 select skip_deps, skip_chained_deps, clone_children, parental_inheritance, reproduce, repeat, check_repos; byte 1 is max_depth (0xFF = null); byte 2 is repeat count (&0x03)+2. |
 
 ## Setup
 
-AFL++ lives under `vendor/aflplusplus/`. The directory is **git-ignored** — it
+AFL++ lives under `vendor/aflplusplus/`. The directory is **git-ignored** - it
 is not checked into the repository, so you must clone it yourself after cloning
 `openQAclient`.
 
@@ -26,16 +26,16 @@ version (recommended: 18 or newer). A C/C++ toolchain (`gcc`, `gcc-c++`, `make`)
 is also needed to compile AFL++ itself.
 
 ```sh
-# openSUSE / Tumbleweed — required
+# openSUSE / Tumbleweed - required
 sudo zypper install gcc gcc-c++ make llvm21-devel clang21 lld21 kcov
 
-# Recommended (optional — improves AFL++ performance)
+# Recommended (optional - improves AFL++ performance)
 sudo zypper install zlib-devel diffutils
 ```
 
 `zlib-devel` enables the `HAVE_ZLIB` performance optimisation inside AFL++.
 `diffutils` provides `cmp`, used by AFL++'s self-tests during the build.
-Both are optional — the build succeeds without them.
+Both are optional - the build succeeds without them.
 
 ### 2. Clone AFL++ into the vendor directory
 
@@ -53,7 +53,7 @@ make source-only -j$(nproc) -C vendor/aflplusplus
 # Produces: vendor/aflplusplus/afl-fuzz, vendor/aflplusplus/afl-cc, ...
 ```
 
-The build prints warnings for `gcc_plugin` and `nyx_mode` — these are expected
+The build prints warnings for `gcc_plugin` and `nyx_mode` - these are expected
 and can be safely ignored. This project only uses LLVM mode. The critical lines
 to look for are:
 
@@ -159,10 +159,10 @@ The crash filename encodes the signal number (`sig:`), source queue entry
 id:000000,sig:06,src:000091,time:5018,execs:76791,op:havoc,rep:53
 ```
 
-`sig:06` is `SIGABRT` — in Zig this means a safety-checked panic
+`sig:06` is `SIGABRT` - in Zig this means a safety-checked panic
 (integer overflow, out-of-bounds slice, unreachable, etc.).
 
-#### Step 1 — Reproduce outside AFL++
+#### Step 1 - Reproduce outside AFL++
 
 Run the crash input directly against the fuzz binary. Because the binary
 links the AFL forkserver, set `AFL_IGNORE_PROBLEMS=1` to prevent the
@@ -180,7 +180,7 @@ Tip: For a deeper analysis of memory corruption or difficult bugs,
 you can also manually feed the renamed crash file into a debugger like gdb or lldb
 to inspect the backtrace and registers.
 
-#### Step 2 — Minimise the crash input with `afl-tmin`
+#### Step 2 - Minimise the crash input with `afl-tmin`
 
 Raw AFL crash files are often large and contain irrelevant bytes.
 `afl-tmin` reduces the input to the smallest byte sequence that still
@@ -208,7 +208,7 @@ In this mode, the fuzzer uses the crashing test case to quickly enumerate
 all code paths that can be reached while keeping the program in the crashing state,
 helping you see what degree of control an attacker might have.
 
-#### Step 3 — Read the panic and locate the root cause
+#### Step 3 - Read the panic and locate the root cause
 
 The Zig panic output names the source file, line, and column. Common
 panics to watch for:
@@ -226,7 +226,7 @@ as the smallest integer that fits `N`, not as `usize`. Arithmetic on that
 result (e.g. `result + 1`) overflows when `result == N`. Fix by casting
 the comptime operand: `@min(runtime_val, @as(usize, N))`.
 
-#### Step 4 — Write a regression test
+#### Step 4 - Write a regression test
 
 Before patching, add a unit test (inline in the relevant source file) that
 reproduces the crash deterministically. This prevents silent regressions
@@ -236,11 +236,11 @@ if the same code path is touched again:
 test "regression: <short description>" {
     // paste the minimised crash input content here
     // call the function that panicked
-    // assert the expected safe behaviour
+    // assert the expected safe behavior
 }
 ```
 
-#### Step 5 — Fix the code and verify
+#### Step 5 - Fix the code and verify
 
 Apply the fix, then:
 
@@ -255,7 +255,7 @@ Apply the fix, then:
    or set the AFL_AUTORESUME=1 environment variable.
    This confirms the fuzzer no longer re-discovers the same crash.
 
-#### Step 6 — Promote minimised inputs to the seed corpus
+#### Step 6 - Promote minimised inputs to the seed corpus
 
 If the minimised crash input (after the fix makes it a valid non-crashing
 input) exercises a previously uncovered code path, add it to the tracked
@@ -300,7 +300,7 @@ For each target, `distill.sh` performs five steps:
    (pass `--no-backup` to skip this and delete the old corpus instead).
 4. **Promotion:** Move the distilled corpus into `corpus_<target>/`.
    The distilled queue is a strict superset of the original corpus in
-   terms of code coverage, so there is no need to merge — it replaces
+   terms of code coverage, so there is no need to merge - it replaces
    the old seeds entirely.
 5. **Regeneration:** Re-run `cmin.sh <target>` to produce a fresh
    `corpus_<target>_min/` for the next fuzzing campaign.
@@ -332,7 +332,7 @@ AFL_DIR=/path/to/aflplusplus ./tests/fuzz/distill.sh config
 Source-level coverage uses [kcov](https://github.com/SimonKagstrom/kcov) with
 the LLVM backend (`use_llvm = true`). The LLVM backend emits DWARF 4 debug
 info, which kcov v42/43 can parse correctly. The Zig self-hosted backend emits
-DWARF 5, which kcov cannot parse on x86_64-linux — it builds an empty address
+DWARF 5, which kcov cannot parse on x86_64-linux - it builds an empty address
 table and reports 0% coverage (see
 [kcov#423](https://github.com/SimonKagstrom/kcov/issues/423),
 [ziglang/zig#25368](https://github.com/ziglang/zig/issues/25368)).
@@ -403,8 +403,8 @@ invocations are chained serially so kcov never runs concurrently (concurrent
 kcov runs corrupt the merged output).
 
 **kcov 43 argument order:** kcov v43 stopped parsing options at the first
-positional argument (upstream PR #415), so every kcov flag — including
-`--include-path=<abs>/src/` — must come *before* the output directory. A flag
+positional argument (upstream PR #415), so every kcov flag - including
+`--include-path=<abs>/src/` - must come *before* the output directory. A flag
 placed after the output directory is treated as the binary to run and fails
 with `Can't find or open --include-...`. The build script emits the flags in
 the correct order; do not reorder them when editing the kcov step.

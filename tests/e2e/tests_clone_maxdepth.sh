@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# test_clone_maxdepth.sh — --max-depth tests (CLO-90 to CLO-97).
+# test_clone_maxdepth.sh - --max-depth tests (CLO-90 to CLO-97).
 #
 # Uses the deeplayer fixture: 17-layer linear chain (layer_a → … → layer_s;
 # letters j and k absent from the YAML, giving 17 nodes total):
@@ -28,13 +28,13 @@
 # Do NOT execute this file directly.
 #
 # Goal: every test here is a PERL vs ZIG comparison against the same input,
-# using the upstream `openqa-clone-job` Perl script as the behavioural oracle
+# using the upstream `openqa-clone-job` Perl script as the behavioral oracle
 # for our new `zoqa-clone-job` Zig binary.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_topology.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-# Local binary handles — different from the global PERL_EXE/ZIG_EXE which
+# Local binary handles - different from the global PERL_EXE/ZIG_EXE which
 # point at openqa-cli / zoqa.
 PERL_CLONE_EXE="openqa-clone-job"
 ZIG_CLONE_EXE="/app/zig-out/bin/zoqa-clone-job"
@@ -103,7 +103,7 @@ for _lbl in "perl" "zig"; do
 		fi
 	done
 	if echo "$_found_tests" | grep -qw "layer_c"; then
-		echo "  FAIL: $_lbl cloned layer_c (depth 3) — beyond --max-depth 1"
+		echo "  FAIL: $_lbl cloned layer_c (depth 3) - beyond --max-depth 1"
 		_m91b_pass=false
 	fi
 done
@@ -130,7 +130,7 @@ for _lbl in "perl" "zig"; do
 		fi
 	done
 	if echo "$_found_tests" | grep -qw "layer_e"; then
-		echo "  FAIL: $_lbl cloned layer_e (depth 5) — beyond --max-depth 3"
+		echo "  FAIL: $_lbl cloned layer_e (depth 5) - beyond --max-depth 3"
 		_m92_pass=false
 	fi
 done
@@ -154,7 +154,7 @@ _cancel_cloned_jobs "clone94"
 
 echo "--- Test CLO-95: --max-depth 1 does not limit parent traversal (layer_s → 17 jobs) ---"
 # Cloning layer_s (the leaf, position 17) with --max-depth 1 still walks all
-# 16 ancestors — parent BFS is always unlimited regardless of --max-depth.
+# 16 ancestors - parent BFS is always unlimited regardless of --max-depth.
 run_clone_both "clone95" \
 	"--within-instance http://localhost --max-depth 1 $DEEPLAY_LAYER_S_ID"
 assert_capture_exits "clone95" 0
@@ -221,7 +221,7 @@ for _lbl in "perl" "zig"; do
 	done
 	# layer_n must be absent: layer_m at depth 3, 3 ≤ 2 = false → layer_n not enqueued
 	if echo "$_found_tests" | grep -qw "layer_n"; then
-		echo "  FAIL: $_lbl cloned layer_n — layer_m (depth 3) should not enqueue children (3 ≤ 2 = false)"
+		echo "  FAIL: $_lbl cloned layer_n - layer_m (depth 3) should not enqueue children (3 ≤ 2 = false)"
 		_m96_pass=false
 	fi
 	# All 8 ancestors must be present (parent BFS is unlimited)
@@ -258,9 +258,9 @@ for _lbl in "perl" "zig"; do
 			_m97_pass=false
 		fi
 	done
-	# No ancestors — --skip-deps must suppress parent traversal
+	# No ancestors - --skip-deps must suppress parent traversal
 	if echo "$_found_tests" | grep -qw "layer_h"; then
-		echo "  FAIL: $_lbl cloned layer_h — --skip-deps should have suppressed parent traversal"
+		echo "  FAIL: $_lbl cloned layer_h - --skip-deps should have suppressed parent traversal"
 		_m97_pass=false
 	fi
 done

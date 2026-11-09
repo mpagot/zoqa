@@ -1,8 +1,8 @@
-# run_tests.ps1 — Windows E2E test runner for zoqa.
+# run_tests.ps1 - Windows E2E test runner for zoqa.
 #
 # Runs the zoqa Windows binary directly against the openQA container that was
 # started by run_container.sh (running in WSL).  Does NOT run openqa-cli (Perl)
-# comparisons — this is a zoqa-only subset of the full Linux E2E suite.
+# comparisons - this is a zoqa-only subset of the full Linux E2E suite.
 #
 # Usage (normally invoked by run_windows.ps1):
 #   pwsh tests\e2e\run_tests.ps1 `
@@ -18,8 +18,8 @@
 # run_container.sh) can call this script with no explicit arguments.
 #
 # Exit codes:
-#   0  — all tests passed
-#   1  — one or more tests failed
+#   0  - all tests passed
+#   1  - one or more tests failed
 
 [CmdletBinding()]
 param(
@@ -56,10 +56,10 @@ Write-Host "==> Log directory: $script:LogDir"
 #   pattern in the combined stdout+stderr output.
 #
 # Parameters:
-#   Label        — human-readable test name
-#   Cmd          — script block that invokes zoqa (e.g. { & $ZoqaExe ... })
-#   ExpectedExit — expected exit code (default 0)
-#   GrepPattern  — optional regex; FAIL if not found in output
+#   Label        - human-readable test name
+#   Cmd          - script block that invokes zoqa (e.g. { & $ZoqaExe ... })
+#   ExpectedExit - expected exit code (default 0)
+#   GrepPattern  - optional regex; FAIL if not found in output
 function Run-Test {
     param(
         [string]      $Label,
@@ -156,7 +156,7 @@ if (-not (Test-Path $ZoqaExe)) {
 }
 
 # =============================================================================
-# Section A — Core protocol and CLI flag tests
+# Section A - Core protocol and CLI flag tests
 # (mirrors tests_core.sh, zoqa-only)
 # =============================================================================
 
@@ -177,22 +177,22 @@ Run-Test -Label "W-03: GET jobs with filter" -ExpectedExit 0 -GrepPattern '\[\]'
     & $ZoqaExe api --host $BaseUrl jobs distri=opensuse 2>&1
 }
 
-# Test W-04: GET 404 — exit 1 and status line in output
+# Test W-04: GET 404 - exit 1 and status line in output
 Run-Test -Label "W-04: GET non-existent (404)" -ExpectedExit 1 -GrepPattern '404 Not Found' -Cmd {
     & $ZoqaExe api --host $BaseUrl jobs/999999 2>&1
 }
 
-# Test W-05: Missing PATH positional argument — exit 255
+# Test W-05: Missing PATH positional argument - exit 255
 Run-Test -Label "W-05: Missing PATH argument (exit 255)" -ExpectedExit 255 -Cmd {
     & $ZoqaExe api --host $BaseUrl 2>&1
 }
 
-# Test W-06: Invalid host (connection refused) — exit 1
+# Test W-06: Invalid host (connection refused) - exit 1
 Run-Test -Label "W-06: Invalid host (connection refused)" -ExpectedExit 1 -Cmd {
     & $ZoqaExe api --host http://127.0.0.1:19999 jobs/overview 2>&1
 }
 
-# Test W-07: Flag placed before subcommand name is rejected — exit 255
+# Test W-07: Flag placed before subcommand name is rejected - exit 255
 Run-Test -Label "W-07: --host before 'api' rejected (exit 255)" -ExpectedExit 255 -Cmd {
     & $ZoqaExe --host $BaseUrl api jobs/overview 2>&1
 }
@@ -216,7 +216,7 @@ Run-Test -Label "W-10: --param-file" -ExpectedExit 0 -GrepPattern '\[\]' -Cmd {
 Remove-Item -Path $paramFile -Force -ErrorAction SilentlyContinue
 
 # =============================================================================
-# Section B — Authentication tests
+# Section B - Authentication tests
 # (mirrors tests_auth.sh, zoqa-only; no Perl comparisons)
 # =============================================================================
 
@@ -233,8 +233,8 @@ key=WRONG
 secret=WRONG
 "@ | Set-Content -Path $wrongConf -Encoding UTF8
 
-# Test W-11: DELETE non-existent — HMAC is applied on DELETE (returns 404, not 403)
-Run-Test -Label "W-11: DELETE non-existent (404) — HMAC on DELETE" -ExpectedExit 1 -GrepPattern '404 Not Found' -Cmd {
+# Test W-11: DELETE non-existent - HMAC is applied on DELETE (returns 404, not 403)
+Run-Test -Label "W-11: DELETE non-existent (404) - HMAC on DELETE" -ExpectedExit 1 -GrepPattern '404 Not Found' -Cmd {
     & $ZoqaExe api --host $BaseUrl -X DELETE assets/999999 2>&1
 }
 
@@ -315,7 +315,7 @@ Run-Test -Label "W-16: CLI flags override wrong env var creds" -ExpectedExit 0 -
 Remove-Item -Path $wrongConfDir -Recurse -Force -ErrorAction SilentlyContinue
 
 # =============================================================================
-# Section C — Seeded data tests
+# Section C - Seeded data tests
 # (mirrors tests_data.sh, zoqa-only; diff tests skipped)
 # =============================================================================
 
@@ -357,7 +357,7 @@ if ($relNorm -eq $absNorm) {
 }
 
 # =============================================================================
-# Section D — Output formatting tests
+# Section D - Output formatting tests
 # (mirrors tests_output.sh; header-count comparison skipped)
 # =============================================================================
 
@@ -384,7 +384,7 @@ Run-Test -Label "W-24: --name flag accepted (exit 0)" -ExpectedExit 0 -Cmd {
     & $ZoqaExe api --host $BaseUrl --name zoqa-e2e-windows jobs/overview 2>&1
 }
 
-# Test W-31: --links stream separation — next: must appear on stderr, not stdout.
+# Test W-31: --links stream separation - next: must appear on stderr, not stdout.
 # Mirrors test 43b from tests_output.sh.
 # run_test / Run-ZoqaTest captures combined stdout+stderr; explicit per-stream
 # redirects are required here to assert the stream-routing contract.
@@ -406,8 +406,8 @@ if (($linksStderrContent -match 'next:') -and (-not ($linksStdoutContent -match 
 }
 
 # =============================================================================
-# Section E — Robustness tests
-# (mirrors tests_robustness.sh; broken pipe test skipped — complex in PS)
+# Section E - Robustness tests
+# (mirrors tests_robustness.sh; broken pipe test skipped - complex in PS)
 # =============================================================================
 
 Write-Host ""
@@ -444,7 +444,7 @@ if (-not ($stderrQ -match '404')) {
 }
 
 # =============================================================================
-# Section F — Retry and timeout knob tests
+# Section F - Retry and timeout knob tests
 # (mirrors tests_retry_knobs.sh, full coverage)
 # =============================================================================
 

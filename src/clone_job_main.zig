@@ -389,7 +389,7 @@ fn resolveJobRef(allocator: std.mem.Allocator, args: *const CloneArgs) !Resolved
         defer result.deinit(allocator);
 
         if (result.host) |h| {
-            // A URL positional overrides --from (Perl §9.3 behaviour)
+            // A URL positional overrides --from (Perl §9.3 behavior)
             if (from_url) |old| allocator.free(old);
             from_url = h;
             result.host = null; // transfer ownership
@@ -673,7 +673,7 @@ const WalkResult = struct {
 /// - `resolved`: Resolved job reference containing `from_url` and `job_id`.
 /// - `from_creds`: Optional API credentials for the source instance.
 /// - `retry_cfg`: Retry/timeout configuration for HTTP requests.
-/// - `clone_opts`: Clone behaviour flags (skip_deps, clone_children, etc.).
+/// - `clone_opts`: Clone behavior flags (skip_deps, clone_children, etc.).
 /// - `verbose`: When `true`, enables verbose HTTP request output.
 /// - `ignore_missing_assets`: When `true`, suppresses the `?check_assets=1` query.
 /// - `client`: HTTP client instance (shared across requests).
@@ -806,7 +806,7 @@ fn walkDependencyGraph(
 /// - `arena_alloc`: Arena allocator for job entry storage.
 /// - `collected`: Slice of collected BFS entries from the dependency walker.
 /// - `overrides`: Parsed KEY=[VALUE] overrides from the command line.
-/// - `clone_opts`: Clone behaviour flags (parental_inheritance, etc.).
+/// - `clone_opts`: Clone behavior flags (parental_inheritance, etc.).
 ///
 /// Returns: An anonymous struct with `final_jobs` (the post-override job list)
 ///   and `post_body` (the encoded form body for the POST request).
@@ -910,7 +910,7 @@ fn encodeDepsAndApplyOverrides(
 /// from the origin job's settings, issues HTTP GET to each, and aborts
 /// (exit 1) if any returns a non-2xx status or fails to connect.
 ///
-/// Matches the Perl `detect_maintenance_update()` behaviour:
+/// Matches the Perl `detect_maintenance_update()` behavior:
 /// - `SKIP_MAINTENANCE_UPDATES=1` → silent bypass.
 /// - URLs with unexpanded `%VAR%` → warn on stderr, skip that URL.
 /// - No retries (single attempt per URL, matching Perl's Mojo::UA default).
@@ -946,7 +946,7 @@ fn checkRepos(
     }
 
     // Check each URL via HTTP GET (no auth, no retries).
-    // Uses std.http.Client directly — no zoqa library wrappers needed,
+    // Uses std.http.Client directly (no zoqa library wrappers needed),
     // since these are external repo URLs (not openQA API endpoints).
     var failed_urls: std.ArrayList([]const u8) = .empty;
     for (repo_check.urls_to_check.items) |repo_url| {
@@ -974,7 +974,7 @@ fn checkRepos(
 
 /// Issue a single HTTP GET to `url` and return true if the response is 2xx.
 /// Returns false on connection errors or non-2xx status.
-/// No authentication, no retries — matches Perl Mojo::UA default for repo checks.
+/// No authentication, no retries: matches Perl Mojo::UA default for repo checks.
 ///
 /// `client` is duck-typed: production callers pass `*std.http.Client`; tests
 /// can pass a mock exposing the same `request`/`sendBodiless`/`receiveHead`

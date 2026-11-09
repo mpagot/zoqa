@@ -33,10 +33,10 @@ server from the command line is `openqa-cli` Perl script bundled with the openQA
 package.
 
 `openqa-cli` is the standard tool for the job and is actively maintained. But it
-carries the weight of a full Perl runtime, a tree of CPAN dependencies, and the
-startup cost that comes with an interpreted language. If you want to run the client on
-a minimal container image, or distribute it to machines without pulling in Perl and
-its dependency tree, that weight starts to matter.
+needs a Perl runtime, a tree of CPAN dependencies, and interpreter
+startup overhead. If you want to run the client on a minimal container image,
+or distribute it to machines without pulling in Perl and its dependency tree,
+that overhead becomes significant.
 
 **zoqa** is a from-scratch reimplementation of `openqa-cli` and its companion
 scripts in [Zig](https://ziglang.org/). The goal is full coverage of the openQA
@@ -53,7 +53,7 @@ single static binaries, and need zero runtime dependencies.
 
 | | `openqa-cli` (Perl) | `zoqa` (Zig) |
 |---|---|---|
-| **Runtime deps** | Perl 5, ~15 CPAN modules | None (static binary) |
+| **Runtime deps** | Perl 5, ~15 CPAN modules, `curl` (clone-job) | None (static binary) |
 | **Binary size** | N/A (interpreted) | ~2 MB |
 | **Startup** | Perl interpreter + module loading | Instant (compiled native code) |
 | **Platforms** | Wherever Perl runs | Linux, macOS, Windows (x86_64 + aarch64) 6 targets from a single build host |
@@ -63,12 +63,17 @@ single static binaries, and need zero runtime dependencies.
 | **Wall-time `archive` (~3.4 GB)** | ~18m 42s | ~14m 23s |
 | **CPU user time `archive` (~3.4 GB)** | ~151 s | ~2.9 s (52× less) |
 | **Peak memory (`archive`, ~3.4 GB)** | ~70 MB | ~11 MB (6.3× less) |
+| **Wall-time `clone-job` (~2.36 GB)** | ~125.0 s | ~116.3 s (1.1× faster) |
+| **CPU user time `clone-job` (~2.36 GB)** | ~8.5 s | ~3.6 s (57% less) |
+| **Peak memory (`clone-job`, ~2.36 GB)** | ~53.3 MB | ~4.2 MB (12.7× less) |
 
 Measured against a production openQA server over the network. The `api` speedup
 is **Mojolicious startup overhead**: both tools complete the network round-trip
 in similar time. The `archive` gap is a genuine **architectural difference**:
 zoqa streams to disk; openqa-cli double-writes through a temp file, using 52×
-more CPU.
+more CPU. The `clone-job` speedup pairs compiled in-process HTTP/TLS streaming
+with zero fork overhead, cutting CPU time by 57% and memory by 92% without
+depending on `curl`.
 
 See [docs/compare_performance.md](docs/compare_performance.md) for the full
 analysis, interpreter baseline measurements, and methodology.
@@ -100,6 +105,7 @@ The full guide: **[docs/Usage.md](docs/Usage.md)**. Or just:
 ```sh
 zoqa --help
 zoqa <subcommand> --help   # api | archive | monitor | schedule
+zoqa-clone-job --help      # drop-in replacement for openqa-clone-job
 ```
 
 
@@ -113,18 +119,18 @@ cd zoqa
 zig build -Doptimize=ReleaseSafe
 ```
 
-The binary is at `zig-out/bin/zoqa`.
+The binaries are at `zig-out/bin/zoqa` and `zig-out/bin/zoqa-clone-job`.
 
 
 ## Project status
 
 zoqa is in active development. All four `openqa-cli` subcommands
-(`api`, `archive`, `monitor`, and `schedule`) are fully implemented, with a
-comprehensive suite of end-to-end tests passing against a containerized openQA
-instance.
+(`api`, `archive`, `monitor`, and `schedule`) and the `zoqa-clone-job` tool
+(`openqa-clone-job` replacement) are fully implemented, with a full suite of
+end-to-end tests passing against a containerized openQA instance.
 
-The standalone companion scripts (`openqa-clone-job`,
-`openqa-clone-custom-git-refspec`) are still planned.
+The standalone companion script `openqa-clone-custom-git-refspec` is still
+planned.
 
 
 ## Contributing
@@ -145,17 +151,22 @@ make e2e-lint                  # lint the E2E test scripts
 ## Architecture
 
 zoqa is structured as a set of focused modules, one per subcommand plus
-shared infrastructure:
+shared infrastructure and standalone tools:
 
 | Module | Purpose |
 |---|---|
 | `src/main.zig` | CLI entry point, argument parsing, subcommand dispatching |
+| `src/clone_job_main.zig` | `zoqa-clone-job` CLI entry point, asset downloader, progress meter |
+| `src/clone_job.zig` | `clone-job` dependency graph walker, BFS resolution, post body assembly |
 | `src/config.zig` | INI config parser, credential and host resolution |
 | `src/auth.zig` | HMAC-SHA1 authentication header generation |
-| `src/http_client.zig` | HTTP client wrapper with retry logic |
+| `src/http_client.zig` | HTTP client wrapper with retry logic and streaming downloads |
 | `src/archive.zig` | `archive` subcommand: stream a job's assets and test results to disk |
 | `src/monitor.zig` | `monitor` subcommand: poll until specified jobs reach a final state |
 | `src/schedule.zig` | `schedule` subcommand: POST `/api/v1/isos` to start jobs |
+| `src/fs_utils.zig` | Filesystem abstraction layer (live and memory-backed filesystems) |
+| `src/cli_env.zig` | CLI environment and argument resolution |
+| `src/arg_match.zig` | Positional argument matcher |
 | `src/root.zig` | Library root, re-exports core modules and C-ABI functions |
 
 The project also ships as a static library (`libzoqa.a`) for embedding in other
@@ -165,7 +176,7 @@ applications.
 ## Credits
 
 zoqa would not exist without [openQA](https://github.com/os-autoinst/openQA) and
-its `openqa-cli` tool. The entire command-line interface, authentication scheme,
+its `openqa-cli` tool. The command-line interface, authentication scheme,
 configuration format, and behavioral semantics are derived from the Perl reference
 implementation. Full credit goes to the openQA team and contributors at SUSE and the
 openSUSE community.

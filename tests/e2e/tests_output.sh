@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests_output.sh — Section D: Output formatting tests.
+# tests_output.sh - Section D: Output formatting tests.
 #
 # Covers --verbose, --pretty, --name, and Perl vs Zig header count parity.
 #
@@ -19,7 +19,7 @@ run_comparison_api "--verbose shows HTTP status line" "" "--verbose jobs/overvie
 run_comparison_api "--verbose includes Content-Type" "" "--verbose jobs/overview" 0 "Content-Type:"
 
 # Test 26: --pretty on a non-empty response produces indented JSON.
-# The pattern "^  " matches any line with a 2-space indent — present in all
+# The pattern "^  " matches any line with a 2-space indent - present in all
 # pretty-printed JSON but never in the compact single-line output.
 run_comparison_api "--pretty (non-empty)" "" "--pretty jobs/overview" 0 "^  "
 
@@ -33,7 +33,7 @@ run_comparison_api "--pretty (non-empty)" "" "--pretty jobs/overview" 0 "^  "
 run_comparison_api "--name flag accepted (exit 0)" "" \
 	"--name zoqa-e2e-test jobs/overview" 0
 
-# Test 28: Verbose mode — Perl vs Zig header count comparison.
+# Test 28: Verbose mode - Perl vs Zig header count comparison.
 #
 # Captures stdout and stderr separately for both implementations and compares
 # the header-line count.  Perl and Zig both produce ~5 application-level header
@@ -62,7 +62,7 @@ if [[ "$perl_stdout_headers" -gt 0 || "$perl_stderr_headers" -gt 0 ]]; then
 	_header_diff=$((zig_stdout_headers - perl_stdout_headers))
 	if [[ "$_header_diff" -ge 0 && "$_header_diff" -le 1 && "$zig_stderr_headers" -eq "$perl_stderr_headers" ]]; then
 		if [[ "$_header_diff" -eq 1 ]]; then
-			echo "PASS (Zig has 1 extra header — Content-Encoding from gzip negotiation)"
+			echo "PASS (Zig has 1 extra header - Content-Encoding from gzip negotiation)"
 		else
 			echo "PASS (Zig matches Perl header output)"
 		fi
@@ -75,7 +75,7 @@ if [[ "$perl_stdout_headers" -gt 0 || "$perl_stderr_headers" -gt 0 ]]; then
 		failed_tests=$((failed_tests + 1))
 	fi
 else
-	echo "WARN: Perl produced no headers in verbose mode — skipping comparison"
+	echo "WARN: Perl produced no headers in verbose mode - skipping comparison"
 	warned_tests=$((warned_tests + 1))
 fi
 
@@ -88,7 +88,7 @@ run_comparison_api "--pretty on empty result (no crash)" "" \
 # Test 43: --links prints the Link header's rel=next URL to stderr.
 # Uses machines?limit=2: 3 machines are seeded, guaranteeing a next page.
 # Perl (Command.pm:52-56) wraps output in ANSI colour codes; Zig (main.zig:1570)
-# writes plain text. Both contain "next:" — grep matches regardless of ANSI.
+# writes plain text. Both contain "next:" - grep matches regardless of ANSI.
 # Stream separation (next: on stderr, not stdout) is asserted in Test 20
 # (_run_pagination_test in tests_data.sh), which also strips ANSI for both impls.
 run_comparison_api "--links outputs next: for paginated response" "" \

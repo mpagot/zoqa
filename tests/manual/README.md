@@ -10,13 +10,13 @@ credentials.
 
 ### Environment variables
 
-Validated by `lib.sh` at startup — the scripts exit immediately if a required
+Validated by `lib.sh` at startup - the scripts exit immediately if a required
 variable is unset.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `OPENQA_HOST` | yes | — | Base URL, e.g. `https://openqa.opensuse.org` |
-| `OPENQA_JOB_ID` | yes | — | A known-good completed job ID |
+| `OPENQA_HOST` | yes | - | Base URL, e.g. `https://openqa.opensuse.org` |
+| `OPENQA_JOB_ID` | yes | - | A known-good completed job ID |
 | `ZOQA` | no | `./zig-out/bin/zoqa` | Path to the zoqa binary |
 | `ZOQA_CLONE` | no | `./zig-out/bin/zoqa-clone-job` | Path to the zoqa-clone-job binary (`test_perf_clone.sh`) |
 | `RUNS` | no | `3` | Number of timing repetitions per scenario |
@@ -28,10 +28,10 @@ variable is unset.
 | Tool | Required | Notes |
 |---|---|---|
 | `bash 4+` | yes | |
-| `openqa-cli` | by script | `test_api.sh`, `test_schedule_monitor.sh` — install with `zypper install openQA-client` |
-| `openqa-clone-job` | by script | `test_perf_clone.sh` — install with `zypper install openQA-client` |
-| `curl` | by script | `test_perf_details.sh`, `test_perf_clone.sh` — raw I/O baseline |
-| `python3` | by script | `test_api.sh`, `test_schedule_monitor.sh`, `test_perf_clone.sh` — JSON validation and extraction |
+| `openqa-cli` | by script | `test_api.sh`, `test_schedule_monitor.sh` - install with `zypper install openQA-client` |
+| `openqa-clone-job` | by script | `test_perf_clone.sh` - install with `zypper install openQA-client` |
+| `curl` | by script | `test_perf_details.sh`, `test_perf_clone.sh` - raw I/O baseline |
+| `python3` | by script | `test_api.sh`, `test_schedule_monitor.sh`, `test_perf_clone.sh` - JSON validation and extraction |
 | `/usr/bin/time` | no | GNU time; if absent, RSS measurement is silently skipped |
 
 ---
@@ -69,11 +69,11 @@ OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=12345 \
 OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=6262303 \
     bash tests/manual/test_perf_clone.sh
 
-# Live run — creates jobs on the server
+# Live run - creates jobs on the server
 OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=12345 \
     bash tests/manual/test_schedule_monitor.sh
 
-# Dry run — prints commands, makes no mutating requests
+# Dry run - prints commands, makes no mutating requests
 OPENQA_HOST=https://openqa.opensuse.org OPENQA_JOB_ID=12345 \
     bash tests/manual/test_schedule_monitor.sh --dry-run
 ```

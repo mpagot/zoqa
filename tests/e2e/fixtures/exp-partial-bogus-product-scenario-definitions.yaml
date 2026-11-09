@@ -1,7 +1,7 @@
 ---
 # Experiment fixture: one valid job_template + one referencing a nonexistent
 # product key. Hypothesis: openQA schedules the valid one and reports the
-# bogus one in failed/failed_job_info — yielding the partial-success shape
+# bogus one in failed/failed_job_info - yielding the partial-success shape
 # we need to exercise §15.4 / §15.6 precedence.
 products:
   example:

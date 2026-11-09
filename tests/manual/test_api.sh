@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/manual/test_api.sh — Manual correctness and performance tests for the
+# tests/manual/test_api.sh - Manual correctness and performance tests for the
 # `api` subcommand of zoqa, run against a real production openQA server.
 #
 # Purpose:
@@ -17,7 +17,7 @@
 # Requirements (on the host):
 #   - bash 4+
 #   - openqa-cli  (the Perl reference implementation) in PATH
-#   - /usr/bin/time (GNU time, for peak RSS measurement — optional)
+#   - /usr/bin/time (GNU time, for peak RSS measurement - optional)
 #   - python3 (for JSON validation)
 #   - Network access to the target openQA server
 #
@@ -180,54 +180,54 @@ run_test() {
 echo "=== Test Scenarios ==="
 echo ""
 
-# T1: jobs/overview — "Are there running jobs right now?"
+# T1: jobs/overview - "Are there running jobs right now?"
 # The most common dashboard-style query.
 run_test \
-	"jobs/overview — list running jobs" \
+	"jobs/overview - list running jobs" \
 	"jobs/overview" \
 	"zoqa returns a list|isinstance(d, list)"
 
-# T2: jobs/$JOB_ID — "What is the status of this job?"
+# T2: jobs/$JOB_ID - "What is the status of this job?"
 # Single-resource lookup, the most common per-job query.
 run_test \
-	"jobs/$JOB_ID — single job status" \
+	"jobs/$JOB_ID - single job status" \
 	"jobs/$JOB_ID" \
 	"zoqa .job.id matches|d.get('job', {}).get('id') == $JOB_ID"
 
-# T3: jobs/$JOB_ID/details — "What tests ran and what were their results?"
+# T3: jobs/$JOB_ID/details - "What tests ran and what were their results?"
 # Large response body; exercises JSON decode throughput.
 run_test \
-	"jobs/$JOB_ID/details — full job details (large body)" \
+	"jobs/$JOB_ID/details - full job details (large body)" \
 	"jobs/$JOB_ID/details" \
 	"zoqa .job.testresults present|'testresults' in d.get('job', {})"
 
-# T4: jobs id=$JOB_ID — filter job list by KEY=VALUE query param
+# T4: jobs id=$JOB_ID - filter job list by KEY=VALUE query param
 # Tests query-string construction (GET + positional KEY=VALUE).
 # Note: GET /api/v1/jobs?id=N returns the full jobs table (id= is a lower
 # bound, not an exact filter), so no semantic field check is meaningful here.
 # The test verifies query-string construction via exit 0 + valid JSON.
 run_test \
-	"jobs id=$JOB_ID — query-param filter" \
+	"jobs id=$JOB_ID - query-param filter" \
 	"jobs id=$JOB_ID"
 
-# T5: jobs limit=5 — "Show me the 5 most recent jobs"
+# T5: jobs limit=5 - "Show me the 5 most recent jobs"
 # Tests query-param handling and verifies server respects the limit.
 run_test \
-	"jobs limit=5 — limited job list" \
+	"jobs limit=5 - limited job list" \
 	"jobs limit=5" \
 	"zoqa .jobs has <= 5 entries|len(d.get('jobs', [])) <= 5"
 
-# T6: --pretty jobs/$JOB_ID — human-readable JSON output
+# T6: --pretty jobs/$JOB_ID - human-readable JSON output
 # Tests the --pretty flag (JSON parse + re-indent).
 run_test \
-	"--pretty jobs/$JOB_ID — pretty-printed output" \
+	"--pretty jobs/$JOB_ID - pretty-printed output" \
 	"--pretty jobs/$JOB_ID" \
 	"zoqa .job.id matches|d.get('job', {}).get('id') == $JOB_ID"
 
-# T7: --verbose jobs/$JOB_ID — header inspection
+# T7: --verbose jobs/$JOB_ID - header inspection
 # Tests verbose mode: HTTP status line + headers printed before the body.
 run_test --verbose \
-	"--verbose jobs/$JOB_ID — verbose with headers" \
+	"--verbose jobs/$JOB_ID - verbose with headers" \
 	"--verbose jobs/$JOB_ID"
 
 # =============================================================================

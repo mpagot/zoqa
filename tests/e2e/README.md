@@ -6,9 +6,9 @@ live official openQA single-instance container managed by Podman.
 
 Two test flows are provided:
 
-- **Linux / macOS** — `run.sh` runs the full test suite (Zig + Perl comparisons)
+- **Linux / macOS** - `run.sh` runs the full test suite (Zig + Perl comparisons)
   inside the container using Bash.
-- **Windows** — `run_windows.ps1` runs a zoqa-only subset (~30 tests) using
+- **Windows** - `run_windows.ps1` runs a zoqa-only subset (~30 tests) using
   PowerShell.  The container still runs in WSL; `zoqa.exe` is called natively.
 
 ## Prerequisites
@@ -16,7 +16,7 @@ Two test flows are provided:
 ### Linux / macOS
 - [Podman](https://podman.io/) installed and rootless-ready
 - `/dev/kvm` access recommended (container stability)
-- `zig build` already run — the test harness mounts `zig-out/bin/zoqa` into
+- `zig build` already run - the test harness mounts `zig-out/bin/zoqa` into
   the container as `/app/zig-out/bin/zoqa`
 
 ### Windows
@@ -108,7 +108,7 @@ invoked automatically.
                     monitor, schedule, help, clone_smoke, clone_single,
                     clone_topology, clone_maxdepth, clone_uefi, gatekeeper,
                     stress, perf. When omitted, all suites are run
-                    (default behaviour).
+                    (default behavior).
 -h, --help          Show help.
 ```
 
@@ -214,9 +214,9 @@ configures source resolution so no extra flags are needed.
 Additionally, `check_suite_registry.sh` verifies that every `tests_*.sh` file on
 disk is properly registered in all three required locations:
 
-1. `tests/e2e/tests.sh` — `_e2e_all_suites` array
-2. `Makefile` — `E2E_SCRIPTS` list
-3. `tests/e2e/TEST_CATALOG.md` — File Layout section
+1. `tests/e2e/tests.sh` - `_e2e_all_suites` array
+2. `Makefile` - `E2E_SCRIPTS` list
+3. `tests/e2e/TEST_CATALOG.md` - File Layout section
 
 It also detects stale entries (registrations pointing to files that no longer exist).
 
@@ -286,7 +286,7 @@ short-circuits this by keeping the container alive after the automated
 run finishes.  You can then re-run individual test scripts or ad-hoc
 commands against the same seeded container as many times as you like.
 
-### Step 1 — Start the container and run a specific suite
+### Step 1 - Start the container and run a specific suite
 
 ```sh
 # Build zoqa, start the container, run only the "stress" suite, keep alive.
@@ -305,7 +305,7 @@ After the run finishes, the output shows:
     To stop it:  podman rm -f openqa-e2e
 ```
 
-### Step 2 — Re-run a test script manually
+### Step 2 - Re-run a test script manually
 
 The automated test scripts (`tests_*.sh`) are designed to be sourced by
 `tests.sh` inside `run.sh`, which sets up shared variables (`ZIG_EXE`,
@@ -352,7 +352,7 @@ source tests/e2e/tests_stress.sh
 echo "Failed: $failed_tests"
 ```
 
-### Step 3 — Run ad-hoc commands against the container
+### Step 3 - Run ad-hoc commands against the container
 
 With the container alive, you can run any command directly via
 `podman exec`.  This is useful for manual benchmarking, debugging job
@@ -383,19 +383,19 @@ podman exec openqa-e2e bash -c \
   '/usr/bin/time -v /app/zig-out/bin/zoqa api --host http://localhost \
      jobs/2/details >/dev/null' </dev/null 2>&1
 
-# Output parity — compare md5 checksums
+# Output parity - compare md5 checksums
 podman exec openqa-e2e bash -c \
   'openqa-cli api --host http://localhost jobs/2/details 2>/dev/null | md5sum'
 podman exec openqa-e2e bash -c \
   '/app/zig-out/bin/zoqa api --host http://localhost jobs/2/details 2>/dev/null | md5sum'
 ```
 
-### Step 4 — Rebuild zoqa and re-test without restarting the container
+### Step 4 - Rebuild zoqa and re-test without restarting the container
 
 The zoqa binary is bind-mounted from `zig-out/bin/zoqa` into the
 container at `/app/zig-out/bin/zoqa`.  A plain `zig build` on the host
 updates the binary in place, and the next `podman exec` picks up the
-new version immediately — no container restart needed:
+new version immediately - no container restart needed:
 
 ```sh
 # Edit src/http_client.zig, then:
@@ -405,7 +405,7 @@ podman exec openqa-e2e /app/zig-out/bin/zoqa api --host http://localhost jobs/2/
   >/dev/null 2>&1
 ```
 
-### Step 5 — Tear down
+### Step 5 - Tear down
 
 ```sh
 podman rm -f openqa-e2e

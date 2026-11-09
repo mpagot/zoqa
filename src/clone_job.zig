@@ -713,7 +713,7 @@ pub fn formatJsonOutput(
 }
 
 /// Append or replace a repeat-iteration suffix on the `TEST` setting of each
-/// job in `collected`. Implements the Perl `append_idx_to_test_name` behaviour:
+/// job in `collected`. Implements the Perl `append_idx_to_test_name` behavior:
 ///
 /// - Iteration 1: append `-NN` to the existing TEST value.
 /// - Iterations 2+: replace the trailing `-\d+` with the new suffix.

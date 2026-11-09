@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run.sh — Near End-to-End tests for zoqa.
+# run.sh - Near End-to-End tests for zoqa.
 #
 # Starts the openQA container (via setup.sh), runs comparison tests between
 # openqa-cli (Perl reference) and zoqa (Zig), then tears down.
@@ -60,8 +60,8 @@ DEBUGGING TIPS:
   Use --keep-container to browse the openQA web UI during or after the run.
   Use --collect-logs --keep-container to inspect logs without stopping the container.
   The container name is always 'openqa-e2e'.
-  podman exec openqa-e2e bash   — drop into the container shell.
-  podman logs openqa-e2e        — stream container stdout/stderr.
+  podman exec openqa-e2e bash   - drop into the container shell.
+  podman logs openqa-e2e        - stream container stdout/stderr.
 EOF
 }
 
@@ -150,7 +150,7 @@ unset _bin
 # _print_bin_info LABEL PATH
 #
 # Prints path, MD5, mtime, build type, and size for a single binary.
-# All checks are optional — missing tools are silently skipped.
+# All checks are optional - missing tools are silently skipped.
 # GNU stat (Linux) and BSD stat (macOS) use different flags; both are handled.
 _print_bin_info() {
 	local label="$1"
@@ -189,7 +189,7 @@ _print_bin_info "zoqa          " "zig-out/bin/zoqa"
 _print_bin_info "zoqa-clone-job" "zig-out/bin/zoqa-clone-job"
 unset -f _print_bin_info
 
-# Podman sanity check — verify podman is usable before spending time on the
+# Podman sanity check - verify podman is usable before spending time on the
 # openQA container setup.
 #
 # NOTE on BoltDB warnings: on some systems (e.g. older Podman installations
@@ -198,7 +198,7 @@ unset -f _print_bin_info
 #
 #   level=warning msg="The deprecated BoltDB database driver is in use..."
 #
-# This is a Podman-level issue, not specific to any one container or command —
+# This is a Podman-level issue, not specific to any one container or command:
 # it appears on ALL `podman` calls throughout this script (run, exec, rm, …).
 # It is purely cosmetic and does not affect correctness.  Where test output
 # comparisons are sensitive to stderr noise (e.g. Test 21) stderr is redirected
@@ -206,12 +206,12 @@ unset -f _print_bin_info
 #   podman system migrate --migrate-db
 if [[ "$DRY_RUN" == "false" ]]; then
 	if ! podman info >/dev/null 2>&1; then
-		echo "Error: 'podman info' failed — is the Podman daemon running?" >&2
+		echo "Error: 'podman info' failed - is the Podman daemon running?" >&2
 		exit 1
 	fi
 	# Quick smoke-test: run a minimal container and confirm it exits cleanly.
 	if ! podman run --rm busybox true >/dev/null 2>&1; then
-		echo "Error: podman run smoke-test failed — check Podman installation." >&2
+		echo "Error: podman run smoke-test failed - check Podman installation." >&2
 		echo "       Run 'podman run --rm busybox true' manually to diagnose." >&2
 		exit 1
 	fi
@@ -251,7 +251,7 @@ if [[ -f "$ENV_FILE" ]]; then
 	source "$ENV_FILE"
 else
 	if [[ "$DRY_RUN" == "false" ]]; then
-		echo "Error: $ENV_FILE not found — setup.sh did not complete successfully." >&2
+		echo "Error: $ENV_FILE not found - setup.sh did not complete successfully." >&2
 		exit 1
 	fi
 	# Dry-run defaults

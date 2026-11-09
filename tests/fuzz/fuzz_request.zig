@@ -47,14 +47,14 @@
 //
 // The LINKHEADER block content is fed to parseLinkHeader + LinkIterator.
 // The JSON block content is fed to std.json.parseFromSlice + stringify.
-// Both blocks are optional — their absence is handled gracefully.
+// Both blocks are optional - their absence is handled gracefully.
 //
 // ---------------------------------------------------------------------------
 // Temp-file lifecycle
 // ---------------------------------------------------------------------------
 //
 // The temp file is created once in zig_fuzz_init (called once per AFL++ worker
-// process) and is never deleted — it persists for the process lifetime.
+// process) and is never deleted - it persists for the process lifetime.
 // Each zig_fuzz_test iteration truncate-overwrites it with the new content.
 // This avoids per-iteration create/delete overhead on the tmpfs ramdisk.
 //
@@ -89,7 +89,7 @@ var tmp_param_path_buf: [64]u8 = undefined;
 var tmp_param_path: []const u8 = &.{};
 
 // ---------------------------------------------------------------------------
-// zig_fuzz_init — called once per AFL++ worker process
+// zig_fuzz_init - called once per AFL++ worker process
 // ---------------------------------------------------------------------------
 
 pub export fn zig_fuzz_init() void {
@@ -103,7 +103,7 @@ pub export fn zig_fuzz_init() void {
 }
 
 // ---------------------------------------------------------------------------
-// zig_fuzz_test — called in a tight loop by AFL++ persistent mode
+// zig_fuzz_test - called in a tight loop by AFL++ persistent mode
 // ---------------------------------------------------------------------------
 
 pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
@@ -217,7 +217,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     while (line_it.next()) |line| {
         if (line.len == 0) continue;
 
-        // Track entry/exit of content blocks — skip these lines from argv.
+        // Track entry/exit of content blocks - skip these lines from argv.
         if (std.mem.eql(u8, line, FILE_START)) {
             in_file_block = true;
             continue;

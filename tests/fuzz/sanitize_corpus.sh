@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sanitize_corpus.sh — Rename AFL++ corpus files to Windows-safe names.
+# sanitize_corpus.sh - Rename AFL++ corpus files to Windows-safe names.
 #
 # AFL++ generates filenames containing colons (e.g. id:000002,time:0,...) which
 # are invalid on Windows (NTFS). This script replaces Windows-unsafe characters

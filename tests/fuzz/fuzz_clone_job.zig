@@ -52,7 +52,7 @@
 //     bit 5: run the --repeat loop
 //     bit 6: run collectRepoUrls on the origin job
 //     bit 7: reserved
-//   Byte 1: max_depth — 0xFF = null, else value & 0x0F (0 = unlimited in the
+//   Byte 1: max_depth - 0xFF = null, else value & 0x0F (0 = unlimited in the
 //           walker). Default 1 (CLI default).
 //   Byte 2: repeat count = (value & 0x03) + 2 (only with bit 5). Default 2.
 //
@@ -114,13 +114,13 @@ const EncodeResult = struct {
 };
 
 // ---------------------------------------------------------------------------
-// zig_fuzz_init — called once per AFL++ worker process
+// zig_fuzz_init - called once per AFL++ worker process
 // ---------------------------------------------------------------------------
 
 pub export fn zig_fuzz_init() void {}
 
 // ---------------------------------------------------------------------------
-// zig_fuzz_test — called in a tight loop by AFL++ persistent mode
+// zig_fuzz_test - called in a tight loop by AFL++ persistent mode
 // ---------------------------------------------------------------------------
 
 pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
@@ -136,7 +136,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     const decoded = decode(input, allocator);
 
     // parseOverride is exercised even when the jobs JSON is broken.
-    // ORACLE: O2 — a non-null parseOverride result has no '=' in key or scope.
+    // ORACLE: O2 - a non-null parseOverride result has no '=' in key or scope.
     _ = decoded.overrides;
 
     // ------------------------------------------------------------------
@@ -199,7 +199,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
             }
         }
 
-        // ORACLE: O1 — collected job IDs are unique and collected.len <= MAX_FEEDS.
+        // ORACLE: O1 - collected job IDs are unique and collected.len <= MAX_FEEDS.
         walk = .{ .walker = walker, .assets = all_assets };
     }
 
@@ -251,7 +251,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         _ = badge;
 
         const json_out = clone_job.formatJsonOutput(allocator, ids_map) catch return;
-        // ORACLE: O5 — formatJsonOutput output parses as a JSON object.
+        // ORACLE: O5 - formatJsonOutput output parses as a JSON object.
         _ = json_out;
     }
 
@@ -263,7 +263,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         for (1..count + 1) |i| {
             clone_job.appendRepeatSuffix(allocator, encode.final_jobs.items, @intCast(i)) catch return;
             const iter_body = clone_job.buildPostBody(allocator, encode.final_jobs.items) catch return;
-            // ORACLE: O4 — buildPostBody output ends with is_clone_job=1.
+            // ORACLE: O4 - buildPostBody output ends with is_clone_job=1.
             _ = iter_body;
         }
     }
@@ -298,7 +298,7 @@ fn repeatCount() u32 {
 }
 
 // ---------------------------------------------------------------------------
-// decode — section splitting, override parsing, control bytes
+// decode - section splitting, override parsing, control bytes
 // ---------------------------------------------------------------------------
 
 fn decode(input: []const u8, allocator: std.mem.Allocator) Decoded {
@@ -380,7 +380,7 @@ fn decode(input: []const u8, allocator: std.mem.Allocator) Decoded {
 }
 
 // ---------------------------------------------------------------------------
-// runEncode — assignExistingDeps + applySettings + buildPostBody
+// runEncode - assignExistingDeps + applySettings + buildPostBody
 // ---------------------------------------------------------------------------
 
 fn runEncode(
@@ -425,7 +425,7 @@ fn runEncode(
     }
 
     const post_body = try clone_job.buildPostBody(allocator, final_jobs.items);
-    // ORACLE: O4 — buildPostBody output ends with is_clone_job=1.
+    // ORACLE: O4 - buildPostBody output ends with is_clone_job=1.
 
     const final_jobs_owned = try final_jobs.toOwnedSlice(allocator);
     return EncodeResult{

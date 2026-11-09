@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cmin.sh — reduce corpus (afl-cmin) for one or all fuzz targets.
+# cmin.sh - reduce corpus (afl-cmin) for one or all fuzz targets.
 #
 # Usage:
 #   ./tests/fuzz/cmin.sh                       # minimise all targets
@@ -18,11 +18,11 @@
 #
 # Target names:
 #
-#     config   — INI parser + resolveHost          (zoqa-fuzz-config)
-#     request  — CLI args + buildRequest + JSON    (zoqa-fuzz-request)
-#     execute  — full pipeline: auth+retry+gzip    (zoqa-fuzz-execute)
-#     schedule — runSchedule + runMonitor          (zoqa-fuzz-schedule)
-#     clone_job — clone-job dependency graph       (zoqa-fuzz-clone-job)
+#     config   - INI parser + resolveHost          (zoqa-fuzz-config)
+#     request  - CLI args + buildRequest + JSON    (zoqa-fuzz-request)
+#     execute  - full pipeline: auth+retry+gzip    (zoqa-fuzz-execute)
+#     schedule - runSchedule + runMonitor          (zoqa-fuzz-schedule)
+#     clone_job - clone-job dependency graph       (zoqa-fuzz-clone-job)
 
 set -euo pipefail
 
@@ -100,12 +100,12 @@ for target in "${TARGETS[@]}"; do
 	echo "==> Target: $target"
 
 	if [[ ! -d "$corpus_src" ]]; then
-		echo "    WARNING: corpus directory '$corpus_src' not found — skipping." >&2
+		echo "    WARNING: corpus directory '$corpus_src' not found - skipping." >&2
 		continue
 	fi
 
 	if [[ -z "$(ls -A "$corpus_src" 2>/dev/null)" ]]; then
-		echo "    WARNING: corpus directory '$corpus_src' is empty — skipping." >&2
+		echo "    WARNING: corpus directory '$corpus_src' is empty - skipping." >&2
 		continue
 	fi
 

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# lib_fixtures.sh — Job scheduling, waiting, and fixture management helpers.
+# lib_fixtures.sh - Job scheduling, waiting, and fixture management helpers.
 #
 # Extracted from lib.sh to separate job-orchestration concerns from universal
-# primitives.  Sourced automatically by lib.sh — do NOT source directly.
+# primitives.  Sourced automatically by lib.sh - do NOT source directly.
 #
 # Provides:
-#   schedule_job()          — POST /api/v1/isos, prints job ID
-#   wait_for_job()          — poll until terminal state, prints state
-#   cancel_job()            — POST cancel for a job
-#   cancel_pending_jobs()   — cancel all unfinished jobs (clone backlog cleanup)
-#   get_job_state()         — query and print a job's state
-#   _ensure_job()           — generic lazy-init for any named job variable
-#   _E2E_JOB_COMMON_ARGS   — shared schedule_job args (DISTRI/FLAVOR/ARCH/…)
-#   dump_job_logs()         — fetch and print per-job diagnostics on failure
-#   register_deletable_asset() — create a file-backed asset, prints asset ID
-#   ensure_basic_job()      — lazy-init JOB_ID
-#   ensure_rich_job()       — lazy-init RICH_JOB_ID
-#   ensure_stress_job()     — lazy-init STRESS_JOB_ID
-#   ensure_html_asset_job() — lazy-init GAT_HTML_JOB_ID (ASSET_1=page.html)
+#   schedule_job()          - POST /api/v1/isos, prints job ID
+#   wait_for_job()          - poll until terminal state, prints state
+#   cancel_job()            - POST cancel for a job
+#   cancel_pending_jobs()   - cancel all unfinished jobs (clone backlog cleanup)
+#   get_job_state()         - query and print a job's state
+#   _ensure_job()           - generic lazy-init for any named job variable
+#   _E2E_JOB_COMMON_ARGS   - shared schedule_job args (DISTRI/FLAVOR/ARCH/…)
+#   dump_job_logs()         - fetch and print per-job diagnostics on failure
+#   register_deletable_asset() - create a file-backed asset, prints asset ID
+#   ensure_basic_job()      - lazy-init JOB_ID
+#   ensure_rich_job()       - lazy-init RICH_JOB_ID
+#   ensure_stress_job()     - lazy-init STRESS_JOB_ID
+#   ensure_html_asset_job() - lazy-init GAT_HTML_JOB_ID (ASSET_1=page.html)
 #
 # Dependencies: lib.sh must be sourced first (provides container_exec, die,
 # e2e_sleep, DRY_RUN, CIRROS_IMG, CIRROS_TESTDIR, LOG_PREFIX).
@@ -27,7 +27,7 @@
 _OPENQA_E2E_LIB_FIXTURES_LOADED=1
 
 # ===========================================================================
-# Job Management Functions (host-side — use container_exec internally)
+# Job Management Functions (host-side - use container_exec internally)
 #
 # These functions call openqa-cli inside the container via container_exec.
 # They are intended for use by test suites (tests_*.sh), NOT by scripts
@@ -39,7 +39,7 @@ _OPENQA_E2E_LIB_FIXTURES_LOADED=1
 _SCENARIO_YAML_PATH="/tmp/scenario.yaml"
 
 # ---------------------------------------------------------------------------
-# schedule_job KEY=VALUE... — schedule an openQA job via POST /api/v1/isos
+# schedule_job KEY=VALUE... - schedule an openQA job via POST /api/v1/isos
 #
 # Automatically includes SCENARIO_DEFINITIONS_YAML from the cached file.
 # Prints the new job ID to stdout.
@@ -83,7 +83,7 @@ schedule_job() {
 }
 
 # ---------------------------------------------------------------------------
-# wait_for_job JOB_ID [TIMEOUT_SECONDS] — poll until the job reaches a
+# wait_for_job JOB_ID [TIMEOUT_SECONDS] - poll until the job reaches a
 # terminal state (done, cancelled, failed).
 #
 # Prints the terminal state to stdout. Returns 0 on success, 1 on timeout.
@@ -118,7 +118,7 @@ wait_for_job() {
 }
 
 # ---------------------------------------------------------------------------
-# cancel_job JOB_ID — cancel a running job
+# cancel_job JOB_ID - cancel a running job
 # ---------------------------------------------------------------------------
 cancel_job() {
 	local this_job_id="$1"
@@ -131,7 +131,7 @@ cancel_job() {
 }
 
 # ---------------------------------------------------------------------------
-# cancel_pending_jobs — cancel every not-yet-finished job
+# cancel_pending_jobs - cancel every not-yet-finished job
 #
 # Every successful clone-job run leaves a new job in the openQA queue. Tests
 # that only check the CLI output never wait for those jobs, so they pile up
@@ -160,7 +160,7 @@ cancel_pending_jobs() {
 }
 
 # ---------------------------------------------------------------------------
-# get_job_state JOB_ID — query and print the current state of a job
+# get_job_state JOB_ID - query and print the current state of a job
 # ---------------------------------------------------------------------------
 get_job_state() {
 	local this_job_id="$1"
@@ -173,13 +173,13 @@ get_job_state() {
 }
 
 # ---------------------------------------------------------------------------
-# dump_job_logs JOB_ID [LABEL] — fetch and print per-job diagnostics.
+# dump_job_logs JOB_ID [LABEL] - fetch and print per-job diagnostics.
 #
 # Queries the openQA API for the job's result/reason and fetches the tail
 # of autoinst-log.txt (the isotovideo log that explains *why* a job died).
 # All output goes to stderr, prefixed with [diag].
 #
-# Call this before die() when a job's result is unexpected — it makes the
+# Call this before die() when a job's result is unexpected - it makes the
 # failure reason visible in CI output without manual container inspection.
 # ---------------------------------------------------------------------------
 dump_job_logs() {
@@ -195,7 +195,7 @@ dump_job_logs() {
 	reason=$(echo "$job_json" | jq -r '.job.reason // "none"')
 	echo "  [diag] $label (job $this_job_id): result=$result reason=$reason" >&2
 
-	# 2. Fetch tail of autoinst-log.txt (isotovideo log — shows why the job died)
+	# 2. Fetch tail of autoinst-log.txt (isotovideo log - shows why the job died)
 	local autoinst_log
 	autoinst_log=$(container_exec bash -c \
 		"curl -sSf http://localhost/tests/$this_job_id/file/autoinst-log.txt 2>/dev/null | tail -30" \
@@ -211,7 +211,7 @@ dump_job_logs() {
 }
 
 # ---------------------------------------------------------------------------
-# _E2E_JOB_COMMON_ARGS — shared schedule_job args for all standard jobs.
+# _E2E_JOB_COMMON_ARGS - shared schedule_job args for all standard jobs.
 #
 # These are the DISTRI/VERSION/FLAVOR/ARCH/HDD_1/ISO_1/CASEDIR/NEEDLES_DIR
 # values used by every ensure_* call.  BUILD and _GROUP_ID are job-specific
@@ -239,9 +239,9 @@ _E2E_JOB_COMMON_ARGS=(
 # the variable.
 #
 # Arguments:
-#   $1  VAR_NAME       — name of the variable to set (e.g. "JOB_ID")
-#   $2  LABEL          — human-readable label for log messages (e.g. "basic job")
-#   $3… SCHEDULE_ARGS  — key=value pairs forwarded to schedule_job()
+#   $1  VAR_NAME       - name of the variable to set (e.g. "JOB_ID")
+#   $2  LABEL          - human-readable label for log messages (e.g. "basic job")
+#   $3… SCHEDULE_ARGS  - key=value pairs forwarded to schedule_job()
 #
 # Sets and exports VAR_NAME in the caller's scope.
 # ---------------------------------------------------------------------------
@@ -259,7 +259,7 @@ _ensure_job() {
 	echo "  [ensure] Scheduling $label..." >&2
 	local this_job_id
 	this_job_id=$(schedule_job "$@")
-	echo "  [ensure] ${var_name}=${this_job_id} — waiting for completion..." >&2
+	echo "  [ensure] ${var_name}=${this_job_id} - waiting for completion..." >&2
 	wait_for_job "$this_job_id" 300 >/dev/null ||
 		die "_ensure_job: timeout waiting for ${var_name}=${this_job_id} ($label)"
 
@@ -281,9 +281,9 @@ _ensure_job() {
 }
 
 # ---------------------------------------------------------------------------
-# ensure_basic_job — lazy-init JOB_ID (basic CirrOS job).
-# ensure_rich_job  — lazy-init RICH_JOB_ID (waits for basic first).
-# ensure_stress_job STRESS_STEPS STRESS_TEXT_SIZE — lazy-init STRESS_JOB_ID.
+# ensure_basic_job - lazy-init JOB_ID (basic CirrOS job).
+# ensure_rich_job  - lazy-init RICH_JOB_ID (waits for basic first).
+# ensure_stress_job STRESS_STEPS STRESS_TEXT_SIZE - lazy-init STRESS_JOB_ID.
 #
 # Thin wrappers around _ensure_job kept for call-site compatibility.
 # ---------------------------------------------------------------------------
@@ -309,7 +309,7 @@ ensure_stress_job() {
 	local stress_text_size="$2"
 	# The single worker must be free before we schedule another job.
 	ensure_basic_job
-	# stress.pm only calls record_info() — it never interacts with a VM.
+	# stress.pm only calls record_info() - it never interacts with a VM.
 	# Use BACKEND=null to skip QEMU entirely, avoiding the isotovideo
 	# HDDSIZEGB storage check that fails on hosts with low free space.
 	_ensure_job STRESS_JOB_ID "stress job" \
@@ -328,7 +328,7 @@ ensure_stress_job() {
 }
 
 # ---------------------------------------------------------------------------
-# ensure_html_asset_job — lazy-init GAT_HTML_JOB_ID (GAT-42/43).
+# ensure_html_asset_job - lazy-init GAT_HTML_JOB_ID (GAT-42/43).
 #
 # A job whose only asset is a real HTML file, ASSET_1=page.html (type
 # "other").  openQA serves it as Content-Type: text/html, which is exactly
@@ -369,7 +369,7 @@ ensure_html_asset_job() {
 }
 
 # ---------------------------------------------------------------------------
-# register_deletable_asset NAME — create a file-backed asset for DELETE tests.
+# register_deletable_asset NAME - create a file-backed asset for DELETE tests.
 #
 # Creates a dummy file in the container's factory/other directory, triggers
 # openQA asset registration, and prints the asset ID to stdout.
@@ -419,7 +419,7 @@ FAULTPROXY_SCRIPT="/app/tests/e2e/fixtures/faultproxy.py"
 #
 # RETRY_AFTER is forwarded as --retry-after (integer, "date:+N", or verbatim).
 # EXTRA_FLAGS is a shell word list of additional faultproxy flags.  Pass
-# "--header-log" (no path) to enable the header log — the canonical
+# "--header-log" (no path) to enable the header log - the canonical
 # ${FAULTPROXY_HEADER_LOG} path is injected automatically.  e.g.
 #   start_faultproxy 2 429 /tests/ 64 2 "--header-log --pass-redirects"
 start_faultproxy() {
@@ -514,13 +514,13 @@ assert_all_requests_have_accept() {
 	local lines missing
 	lines=$(get_faultproxy_headers "$pattern")
 	if [[ -z "$lines" ]]; then
-		echo "FAIL: $label — no header-log lines for '$pattern'"
+		echo "FAIL: $label - no header-log lines for '$pattern'"
 		failed_tests=$((failed_tests + 1))
 		return 0
 	fi
 	missing=$(echo "$lines" | grep -c 'accept=-' || true)
 	if [[ "$missing" -gt 0 ]]; then
-		echo "FAIL: $label — $missing request(s) without Accept header:"
+		echo "FAIL: $label - $missing request(s) without Accept header:"
 		echo "$lines" | grep 'accept=-' | head -5
 		failed_tests=$((failed_tests + 1))
 	else

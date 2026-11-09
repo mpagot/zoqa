@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup.sh — Generic openQA single-instance container setup.
+# setup.sh - Generic openQA single-instance container setup.
 #
 # Starts the container, waits for bootstrap, seeds test fixtures, and writes
 # an env file that run.sh can source.
@@ -12,20 +12,20 @@
 # OPTIONS:
 #   --dryrun          Print commands without executing them.
 #   --keep-container  Accepted for caller compatibility; setup.sh itself does
-#                     not stop the container — that is run.sh's responsibility.
+#                     not stop the container - that is run.sh's responsibility.
 #   --expose-ports    [INTERNAL] Publish container ports 80->8080 and 443->8443.
 #                     Forwarded automatically by run.sh when --keep-container is
 #                     used. Not intended for direct invocation by users.
 #   -h, --help        Show this help message and exit.
 #
 # Exports (written to /tmp/openqa_e2e_env.sh):
-#   CONTAINER_NAME    — name of the running container
-#   OPENQA_API_KEY    — API key extracted from /etc/openqa/client.conf
-#   OPENQA_API_SECRET — API secret
-#   JOB_ID            — scheduled job ID from seeding
-#   ASSET_ID          — registered asset ID for Perl DELETE test
-#   ZIG_ASSET_ID      — registered asset ID for Zig DELETE test
-#   GROUP_ID          — job group ID from seeding
+#   CONTAINER_NAME    - name of the running container
+#   OPENQA_API_KEY    - API key extracted from /etc/openqa/client.conf
+#   OPENQA_API_SECRET - API secret
+#   JOB_ID            - scheduled job ID from seeding
+#   ASSET_ID          - registered asset ID for Perl DELETE test
+#   ZIG_ASSET_ID      - registered asset ID for Zig DELETE test
+#   GROUP_ID          - job group ID from seeding
 
 set -eo pipefail
 
@@ -55,20 +55,20 @@ show_help() {
 # OPTIONS:
 #   --dryrun          Print commands without executing them.
 #   --keep-container  Accepted for caller compatibility; setup.sh itself does
-#                     not stop the container — that is run.sh's responsibility.
+#                     not stop the container - that is run.sh's responsibility.
 #   --expose-ports    [INTERNAL] Publish container ports 80->8080 and 443->8443.
 #                     Forwarded automatically by run.sh when --keep-container is
 #                     used. Not intended for direct invocation by users.
 #   -h, --help        Show this help message and exit.
 #
 # Exports (written to /tmp/openqa_e2e_env.sh):
-#   CONTAINER_NAME    — name of the running container
-#   OPENQA_API_KEY    — API key extracted from /etc/openqa/client.conf
-#   OPENQA_API_SECRET — API secret
-#   JOB_ID            — scheduled job ID from seeding
-#   ASSET_ID          — registered asset ID for Perl DELETE test
-#   ZIG_ASSET_ID      — registered asset ID for Zig DELETE test
-#   GROUP_ID          — job group ID from seeding
+#   CONTAINER_NAME    - name of the running container
+#   OPENQA_API_KEY    - API key extracted from /etc/openqa/client.conf
+#   OPENQA_API_SECRET - API secret
+#   JOB_ID            - scheduled job ID from seeding
+#   ASSET_ID          - registered asset ID for Perl DELETE test
+#   ZIG_ASSET_ID      - registered asset ID for Zig DELETE test
+#   GROUP_ID          - job group ID from seeding
 EOF
 }
 
@@ -130,7 +130,7 @@ sed -i "/install.*pkgs/a $SPLIT_INSTALL" "$BOOTSTRAP"
 # WHY: The primary goal of these E2E tests is to validate that zoqa correctly
 # constructs HMAC-SHA1 signatures, passes credentials from config/flags/env,
 # and handles authentication errors (401/403).  For these tests to be
-# meaningful, the openQA server MUST enforce credential validation — it must
+# meaningful, the openQA server MUST enforce credential validation - it must
 # reject requests with missing or invalid signatures and accept only properly
 # signed ones.  Without real enforcement, auth tests would always pass
 # regardless of whether zoqa actually sends correct credentials.
@@ -138,7 +138,7 @@ sed -i "/install.*pkgs/a $SPLIT_INSTALL" "$BOOTSTRAP"
 # WHAT CHANGED: upstream commit e49241b (2026-05-18, os-autoinst/openQA#7297)
 # changed openqa-bootstrap to use "method = None" instead of "method = Fake".
 # With None auth the server accepts ANY request without validating HMAC
-# signatures — the server does not check credentials at all.  This was done
+# signatures - the server does not check credentials at all.  This was done
 # to simplify the default developer experience, but it breaks our E2E
 # authentication test suite (tests_auth.sh) which relies on the server
 # actually verifying HMAC signatures against real keys stored in the database.
@@ -154,7 +154,7 @@ sed -i "/install.*pkgs/a $SPLIT_INSTALL" "$BOOTSTRAP"
 # create a "Demo" user (admin + operator) and inserts an API key into the
 # database.  The key/secret default to 1234567890ABCDEF (overridable via
 # OPENQA_FAKE_AUTH_KEY and OPENQA_FAKE_AUTH_SECRET env vars).  The HMAC
-# signature is then validated on every subsequent API request — exactly what
+# signature is then validated on every subsequent API request - exactly what
 # we need for E2E testing of zoqa's credential handling.
 # ---------------------------------------------------------------------------
 mkdir -p /etc/openqa/openqa.ini.d
@@ -210,9 +210,9 @@ log "Starting openQA container ($CONTAINER_NAME)..."
 KVM_FLAG=""
 if [[ -e /dev/kvm ]]; then
 	KVM_FLAG="--device /dev/kvm"
-	log "KVM device found — enabling hardware virtualisation."
+	log "KVM device found - enabling hardware virtualisation."
 else
-	log "WARNING: /dev/kvm not found — starting container without KVM (tests may be slower)."
+	log "WARNING: /dev/kvm not found - starting container without KVM (tests may be slower)."
 fi
 run_cmd "podman run -d --name $CONTAINER_NAME \
     $KVM_FLAG \
@@ -275,7 +275,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
 	API_KEY="MOCK_KEY"
 	API_SECRET="MOCK_SECRET"
 else
-	# Trigger /login — Auth::Fake creates Demo user + inserts API key into DB
+	# Trigger /login - Auth::Fake creates Demo user + inserts API key into DB
 	container_exec curl -sf http://localhost/login >/dev/null ||
 		die "Could not trigger /login for Fake auth credential creation"
 	API_KEY="1234567890ABCDEF"
@@ -303,7 +303,7 @@ fi
 # WHY: openqa-bootstrap starts `worker --instance 1` immediately after the web
 # stack is up. With our Fake-auth override (99-force-fake-auth.ini, written by
 # the entrypoint wrapper *before* bootstrap), the web UI enforces HMAC from
-# the first request — but at that point /etc/openqa/client.conf does not yet
+# the first request - but at that point /etc/openqa/client.conf does not yet
 # exist and the API key has not been inserted into the DB (that happens when
 # /login is hit, which we only did just above). The bootstrap-launched worker
 # therefore *usually* gets a 403 "no api key" on its first registration attempt
@@ -346,7 +346,7 @@ else
 				log "Worker registered after ${i}s."
 				break
 			fi
-			[[ "$i" -eq 15 ]] && die "Worker failed to register within 15s — check podman logs $CONTAINER_NAME"
+			[[ "$i" -eq 15 ]] && die "Worker failed to register within 15s - check podman logs $CONTAINER_NAME"
 			sleep 1
 		done
 	fi
@@ -356,8 +356,8 @@ fi
 # Pre-download CirrOS image on the host and inject into the container
 #
 # Downloading inside the container often fails (DNS, proxy, or network
-# namespace issues).  By fetching on the host — where connectivity is proven
-# — and copying into the container, seed_fixtures.sh will find the file
+# namespace issues).  By fetching on the host - where connectivity is proven
+# - and copying into the container, seed_fixtures.sh will find the file
 # already in place and skip its own download.
 # -----------------------------------------------------------------------------
 HDD_DIR="/var/lib/openqa/share/factory/hdd"
@@ -384,8 +384,8 @@ fi
 # Pre-download CirrOS image on the host and inject into the container
 #
 # Downloading inside the container often fails (DNS, proxy, or network
-# namespace issues).  By fetching on the host — where connectivity is proven
-# — and copying into the container, seed_fixtures.sh will find the file
+# namespace issues).  By fetching on the host - where connectivity is proven
+# - and copying into the container, seed_fixtures.sh will find the file
 # already in place and skip its own download.
 # -----------------------------------------------------------------------------
 HDD_DIR="/var/lib/openqa/share/factory/hdd"
@@ -417,7 +417,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
 else
 	log "Running fixture seeding inside container..."
 	container_exec bash /app/tests/e2e/seed_fixtures.sh ||
-		die "seed_fixtures.sh failed — check container logs for details"
+		die "seed_fixtures.sh failed - check container logs for details"
 
 	log "Reading seeded IDs from container..."
 	SEEDED=$(container_exec cat /tmp/seeded_ids.env) || die "Could not read /tmp/seeded_ids.env"
@@ -432,7 +432,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
 	echo "[DRY-RUN] cat > $ENV_FILE << EOF ... EOF"
 else
 	cat >"$ENV_FILE" <<EOF
-# Auto-generated by tests/e2e/setup.sh — do not edit manually.
+# Auto-generated by tests/e2e/setup.sh - do not edit manually.
 export CONTAINER_NAME="$CONTAINER_NAME"
 export OPENQA_API_KEY="$API_KEY"
 export OPENQA_API_SECRET="$API_SECRET"

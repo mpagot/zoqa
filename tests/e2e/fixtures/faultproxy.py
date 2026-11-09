@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-faultproxy.py — Stateful HTTP fault-injecting reverse proxy.
+faultproxy.py - Stateful HTTP fault-injecting reverse proxy.
 
 Sits on a high port (default 9797) and forwards requests to a real backend
 (default http://127.0.0.1:80).  For requests whose path starts with
@@ -64,7 +64,7 @@ _pending_partial_faults = {}
 # Response headers that are always forwarded to the client, in addition to the
 # base set (content-length, content-type, x-api-*).  The gatekeeper tests
 # (GAT-*) need retry-after / refresh / set-cookie / location to reach the
-# client so retry and challenge behaviour can be observed.
+# client so retry and challenge behavior can be observed.
 _EXTRA_FORWARD_HEADERS = ("location", "retry-after", "refresh", "set-cookie")
 
 # Body of the Anubis-style bot challenge page served by the "challenge" modes.
@@ -129,7 +129,7 @@ User-Agent and send a meaningful Accept header on every request,
 including every redirect hop.</p>
 <p>Signals evaluated by the gatekeeper: request rate per source address,
 header fingerprint (Accept, User-Agent, Accept-Encoding), TLS fingerprint,
-and behavioural heuristics. The score is maintained per source address
+and behavioral heuristics. The score is maintained per source address
 and decays over time. A client that is challenged should back off and
 retry with the Retry-After delay when one is provided, rather than
 repeating the request immediately.</p>
@@ -195,7 +195,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _log_request_headers(self, method):
         # One line per request: METHOD PATH accept=<v|-> ua=<v|->.
-        # Only Accept and User-Agent are logged — never X-API-Key or any
+        # Only Accept and User-Agent are logged - never X-API-Key or any
         # other credential-bearing header.
         if not self.header_log:
             return
@@ -245,7 +245,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # partial mode only faults GET (body-streaming) requests.
         # HEAD requests always pass through so they do not consume the fault
-        # budget — we want the asset GETs to be the ones that get the RST.
+        # budget - we want the asset GETs to be the ones that get the RST.
         skip_fault = method == "HEAD" and self.fault_mode.lower() in ("partial", "partial_no_meta", "partial_no_meta_502")
         if not skip_fault and self._path_matches_fault(path):
             attempt = self._record(path, "?")
@@ -367,7 +367,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
     def _inject_fault(self, path, attempt, method):
         mode = self.fault_mode.lower()
         if mode == "reset":
-            # Abruptly close the connection — simulates TCP reset / ECONNRESET
+            # Abruptly close the connection - simulates TCP reset / ECONNRESET
             sys.stderr.write("[proxy] reset connection attempt=%d %s\n" % (attempt, path))
             sys.stderr.flush()
             try:
@@ -377,7 +377,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
                 )
             except OSError:
                 pass
-            # Don't send any response — just close
+            # Don't send any response - just close
             return
         elif mode in ("partial", "partial_cl", "partial_no_meta"):
             self._inject_partial_reset(path, attempt, preserve_cl=(mode == "partial_cl"))
@@ -388,7 +388,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
         elif mode == "challenge_no_accept":
             # Challenge when the request carries no Accept header.  A request
             # that sends Accept-Encoding but no Accept (e.g. urllib's default
-            # "Accept-Encoding: identity") is still challenged — the gatekeeper
+            # "Accept-Encoding: identity") is still challenged - the gatekeeper
             # scores the absence of an Accept header, not the presence of
             # Accept-Encoding.
             if self.headers.get("Accept") is None:
@@ -509,7 +509,7 @@ class FaultProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         # Apply SO_LINGER(1,0) before returning so the framework closes the
         # socket with RST instead of FIN.  The client sees partial data then
-        # ECONNRESET — exactly the mid-transfer drop scenario we want to test.
+        # ECONNRESET - exactly the mid-transfer drop scenario we want to test.
         sys.stderr.write("[proxy] partial reset after %dB attempt=%d %s\n" % (sent, attempt, path))
         sys.stderr.flush()
         try:
@@ -590,7 +590,7 @@ class _NoRedirectHTTPHandler(urllib.request.HTTPHandler):
             raise
         # resp is already a fully-initialised http.client.HTTPResponse with
         # the socket attached.  Wrap it in addinfourl so urllib's redirect
-        # handler (which we have removed) would see it — but since we removed
+        # handler (which we have removed) would see it - but since we removed
         # the HTTPRedirectHandler, 3xx responses surface as HTTPError and the
         # proxy forwards status + Location to the client as-is.
         return urllib.response.addinfourl(resp, resp.msg, req.full_url, resp.status)
@@ -658,7 +658,7 @@ if __name__ == "__main__":
 - 404: Simulates a permanently missing or deleted asset.
        Returns HTTP 404 Not Found.
        Used by: CLO-86 (terminal error), CLO-80/81/82/83 (ignore-missing-assets),
-                GAT-11 (404 + Retry-After is ignored — no retry).
+                GAT-11 (404 + Retry-After is ignored - no retry).
        Verifies: Non-transient errors terminate downloads immediately with exit 1 without retrying,
                  or trigger warnings/skips if ignore-missing-assets is configured.
 
@@ -689,17 +689,17 @@ if __name__ == "__main__":
 - challenge: Simulates an Anubis bot gatekeeper answering EVERY request on the
              fault path with a 200 text/html challenge page (Cache-Control: no-store,
              Refresh, 2x Set-Cookie, ~4 KB body with Content-Length).
-             Used by: GAT-3 (challenge on /api/v1/ — API path unchanged),
-                      GAT-22 (challenge on asset GET — Zig rejects, Perl saves),
-                      GAT-41 (challenge on hdd asset only — likely o3 cause).
-             Verifies: R2 — a 200 text/html on an asset download is a permanent
+             Used by: GAT-3 (challenge on /api/v1/ - API path unchanged),
+                      GAT-22 (challenge on asset GET - Zig rejects, Perl saves),
+                      GAT-41 (challenge on hdd asset only - likely o3 cause).
+             Verifies: R2 - a 200 text/html on an asset download is a permanent
                        error, not a truncated transfer.
 
 - challenge_no_accept: Same challenge page, but only when the request has NO
              Accept header; requests with Accept pass through to the backend.
              Used by: GAT-21 (both implementations must send Accept on asset
                       GETs and redirect hops, or they get challenged).
-             Verifies: R1 — every request carries an Accept header.
+             Verifies: R1 - every request carries an Accept header.
 
 - <3-digit status>: Generic status mode.  Any 3-digit HTTP status code
              (408, 429, 500, 504, ...) is returned as-is for the first
@@ -707,7 +707,7 @@ if __name__ == "__main__":
              Used by: GAT-4 (429x2), GAT-5 (408/500/504), GAT-6 (429 always),
                       GAT-7/8/9 (429 + Retry-After forms), GAT-23..27 (clone-job
                       BFS/asset 429/408), GAT-28 (POST 429).
-             Verifies: R3 — retry on 408/429/5xx, R4 — Retry-After honoured."""
+             Verifies: R3 - retry on 408/429/5xx, R4 - Retry-After honoured."""
     )
     parser.add_argument("--fail-times", "-t", type=int, default=2, help="How many initial requests to fault-inject")
     parser.add_argument("--partial-bytes", type=int, default=64, help="Bytes to stream before TCP RST (partial mode only)")

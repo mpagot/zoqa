@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib_topology.sh — Topology job fixture helpers (chained, fanout, diamond, etc.)
+# lib_topology.sh - Topology job fixture helpers (chained, fanout, diamond, etc.)
 #
 # Extracted from lib.sh.  These functions are used exclusively by
 # tests_clone_job.sh to set up multi-job dependency graphs for clone testing.
@@ -9,15 +9,15 @@
 #   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_topology.sh"
 #
 # Provides:
-#   schedule_topology_jobs()     — generic topology scheduler (POST /api/v1/isos)
-#   schedule_chained_jobs()      — convenience wrapper for "chained" topology
-#   ensure_chained_jobs()        — lazy-init CHAIN_PARENT_ID / CHAIN_CHILD_ID
-#   ensure_fanout_jobs()         — lazy-init FANOUT_*_ID variables
-#   ensure_multilayer_jobs()     — lazy-init LAYER_*_ID variables
-#   ensure_deeplayer_jobs()      — lazy-init DEEPLAY_LAYER_*_ID variables
-#   ensure_diamond_jobs()        — lazy-init DIAMOND_*_ID variables
-#   ensure_parallel_jobs()       — lazy-init PARALLEL_*_ID variables
-#   assert_job_has_chained_parent() — verify chained dependency assertion
+#   schedule_topology_jobs()     - generic topology scheduler (POST /api/v1/isos)
+#   schedule_chained_jobs()      - convenience wrapper for "chained" topology
+#   ensure_chained_jobs()        - lazy-init CHAIN_PARENT_ID / CHAIN_CHILD_ID
+#   ensure_fanout_jobs()         - lazy-init FANOUT_*_ID variables
+#   ensure_multilayer_jobs()     - lazy-init LAYER_*_ID variables
+#   ensure_deeplayer_jobs()      - lazy-init DEEPLAY_LAYER_*_ID variables
+#   ensure_diamond_jobs()        - lazy-init DIAMOND_*_ID variables
+#   ensure_parallel_jobs()       - lazy-init PARALLEL_*_ID variables
+#   assert_job_has_chained_parent() - verify chained dependency assertion
 #
 # Dependencies: lib.sh and lib_fixtures.sh must be sourced first (provides
 # container_exec, die, wait_for_job, _E2E_JOB_COMMON_ARGS, DRY_RUN, GROUP_ID).
@@ -32,7 +32,7 @@ if [[ -z "${_OPENQA_E2E_LIB_LOADED:-}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# schedule_topology_jobs TOPOLOGY BUILD [EXTRA_ARGS...] — generic topology scheduler
+# schedule_topology_jobs TOPOLOGY BUILD [EXTRA_ARGS...] - generic topology scheduler
 #
 # Posts to /api/v1/isos using /tmp/${TOPOLOGY}-scenario.yaml as the scenario
 # definitions file.  Returns space-separated list of all created job IDs.
@@ -61,7 +61,7 @@ schedule_topology_jobs() {
 }
 
 # ---------------------------------------------------------------------------
-# schedule_chained_jobs BUILD — schedule chained jobs via POST /api/v1/isos
+# schedule_chained_jobs BUILD - schedule chained jobs via POST /api/v1/isos
 #
 # Uses the cached chained-scenario-definitions.yaml.
 # Returns space-separated list of all created job IDs.
@@ -71,7 +71,7 @@ schedule_chained_jobs() {
 }
 
 # ---------------------------------------------------------------------------
-# ensure_chained_jobs — lazy-init CHAIN_PARENT_ID and CHAIN_CHILD_ID.
+# ensure_chained_jobs - lazy-init CHAIN_PARENT_ID and CHAIN_CHILD_ID.
 # ---------------------------------------------------------------------------
 ensure_chained_jobs() {
 	if [[ -n "${CHAIN_PARENT_ID:-}" && -n "${CHAIN_CHILD_ID:-}" ]]; then
@@ -105,7 +105,7 @@ ensure_chained_jobs() {
 	[[ -n "${CHAIN_CHILD_ID:-}" ]] || die "ensure_chained_jobs: child ID not found"
 
 	# Wait for child (dependency means parent completes first)
-	echo "  [ensure] CHAIN_PARENT_ID=$CHAIN_PARENT_ID, CHAIN_CHILD_ID=$CHAIN_CHILD_ID — waiting..." >&2
+	echo "  [ensure] CHAIN_PARENT_ID=$CHAIN_PARENT_ID, CHAIN_CHILD_ID=$CHAIN_CHILD_ID - waiting..." >&2
 	wait_for_job "$CHAIN_CHILD_ID" 600 >/dev/null ||
 		die "ensure_chained_jobs: timeout waiting for chain_child"
 
@@ -113,7 +113,7 @@ ensure_chained_jobs() {
 }
 
 # ---------------------------------------------------------------------------
-# ensure_fanout_jobs — lazy-init FANOUT_*_ID variables
+# ensure_fanout_jobs - lazy-init FANOUT_*_ID variables
 # ---------------------------------------------------------------------------
 ensure_fanout_jobs() {
 	if [[ -n "${FANOUT_PARENT_ID:-}" && -n "${FANOUT_CHILD_A_ID:-}" ]]; then
@@ -148,7 +148,7 @@ ensure_fanout_jobs() {
 
 	[[ -n "${FANOUT_PARENT_ID:-}" ]] || die "ensure_fanout_jobs: parent ID not found"
 	
-	echo "  [ensure] Fanout parent: $FANOUT_PARENT_ID — waiting for children..." >&2
+	echo "  [ensure] Fanout parent: $FANOUT_PARENT_ID - waiting for children..." >&2
 	# Wait for all children
 	for id in "$FANOUT_CHILD_A_ID" "$FANOUT_CHILD_B_ID" "$FANOUT_CHILD_C_ID"; do
 		wait_for_job "$id" 600 >/dev/null || die "ensure_fanout_jobs: timeout waiting for child $id"
@@ -158,7 +158,7 @@ ensure_fanout_jobs() {
 }
 
 # ---------------------------------------------------------------------------
-# ensure_multilayer_jobs — lazy-init LAYER_*_ID variables
+# ensure_multilayer_jobs - lazy-init LAYER_*_ID variables
 # ---------------------------------------------------------------------------
 ensure_multilayer_jobs() {
 	if [[ -n "${LAYER_GRANDPARENT_ID:-}" && -n "${LAYER_CHILD_ID:-}" ]]; then
@@ -191,14 +191,14 @@ ensure_multilayer_jobs() {
 
 	[[ -n "${LAYER_CHILD_ID:-}" ]] || die "ensure_multilayer_jobs: child ID not found"
 
-	echo "  [ensure] Multilayer child: $LAYER_CHILD_ID — waiting..." >&2
+	echo "  [ensure] Multilayer child: $LAYER_CHILD_ID - waiting..." >&2
 	wait_for_job "$LAYER_CHILD_ID" 600 >/dev/null || die "ensure_multilayer_jobs: timeout waiting for child"
 
 	export LAYER_GRANDPARENT_ID LAYER_PARENT_ID LAYER_CHILD_ID
 	}
 
 # ---------------------------------------------------------------------------
-# ensure_deeplayer_jobs — lazy-init DEEPLAY_LAYER_*_ID variables
+# ensure_deeplayer_jobs - lazy-init DEEPLAY_LAYER_*_ID variables
 #
 # Schedules the 17-layer linear chain (layer_a → layer_b → … → layer_s;
 # letters j and k are absent from the fixture YAML).
@@ -239,7 +239,7 @@ ensure_deeplayer_jobs() {
 
 	[[ -n "${DEEPLAY_LAYER_S_ID:-}" ]] || die "ensure_deeplayer_jobs: terminal child (layer_s) ID not found"
 
-	echo "  [ensure] Deeplayer terminal child: $DEEPLAY_LAYER_S_ID — waiting..." >&2
+	echo "  [ensure] Deeplayer terminal child: $DEEPLAY_LAYER_S_ID - waiting..." >&2
 	wait_for_job "$DEEPLAY_LAYER_S_ID" 600 >/dev/null || die "ensure_deeplayer_jobs: timeout waiting for terminal child"
 
 	for suffix in a b c d e f g h i l m n o p q r s; do
@@ -249,7 +249,7 @@ ensure_deeplayer_jobs() {
 }
 
 	# ---------------------------------------------------------------------------
-	# ensure_diamond_jobs — lazy-init DIAMOND_*_ID variables
+	# ensure_diamond_jobs - lazy-init DIAMOND_*_ID variables
 # ---------------------------------------------------------------------------
 ensure_diamond_jobs() {
 	if [[ -n "${DIAMOND_ROOT_ID:-}" && -n "${DIAMOND_MERGE_ID:-}" ]]; then
@@ -284,14 +284,14 @@ ensure_diamond_jobs() {
 
 	[[ -n "${DIAMOND_MERGE_ID:-}" ]] || die "ensure_diamond_jobs: merge ID not found"
 	
-	echo "  [ensure] Diamond merge: $DIAMOND_MERGE_ID — waiting..." >&2
+	echo "  [ensure] Diamond merge: $DIAMOND_MERGE_ID - waiting..." >&2
 	wait_for_job "$DIAMOND_MERGE_ID" 600 >/dev/null || die "ensure_diamond_jobs: timeout waiting for merge"
 
 	export DIAMOND_ROOT_ID DIAMOND_LEFT_ID DIAMOND_RIGHT_ID DIAMOND_MERGE_ID
 }
 
 # ---------------------------------------------------------------------------
-# ensure_parallel_jobs — lazy-init PARALLEL_*_ID variables
+# ensure_parallel_jobs - lazy-init PARALLEL_*_ID variables
 # ---------------------------------------------------------------------------
 ensure_parallel_jobs() {
 	if [[ -n "${PARALLEL_PARENT_ID:-}" && -n "${PARALLEL_CHILD_ID:-}" ]]; then
@@ -322,7 +322,7 @@ ensure_parallel_jobs() {
 
 	[[ -n "${PARALLEL_PARENT_ID:-}" ]] || die "ensure_parallel_jobs: parent ID not found"
 	
-	echo "  [ensure] Parallel parent: $PARALLEL_PARENT_ID — waiting..." >&2
+	echo "  [ensure] Parallel parent: $PARALLEL_PARENT_ID - waiting..." >&2
 	# Since they run in parallel, we wait for both to complete
 	wait_for_job "$PARALLEL_PARENT_ID" 600 >/dev/null || die "ensure_parallel_jobs: timeout waiting for parent"
 	wait_for_job "$PARALLEL_CHILD_ID" 600 >/dev/null || die "ensure_parallel_jobs: timeout waiting for child"
@@ -331,8 +331,8 @@ ensure_parallel_jobs() {
 }
 
 # ---------------------------------------------------------------------------
-# start_worker2 — start worker instance 2 for parallel-topology tests
-# stop_worker2  — gracefully stop worker instance 2
+# start_worker2 - start worker instance 2 for parallel-topology tests
+# stop_worker2  - gracefully stop worker instance 2
 #
 # Parallel jobs require two simultaneous workers. The standard test environment
 # runs only worker instance 1. Call start_worker2 before ensure_parallel_jobs
@@ -367,7 +367,7 @@ start_worker2() {
 		fi
 		sleep 1
 	done
-	echo "  [worker2] WARNING: Worker 2 did not register within 15s — parallel tests may hang" >&2
+	echo "  [worker2] WARNING: Worker 2 did not register within 15s - parallel tests may hang" >&2
 }
 
 stop_worker2() {

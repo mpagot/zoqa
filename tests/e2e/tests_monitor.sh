@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests_monitor.sh — Section I: monitor subcommand tests.
+# tests_monitor.sh - Section I: monitor subcommand tests.
 #
 # Sourced by tests.sh after helper functions are defined.
 # Do NOT execute this file directly.
@@ -11,8 +11,8 @@
 #   GROUP_ID
 #
 # Creates its own jobs via lib.sh helpers:
-#   RICH_JOB_ID   — completed CirrOS job (via ensure_rich_job)
-#   MONITOR_JOB_ID — dedicated sleep job scheduled fresh for cancel tests
+#   RICH_JOB_ID   - completed CirrOS job (via ensure_rich_job)
+#   MONITOR_JOB_ID - dedicated sleep job scheduled fresh for cancel tests
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -27,10 +27,10 @@ ensure_rich_job
 
 # MON-1 (Perl behavior on missing JOB_ID)
 # Perl openqa-cli doesn't validate missing JOB_ID; it exits 0 (known difference).
-# Capture its actual exit code for reference — no PASS/FAIL assertion.
+# Capture its actual exit code for reference - no PASS/FAIL assertion.
 echo "--- Test: PERL: No JOB_ID (capture only) ---"
 run_capture "mon_noid" perl "timeout 60 $PERL_EXE monitor"
-echo "Exit code: $_LAST_EXIT (captured for reference — Perl does not validate missing JOB_ID)"
+echo "Exit code: $_LAST_EXIT (captured for reference - Perl does not validate missing JOB_ID)"
 
 # MON-2
 run_test "ZIG : No JOB_ID -> exit 255" "$ZIG_EXE monitor" 255

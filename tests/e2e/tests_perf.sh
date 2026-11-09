@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# tests_perf.sh — Section G: Performance comparison tests.
+# tests_perf.sh - Section G: Performance comparison tests.
 #
 # Compares wall-clock execution time and peak RSS (resident set size) between
 # the Perl reference implementation (openqa-cli) and zoqa (Zig).
 #
 # TIMING TESTS (perf_timing):
 #   Logs wall-clock seconds for N repeated invocations of each implementation.
-#   Results are informational only — no PASS/FAIL threshold is enforced.
+#   Results are informational only - no PASS/FAIL threshold is enforced.
 #   Timing in a containerised environment is inherently noisy; the goal is to
 #   have visible numbers in CI rather than to gate on them.
 #
@@ -15,7 +15,7 @@
 #   Measures peak RSS for each implementation using /usr/bin/time -v (GNU time).
 #
 #   RSS (Resident Set Size) is the portion of a process's virtual address space
-#   currently backed by physical RAM — pages that are actually in memory, not
+#   currently backed by physical RAM - pages that are actually in memory, not
 #   swapped out or mapped but not yet faulted in.  It is the standard
 #   single-number proxy for "how much RAM is this process using right now".
 #
@@ -26,7 +26,7 @@
 #   between process exit and /proc entry cleanup.  GNU time is absent from the
 #   base openQA container image; setup.sh installs it with zypper.
 #
-#   All results are informational only — no PASS/FAIL threshold is enforced.
+#   All results are informational only - no PASS/FAIL threshold is enforced.
 #   Results are collected during execution and printed in a consolidated
 #   summary block at the end of this script. No PASS/FAIL counters are touched.
 #
@@ -48,18 +48,18 @@
 #   Mojolicious framework, using trivial Perl one-liners that do no real work.
 #   This lets readers decompose openqa-cli timings into "framework startup"
 #   vs. "actual HTTP + business logic".  Two measurements are collected:
-#     PERF-B1: perl -e '1'                     — bare interpreter startup
-#     PERF-B2: perl -MMojo::UserAgent -e '1'   — interpreter + framework load
+#     PERF-B1: perl -e '1'                     - bare interpreter startup
+#     PERF-B2: perl -MMojo::UserAgent -e '1'   - interpreter + framework load
 #   Results are reported separately in the summary under "Interpreter Baseline".
 #
 # SCENARIOS COVERED:
-#   Plain request     — baseline GET with no extra flag (network + JSON decode only)
-#   Config-file read  — OPENQA_CONFIG=/etc/openqa forces both impls to read
+#   Plain request     - baseline GET with no extra flag (network + JSON decode only)
+#   Config-file read  - OPENQA_CONFIG=/etc/openqa forces both impls to read
 #                       /etc/openqa/client.conf from disk on every invocation
-#   Env-var creds     — credentials supplied via --apikey/--apisecret CLI flags
+#   Env-var creds     - credentials supplied via --apikey/--apisecret CLI flags
 #                       (value expanded from env on the host side at test time);
 #                       exercises the credential-from-flag code path
-#   Pretty-print      — --pretty forces both impls to JSON-format and re-indent
+#   Pretty-print      - --pretty forces both impls to JSON-format and re-indent
 #                       the server response, exercising the formatting code path
 #
 # PREREQUISITES inside the container:
@@ -67,7 +67,7 @@
 #   - /usr/bin/time (from the 'time' package, installed in setup.sh) for peak
 #                   RSS measurement via /usr/bin/time -v.  GNU time is absent
 #                   from the base openQA image; setup.sh adds it with zypper.
-#   - grep, cut, tr (for parsing /usr/bin/time -v output — no awk needed)
+#   - grep, cut, tr (for parsing /usr/bin/time -v output - no awk needed)
 #
 # Sourced by tests.sh after helper functions are defined.
 # Do NOT execute this file directly.
@@ -114,7 +114,7 @@ _perf_rss_generic() {
 
 	_perf_r_seq=$((_perf_r_seq + 1))
 	local tid="PERF-R${_perf_r_seq}"
-	echo "  $tid  $label — RSS..."
+	echo "  $tid  $label - RSS..."
 
 	# Derive the same tags that _perf_peak_rss_kb uses internally.
 	local perl_tag zig_tag
@@ -187,7 +187,7 @@ perf_baseline() {
 
 	_perf_b_seq=$((_perf_b_seq + 1))
 	local tid="PERF-B${_perf_b_seq}"
-	echo "  $tid  $label — baseline (${runs} runs + RSS)..."
+	echo "  $tid  $label - baseline (${runs} runs + RSS)..."
 
 	# --- Wall-clock timing ---
 	local t times=()
@@ -239,7 +239,7 @@ perf_timing() {
 
 	_perf_t_seq=$((_perf_t_seq + 1))
 	local tid="PERF-T${_perf_t_seq}"
-	echo "  $tid  $label — timing (${runs} runs)..."
+	echo "  $tid  $label - timing (${runs} runs)..."
 
 	local t p_times=() z_times=()
 
@@ -301,7 +301,7 @@ perf_timing_archive() {
 
 	_perf_t_seq=$((_perf_t_seq + 1))
 	local tid="PERF-T${_perf_t_seq}"
-	echo "  $tid  $label — archive timing (${runs} runs)..."
+	echo "  $tid  $label - archive timing (${runs} runs)..."
 
 	local t p_times=() z_times=()
 
@@ -348,7 +348,7 @@ perf_rss_archive() {
 
 	_perf_r_seq=$((_perf_r_seq + 1))
 	local tid="PERF-R${_perf_r_seq}"
-	echo "  $tid  $label — archive RSS..."
+	echo "  $tid  $label - archive RSS..."
 
 	container_exec rm -rf /tmp/perf_arc_rss_perl /tmp/perf_arc_rss_zig
 	local perl_rss zig_rss
@@ -406,12 +406,12 @@ perf_rss_monitor() {
 
 # --- Interpreter baseline ----------------------------------------------------
 #
-# These measure the fixed overhead of starting Perl — with and without loading
-# the Mojolicious framework — using trivial one-liners that do no real work.
+# These measure the fixed overhead of starting Perl - with and without loading
+# the Mojolicious framework - using trivial one-liners that do no real work.
 # The results let readers decompose openqa-cli timings: of the ~0.7 s a typical
 # openqa-cli api call takes, how much is Perl interpreter startup and how much
 # is Mojolicious module loading?  The remainder is actual HTTP + business logic
-# — which is on the same order of magnitude as zoqa.
+# - which is on the same order of magnitude as zoqa.
 
 # Test PERF-B1: bare Perl interpreter startup.
 # 'perl -e 1' loads only the interpreter core: argument parsing, bytecode
@@ -430,22 +430,22 @@ perf_baseline "perl + Mojo::UserAgent load (perl -MMojo::UserAgent -e '1')" "per
 # No config file, no extra flags.  Exercises the minimal code path: argument
 # parsing → HTTP GET → JSON decode → stdout write.
 
-# Test PERF-T1: Wall-clock timing — jobs/overview (list endpoint).
+# Test PERF-T1: Wall-clock timing - jobs/overview (list endpoint).
 # openqa-cli loads the full Perl + Mojolicious runtime on every invocation;
 # most of its wall-clock time is framework startup (see PERF-B2 above).
 # zoqa is a statically linked binary with near-instant startup.
 perf_timing "plain jobs/overview" "" "jobs/overview" 3
 
-# Test PERF-T2: Wall-clock timing — jobs/:id (single-resource endpoint).
+# Test PERF-T2: Wall-clock timing - jobs/:id (single-resource endpoint).
 # Single-resource GETs are cheaper server-side than list queries; the timing
 # gap between Perl and Zig is still dominated by startup overhead, not I/O.
 perf_timing "plain jobs/:id" "" "jobs/$JOB_ID" 3
 
-# Test PERF-R1: Peak RSS — jobs/overview.
+# Test PERF-R1: Peak RSS - jobs/overview.
 # Expected: Perl ~50-60 MB (full Mojolicious stack), Zig ~3-8 MB.
 perf_rss "plain jobs/overview" "" "jobs/overview"
 
-# Test PERF-R2: Peak RSS — jobs/:id.
+# Test PERF-R2: Peak RSS - jobs/:id.
 perf_rss "plain jobs/:id" "" "jobs/$JOB_ID"
 
 # --- Scenario: config-file read ----------------------------------------------
@@ -454,10 +454,10 @@ perf_rss "plain jobs/:id" "" "jobs/$JOB_ID"
 # /etc/openqa/client.conf on every invocation.  This adds a disk read + INI
 # parse on top of the baseline, exercising the config-file code path.
 
-# Test PERF-T3: Wall-clock timing — config-file credential resolution.
+# Test PERF-T3: Wall-clock timing - config-file credential resolution.
 perf_timing "config-file creds jobs/overview" "OPENQA_CONFIG=/etc/openqa" "jobs/overview" 3
 
-# Test PERF-R3: Peak RSS — config-file credential resolution.
+# Test PERF-R3: Peak RSS - config-file credential resolution.
 # Perl loads the config parser as part of its already-large runtime; the delta
 # vs baseline is small.  Zig's RSS increases only by the config-file buffer.
 perf_rss "config-file creds jobs/overview" "OPENQA_CONFIG=/etc/openqa" "jobs/overview"
@@ -473,13 +473,13 @@ perf_rss "config-file creds jobs/overview" "OPENQA_CONFIG=/etc/openqa" "jobs/ove
 # run_comparison_api is not used here because we need to capture raw timings rather
 # than checking exit codes.
 
-# Test PERF-T4: Wall-clock timing — CLI-flag credential passing.
+# Test PERF-T4: Wall-clock timing - CLI-flag credential passing.
 perf_timing "CLI-flag creds jobs/overview" \
 	"" \
 	"--apikey $OPENQA_API_KEY --apisecret $OPENQA_API_SECRET jobs/overview" \
 	3
 
-# Test PERF-R4: Peak RSS — CLI-flag credential passing.
+# Test PERF-R4: Peak RSS - CLI-flag credential passing.
 perf_rss "CLI-flag creds jobs/overview" \
 	"" \
 	"--apikey $OPENQA_API_KEY --apisecret $OPENQA_API_SECRET jobs/overview"
@@ -490,10 +490,10 @@ perf_rss "CLI-flag creds jobs/overview" \
 # server response before writing it to stdout.  This adds a JSON parse +
 # serialise step on top of the baseline, exercising the output-formatting path.
 
-# Test PERF-T5: Wall-clock timing — pretty-printed jobs/overview.
+# Test PERF-T5: Wall-clock timing - pretty-printed jobs/overview.
 perf_timing "--pretty jobs/overview" "" "--pretty jobs/overview" 3
 
-# Test PERF-R5: Peak RSS — pretty-printed jobs/overview.
+# Test PERF-R5: Peak RSS - pretty-printed jobs/overview.
 # Perl's RSS is dominated by the Mojolicious runtime regardless of formatting.
 # Zig allocates a temporary buffer to hold and re-format the JSON body; RSS
 # grows slightly relative to the plain baseline but remains far below Perl.
@@ -521,7 +521,7 @@ perf_rss_archive "archive rich job (~21MB image + artifacts)" "" "$RICH_JOB_ID"
 #
 # Schedules 5 fast simple_boot jobs, waits for all to complete, then measures
 # peak RSS of monitoring all 5 simultaneously.  All jobs are already terminal,
-# so monitor does 5 API calls and exits — no polling loop, isolating the
+# so monitor does 5 API calls and exits - no polling loop, isolating the
 # per-job overhead.
 
 echo "  [perf] Scheduling 5 monitor jobs..."

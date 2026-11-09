@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/manual/test_schedule_monitor.sh — Manual correctness and performance
+# tests/manual/test_schedule_monitor.sh - Manual correctness and performance
 # tests for the `schedule` and `monitor` subcommands of zoqa, run against a
 # real production openQA server.
 #
@@ -63,20 +63,20 @@
 #   cleaned up automatically.
 #
 # Environment variable overrides (in addition to those in lib.sh):
-#   OPENQA_DISTRI    — DISTRI scheduling param    (auto-discovered from reference job)
-#   OPENQA_VERSION   — VERSION scheduling param   (auto-discovered from reference job)
-#   OPENQA_FLAVOR    — FLAVOR scheduling param    (auto-discovered from reference job)
-#   OPENQA_ARCH      — ARCH scheduling param      (auto-discovered from reference job)
-#   OPENQA_GROUP_ID  — job group ID               (auto-discovered from reference job)
-#   OPENQA_TEST      — TEST suite name            (auto-discovered from reference job)
-#   OPENQA_BUILD     — BUILD tag for created jobs (default: zoqa_VR_manual_test)
+#   OPENQA_DISTRI    - DISTRI scheduling param    (auto-discovered from reference job)
+#   OPENQA_VERSION   - VERSION scheduling param   (auto-discovered from reference job)
+#   OPENQA_FLAVOR    - FLAVOR scheduling param    (auto-discovered from reference job)
+#   OPENQA_ARCH      - ARCH scheduling param      (auto-discovered from reference job)
+#   OPENQA_GROUP_ID  - job group ID               (auto-discovered from reference job)
+#   OPENQA_TEST      - TEST suite name            (auto-discovered from reference job)
+#   OPENQA_BUILD     - BUILD tag for created jobs (default: zoqa_VR_manual_test)
 #
 # See lib.sh for: OPENQA_HOST, OPENQA_JOB_ID, ZOQA, RUNS.
 #
 # Requirements (on the host):
 #   - bash 4+
 #   - openqa-cli  (the Perl reference implementation) in PATH
-#   - /usr/bin/time (GNU time, for peak RSS measurement — optional)
+#   - /usr/bin/time (GNU time, for peak RSS measurement - optional)
 #   - python3 (for JSON extraction)
 #   - Network access to the target openQA server
 #   - Valid API credentials (config file or env vars)
@@ -234,7 +234,7 @@ echo "  RUNS:       $RUNS"
 echo "  DRYRUN:     $DRYRUN"
 echo ""
 
-# Common scheduling params (array — each KEY=VALUE is a separate element).
+# Common scheduling params (array - each KEY=VALUE is a separate element).
 SCHED_PARAMS=(
 	"DISTRI=$DISTRI"
 	"VERSION=$VERSION"
@@ -246,7 +246,7 @@ SCHED_PARAMS=(
 )
 
 # =============================================================================
-# Phase 1 — schedule (no --monitor)
+# Phase 1 - schedule (no --monitor)
 # =============================================================================
 
 echo "=== Phase 1: schedule (no --monitor) ==="
@@ -339,10 +339,10 @@ if [[ "$DRYRUN" == "0" ]]; then
 fi
 
 # =============================================================================
-# Phase 2a — monitor (blocking, wait for scheduled jobs)
+# Phase 2a - monitor (blocking, wait for scheduled jobs)
 # =============================================================================
 
-echo "=== Phase 2a: monitor (blocking — wait for jobs to finish) ==="
+echo "=== Phase 2a: monitor (blocking - wait for jobs to finish) ==="
 echo ""
 
 if [[ "$DRYRUN" == "1" ]]; then
@@ -366,7 +366,7 @@ else
 			_check "P2a zoqa monitor exit acceptable (0 or 2)" 1
 		fi
 	else
-		echo "  Skipping zoqa monitor — no jobs were scheduled in Phase 1."
+		echo "  Skipping zoqa monitor - no jobs were scheduled in Phase 1."
 	fi
 
 	echo ""
@@ -387,17 +387,17 @@ else
 			_check "P2a openqa-cli monitor exit acceptable (0 or 2)" 1
 		fi
 	else
-		echo "  Skipping openqa-cli monitor — no jobs were scheduled in Phase 1."
+		echo "  Skipping openqa-cli monitor - no jobs were scheduled in Phase 1."
 	fi
 fi
 
 echo ""
 
 # =============================================================================
-# Phase 2b — monitor benchmark (terminal jobs, repeatable)
+# Phase 2b - monitor benchmark (terminal jobs, repeatable)
 # =============================================================================
 
-echo "=== Phase 2b: monitor benchmark (terminal jobs — $RUNS runs each) ==="
+echo "=== Phase 2b: monitor benchmark (terminal jobs - $RUNS runs each) ==="
 echo ""
 
 if [[ "$DRYRUN" == "1" ]]; then
@@ -424,14 +424,14 @@ else
 			_run_rss "P2b monitor (terminal jobs)" "$zig_bench_cmd" "$perl_bench_cmd"
 		fi
 	else
-		echo "  Skipping — no jobs available from Phase 1."
+		echo "  Skipping - no jobs available from Phase 1."
 	fi
 fi
 
 echo ""
 
 # =============================================================================
-# Phase 3 — schedule --monitor (combined flag, blocking)
+# Phase 3 - schedule --monitor (combined flag, blocking)
 # =============================================================================
 
 echo "=== Phase 3: schedule --monitor (combined, blocking) ==="

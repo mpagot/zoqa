@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/manual/test_archive.sh — Manual archive download tests comparing
+# tests/manual/test_archive.sh - Manual archive download tests comparing
 # zoqa, openqa-cli, and curl against a real production openQA server.
 #
 # See lib.sh for environment variable overrides and default configuration.
