@@ -1,0 +1,2 @@
+[{"id":10,"00000000000000000":{"0":"0","H":"0"},"parents":{"Chained":[9],"0":"0","s":[],"Parallel":[]},"children":{},"assets":{"hdd":["a.qcow0"]}},
+ {"id":9,"name":"0","settings":{"TEST":"arent","PUBLISH_HDD_0":"a.qcow0"},"parents":{},"children":{"Chained":[10]}}]

@@ -1,4 +1,0 @@
-[{"id":1,"name":"A","settings":{"TEST":"A","BUILD":"100","FOO":"bar"},"parents":{},"children":{}}]
----
-BUILD=
-FOO=

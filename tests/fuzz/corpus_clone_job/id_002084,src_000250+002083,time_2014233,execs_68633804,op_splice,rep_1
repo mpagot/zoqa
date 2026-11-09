@@ -1,0 +1,12 @@
+[{"id":10,"name":"0000","settings":{"TEST":"child"},"parents":{"Chained":[9]},"children":{}},
+{"id":9,"name":"000000","settings":{"TEST":"p0000t","0000D":"pold"},"parents":{},"children":{}}]
+---
++=D=0"ts":{"hdd":["a.qcow0","x",,"x",00000,0,0,0,00000000---_ID=0
+W=:z
+B=ts=x
+00000000000000000000000000
+
+---
+0
+---
+{"vars":{"000000000000":"000000000000000","0000000000000":"000","NEEDLES_GIT_URL":"","NEEDLES_GIT_HASH":5}}

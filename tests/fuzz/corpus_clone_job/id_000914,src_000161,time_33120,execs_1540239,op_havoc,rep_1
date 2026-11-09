@@ -1,0 +1,1 @@
+[{"id":10,"name":"0","settings":{"TEST":"child","00_0":"a.qcow0","NAME":"0","N":5,"F":1.5,"0":true,"Z":null,"A":[1]},"group_id":3,"parents":{"Chained":{},"000000":[],"Directly chained":[],"Parallel":[]},"children":{"Chained":[],"Directly chained":"00000","00":[],"Parallel":[]},"assets":{"hdd":["000"],"iso":[],"other":[]}}]

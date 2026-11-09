@@ -1,0 +1,7 @@
+[{"id":1,"name":"0","0000":{"000T":"0","000":"000","0000":"000","00E":"000","0000000000000000000":"000"},"parents":{},"children":{}}]
+---
+
+---
+0
+---
+{"vars":{"TEST_GIT_URL":"://w/.git","TEST_GIT_HASH":"new-hash","NEEDLES_GIT_URL":"s://new/les.git","NEEDLES_GIT_HASH":"new-needles-hash"}}

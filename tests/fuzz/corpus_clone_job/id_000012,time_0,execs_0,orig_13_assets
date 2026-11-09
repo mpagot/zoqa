@@ -1,0 +1,1 @@
+[{"id":10,"name":"00","settings":{"TEST":"child","UEFI_PFLASH_VARS":".fd","PUBLISH_PFLASH_VARS":"vars.fd"},"parents":{},"children":{},"assets":{"iso":["0000","","0"],"hdd":["0000000"],"other":["00000",100,null],"0000":["00000"]}}]
