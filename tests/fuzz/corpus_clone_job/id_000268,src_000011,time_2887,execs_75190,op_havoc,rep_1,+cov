@@ -1,0 +1,6 @@
+[{"id":10,"name":"0","settings":{"TEST":"hild"},"parents":{"Chained":[9]},"children":{}},
+{"id":9,"name":"0","settings":{"TEST":"parent","BUILD":"p0ld"},"parents":{},"children":{}}]
+---
+BUILD=00
+---
+@

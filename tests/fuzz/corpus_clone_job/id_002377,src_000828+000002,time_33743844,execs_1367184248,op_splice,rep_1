@@ -1,0 +1,2 @@
+[{"id":10,"name":"000","settings":{"TEST":"000ld"},"parents":{"Chained":[],"Directly chained":[9],"Parallel":[]},"children":{}},
+ {"id":9,"00000":{"0000":"00000"},"parents":{"Chained":[],"Directly chained":[9],"0000000000":[10]}}]

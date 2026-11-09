@@ -1,0 +1,7 @@
+[{"id":1,"name":"0","settings":{"TEST":"A","ASEDIR":"old","TEST_GIT_REFSPEC":"0","NEEDLES_DIR":"0","NEEDLQS_GIT_REFSPEC":"old-needles-ref"},"parents":{},"children":{}}]
+---
+
+---
+0
+---
+{"vars":{"TEST_GIT_URL":"https://new/repo.git","TEST_GIT_HASH":"new-hash","NEEDLES_GIT_URL":"https://new/needles.git","NEEDLES_GIT_HASH":"new-needles-hash"}}

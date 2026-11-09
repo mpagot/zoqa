@@ -1,0 +1,8 @@
+[{"id":20,"name":"00","settings":{"TEST":"0hild"},"parents":{"Chained":[9]},"children":{}},
+{"id":9,"name":"00","settings":{"TEST":"0ld-needles-re0"},"parents":{},"children":{}}]
+---
+
+---
+0
+---
+{"vars":{"0000":"0000","00000":"00000000","NEEDLES_GIT_URL":"https://new/needles.git","NEEDLES_GIT_HASH":"new-needles-hash"}}

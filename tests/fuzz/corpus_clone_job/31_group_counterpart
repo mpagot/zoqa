@@ -1,3 +1,0 @@
-[{"id":1,"name":"A","settings":{"TEST":"A","_GROUP":"old-group","_GROUP_ID":"99"},"parents":{},"children":{}}]
----
-_GROUP=new-group

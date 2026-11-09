@@ -1,0 +1,7 @@
+[{"id":1,"name":"0","settings":{"TEST":"A","R":"ld","_REF":"ohd-ref","nEEDLES_DIR":"old-needles","NEEDLES_GIT_REFSPEC":"0000000"},"parents":{},"children":{}}]
+---
+
+---
+0
+---
+{"vars":{"0000":"0000","00000":"00000000","NEEDLES_GIT_URL":"https://new/needles.git","NEEDLES_GIT_HASH":"new-needles-hash"}}

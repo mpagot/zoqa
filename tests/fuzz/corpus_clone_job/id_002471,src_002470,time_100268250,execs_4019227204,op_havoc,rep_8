@@ -1,0 +1,9 @@
+[{"id":1,"name":"0","settings":{"TEST":"A","0000D":"0"},"parents":{},"children":{"Chained":[2]}},
+{"id":2,"name":"0","settings":{"TEST":"0","0UILDme":"A","settinEST":"A","UEFI_PFLASH_VARS":"vars.fd"},"parents":{"0":[2]},"children":{},"assets":{"other":["vars.fd"]}}]
+---
+
+0000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+---"TEST"=000
+---
+'0

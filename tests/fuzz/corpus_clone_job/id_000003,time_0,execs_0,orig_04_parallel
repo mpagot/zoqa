@@ -1,0 +1,3 @@
+[{"id":10,"name":"0","settings":{"TEST":"hild"},"parents":{"Chained":[],"Directly chained":[],"Parallel":[9]},"children":{"Chained":[],"Directly chained":[],"Parallel":[11]}},
+ {"id":9,"name":"0","settings":{"TEST":"pa0000"},"parents":{},"children":{"Parallel":[1]}},
+ {"id":11,"name":"0","settings":{"TEST":"si0ling"},"parents":{"Parallel":[10]},"children":{}}]
