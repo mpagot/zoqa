@@ -4,7 +4,7 @@
 # TODO: add a `fuzz` target once the AFL++ workflow is stable enough to drive
 #       from here (see tests/fuzz/README.md for the current manual workflow).
 
-.PHONY: help zig-build-debug zig-build-release zig-build-safe zig-test zig-test-discovery zig-lint zig-docs zig-docs-check zig-doc-lint zig-docs-serve e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize lint fuzz-build fuzz-cov fuzz-cov-build
+.PHONY: help zig-build-debug zig-build-release zig-build-safe zig-test zig-test-discovery zig-lint zig-docs zig-docs-check zig-doc-lint zig-docs-serve e2e e2e-keep e2e-dryrun e2e-lint e2e-catalog-lint manual-lint fuzz-lint fuzz-sanitize lint fuzz-afl-build fuzz-build fuzz-build-pcguard fuzz-cov fuzz-cov-build
 
 # Default target
 help:
@@ -40,7 +40,11 @@ help:
 	@echo "  manual-lint     Run bash -n and shellcheck on manual test scripts."
 	@echo " "
 	@echo "  fuzz-lint       Run bash -n and shellcheck on tests/fuzz/ scripts."
-	@echo "  fuzz-build      Build the fuzzy app."
+	@echo "  fuzz-afl-build  Build vendor/aflplusplus against the LLVM version matching Zig (UPDATE=1 pulls AFL++ stable)."
+	@echo "  fuzz-build      Build the fuzzy app (bitcode path; requires matching LLVM)."
+	@echo "                      Optional: ALLOW_LLVM_MISMATCH=1  bypass the version check."
+	@echo "  fuzz-build-pcguard  Build with Zig trace-pc-guard (no LLVM match needed)."
+	@echo "                      Optional: CMPLOG=1  also build -cmplog variants."
 	@echo "  fuzz-sanitize   Check that corpus filenames are Windows-safe (no colons)."
 	@echo "  fuzz-cov        Build + run kcov coverage + analyse (requires kcov)."
 	@echo "              Optional: TARGETS=\"config request\"   run only the listed target(s)."
@@ -215,8 +219,21 @@ manual-lint:
 # -----------------------------------------------------------------------------
 # Fuzz
 # -----------------------------------------------------------------------------
+# Rebuild vendor/aflplusplus against Zig's LLVM major version.
+#   make fuzz-afl-build             # rebuild the current checkout
+#   make fuzz-afl-build UPDATE=1    # pull AFL++ 'stable' first
+fuzz-afl-build:
+	AFL_DIR="$(AFL_DIR)" ./tests/fuzz/build_afl.sh $(if $(filter 1,$(UPDATE)),--update,)
+
 fuzz-build:
-	AFL_DIR="$(AFL_DIR)" ./tests/fuzz/build.sh
+	AFL_DIR="$(AFL_DIR)" ZOQA_FUZZ_ALLOW_LLVM_MISMATCH="$(ALLOW_LLVM_MISMATCH)" ./tests/fuzz/build.sh
+
+# Build fuzz binaries using Zig's own trace-pc-guard instrumentation.
+# No LLVM version match required (no bitcode handoff to afl-cc).
+#   make fuzz-build-pcguard            # pcguard only
+#   make fuzz-build-pcguard CMPLOG=1   # also build -cmplog variants
+fuzz-build-pcguard:
+	AFL_DIR="$(AFL_DIR)" PCGUARD=1 CMPLOG="$(CMPLOG)" ./tests/fuzz/build.sh
 
 fuzz-sanitize:
 	./tests/fuzz/sanitize_corpus.sh
@@ -239,6 +256,7 @@ fuzz-cov-build:
 # -----------------------------------------------------------------------------
 FUZZ_SCRIPTS := \
 	tests/fuzz/build.sh \
+	tests/fuzz/build_afl.sh \
 	tests/fuzz/cmin.sh \
 	tests/fuzz/coverage.sh \
 	tests/fuzz/distill.sh \

@@ -21,17 +21,31 @@ is not checked into the repository, so you must clone it yourself after cloning
 
 ### 1. Install system dependencies
 
-AFL++'s LLVM mode requires `llvm-config`, `clang`, and `lld` from the same LLVM
-version (recommended: 18 or newer). A C/C++ toolchain (`gcc`, `gcc-c++`, `make`)
-is also needed to compile AFL++ itself.
+AFL++'s LLVM mode requires `llvm-config`, `clang`, and `lld` matching the **same LLVM major version** that Zig uses.
+
+> [!IMPORTANT]
+> **LLVM Version Parity Requirement:** Zig emits LLVM bitcode using its bundled LLVM library (`zig cc --version | head -n 1`, e.g., LLVM 20 for Zig 0.15.2). `afl-cc` then parses and instruments that bitcode using the host's LLVM installation. If host LLVM and Zig LLVM major versions mismatch (for instance, an LLVM 23 `afl-cc` reading LLVM 20 bitcode), bitcode instructions can be silently corrupted—such as unsigned integer range comparisons being miscompiled into impossible checks, triggering false `@intCast` panics.
+
+Check the bundled LLVM major version:
+```sh
+zig cc --version | head -n 1
+# e.g., clang version 20.1.2 ... -> LLVM major version 20
+```
+
+Install matching development packages and compiler tools:
 
 ```sh
-# openSUSE / Tumbleweed - required
-sudo zypper install gcc gcc-c++ make llvm21-devel clang21 lld21 kcov
+# openSUSE / Tumbleweed (for Zig 0.15.2 / LLVM 20)
+sudo zypper install gcc gcc-c++ make llvm20-devel clang20 lld20 kcov
+
+# Debian / Ubuntu (for LLVM 20)
+sudo apt install gcc g++ make llvm-20-dev clang-20 lld-20 kcov
 
 # Recommended (optional - improves AFL++ performance)
-sudo zypper install zlib-devel diffutils
+sudo zypper install zlib-devel diffutils  # or apt install zlib1g-dev diffutils
 ```
+
+*(Note for openSUSE users: `llvm<N>-devel` packages conflict on `/usr/bin/llvm-config` and cmake files, so only one version can be installed at a time.)*
 
 `zlib-devel` enables the `HAVE_ZLIB` performance optimisation inside AFL++.
 `diffutils` provides `cmp`, used by AFL++'s self-tests during the build.
@@ -44,12 +58,28 @@ git clone https://github.com/AFLplusplus/AFLplusplus vendor/aflplusplus
 ```
 
 This checks out the default (`stable`) branch. The clone is a one-time step;
-subsequent `git pull` inside the directory is enough to update.
+subsequent updates can be done with `git pull` or `make fuzz-afl-build UPDATE=--update`.
 
 ### 3. Build AFL++
 
+Use the automated build script, which queries your active Zig binary for its LLVM major version, locates the matching `llvm-config` on your system, and compiles AFL++ via `source-only`:
+
 ```sh
-make source-only -j$(nproc) -C vendor/aflplusplus
+# Using the make target:
+make fuzz-afl-build
+
+# Or directly:
+./tests/fuzz/build_afl.sh
+
+# To update the git repo and submodules before building:
+make fuzz-afl-build UPDATE=--update
+# or: ./tests/fuzz/build_afl.sh --update
+```
+
+Alternatively, you can build manually by specifying `LLVM_CONFIG`:
+
+```sh
+LLVM_CONFIG=llvm-config-20 make source-only -j$(nproc) -C vendor/aflplusplus
 # Produces: vendor/aflplusplus/afl-fuzz, vendor/aflplusplus/afl-cc, ...
 ```
 
@@ -64,24 +94,91 @@ to look for are:
 
 ### 4. Build the instrumented binaries
 
-`afl-cc` must be on `PATH`. Pass `-Dfuzz` to activate the fuzz build step:
+There are two build modes. **PcGuard is the recommended default** — it is
+faster (~32% more exec/s in our benchmarks), requires no LLVM version match,
+and is immune to the bitcode miscompilation bug. Use the bitcode path only
+if you need AFL++-specific LLVM passes (laf-intel, split-compares) that
+are unavailable in PcGuard mode.
+
+#### Bitcode path (requires matching LLVM)
+
+Zig emits LLVM bitcode; `afl-cc` reads and instruments it. This gives access
+to AFL++'s LLVM passes (CmpLog, laf-intel, split-compares) but **requires**
+`afl-cc`'s LLVM major version to match Zig's bundled LLVM.
+
+`./tests/fuzz/build.sh` automatically checks that the LLVM major version of
+`afl-cc` matches Zig's bundled LLVM version before building. If a version
+mismatch is detected, it aborts immediately with guidance to run
+`make fuzz-afl-build`.
 
 ```sh
 # From the project root
+make fuzz-build
+# Or directly:
 ./tests/fuzz/build.sh
 # Produces all the test binaries in zig-out/
 ```
 
+To bypass the version check in an emergency, set `ZOQA_FUZZ_ALLOW_LLVM_MISMATCH=1`:
+```sh
+ZOQA_FUZZ_ALLOW_LLVM_MISMATCH=1 make fuzz-build
+```
+
+#### Alternative: Trace-pc-guard path (no LLVM match required)
+
+Zig's own LLVM compiles **and** instruments (via `sanitize_coverage_trace_pc_guard`).
+The result is linked directly with AFL++'s C runtime object (`afl-compiler-rt.o`)
+and `afl.c`. No second LLVM ever reads the bitcode, so **no LLVM version match
+is required**. Any working AFL++ build (any LLVM) provides the runtime object.
+
+This mode loses AFL++'s LLVM passes (CmpLog, laf-intel, split-compares) but
+gains: no version-matching constraint, no `llvm<N>-devel` package needed, and
+immunity to the bitcode miscompilation bug (see
+[conductor/plan-fuzz-llvm-bitcode-mismatch.md](../../conductor/plan-fuzz-llvm-bitcode-mismatch.md)).
+
+```sh
+# From the project root
+make fuzz-build-pcguard
+# Or directly:
+PCGUARD=1 ./tests/fuzz/build.sh
+```
+
+##### CmpLog variant (pcguard only)
+
+With `CMPLOG=1`, an additional `<name>-cmplog` binary is built per target
+(using `.fuzz = true`, which enables Zig's comparison-tracking hooks). Use it
+as the `-c` argument to `afl-fuzz` for a CmpLog secondary node:
+
+```sh
+make fuzz-build-pcguard CMPLOG=1
+# Produces zoqa-fuzz-<target> and zoqa-fuzz-<target>-cmplog
+
+# Example afl-fuzz invocation with CmpLog:
+vendor/aflplusplus/afl-fuzz -M -i corpus_clone_job_min/ \
+  -c ./zig-out/bin/zoqa-fuzz-clone-job-cmplog \
+  -o out_clone_job -- ./zig-out/bin/zoqa-fuzz-clone-job
+```
+
+| | Bitcode (default) | Pcguard |
+|---|---|---|
+| LLVM version must match | yes | **no** |
+| Needs `llvm<N>-devel` | yes | no |
+| Edge coverage | AFL++ PCGUARD pass | LLVM SanitizerCoverage (same map) |
+| CmpLog / laf-intel / split-compares | available | CmpLog via `-cmplog` variant; laf-intel/split-compares not available |
+| Who optimizes | `afl-cc -O3` | Zig (`ReleaseSafe`) |
+
 #### Custom AFL++ Directory Override
 
-By default, the build script looks for AFL++ under `vendor/aflplusplus`. If you have AFL++ built in another directory, you can specify its path via the `AFL_DIR` environment or `make` variable:
+By default, the build script looks for AFL++ under `vendor/aflplusplus`. If you have AFL++ built in another directory, you can specify its path via the `AFL_DIR` environment or `make` variable (works for both bitcode and pcguard modes):
 
 ```sh
 # Using the make target:
 make fuzz-build AFL_DIR=/path/to/aflplusplus
+make fuzz-build-pcguard AFL_DIR=/path/to/aflplusplus
 
 # Or running the build script directly:
 AFL_DIR=/path/to/aflplusplus ./tests/fuzz/build.sh
+AFL_DIR=/path/to/aflplusplus PCGUARD=1 ./tests/fuzz/build.sh
 ```
 
 ## Workflow
@@ -216,9 +313,16 @@ panics to watch for:
 | Panic message | Likely cause |
 |---|---|
 | `integer overflow` | Arithmetic on a too-small inferred integer type; use `@as(usize, ...)` or explicit casts |
+| `integer cast truncated bits` | Target type cannot represent value (or LLVM bitcode mismatch if occurring in time/math operations) |
 | `index out of bounds` | Slice or array access past end; add a bounds check |
 | `attempt to unwrap null` | Unconditional `.?` on an optional; handle `null` explicitly |
 | `unreachable` | Control flow reached a branch marked `unreachable`; add a missing case |
+
+> [!WARNING]
+> **False Crashes from LLVM Bitcode Version Mismatch:**
+> If a crash triggers immediately on every execution with `integer cast truncated bits` (e.g., inside `@as(u64, @intCast(timestamp))` in `std.time.nanoTimestamp()` or 128-bit integer casting), check your compiler versions.
+> When Zig emits LLVM 20 bitcode and AFL++ was built against LLVM 21+, LLVM's bitcode reader can misinterpret integer comparison attributes (such as `samesign` flags on `icmp`), turning valid safety range checks into constant-false traps that panic unconditionally.
+> Run `make fuzz-afl-build` to recompile AFL++ with matching LLVM development headers.
 
 For `integer overflow` in particular, watch out for Zig's peer-type
 resolution: `@min(runtime_val, comptime_int_N)` infers the result type

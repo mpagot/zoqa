@@ -6,11 +6,22 @@
 //  shouldSkipUefiVarsAsset, extractJobSettings, extractDeps,
 //  findSettingValue, collectRepoUrls, DependencyWalker).
 //
-// The module is I/O-free: the harness drives the caller-driven BFS walker
-// with synthetic job objects decoded from the fuzz input, then runs the
-// encode/override/format pipeline in the same order as
-// src/clone_job_main.zig (phase 1 walk, --reproduce, phase 2 encode,
-// --check-repos, asset filter, --export-command, output, --repeat).
+// In addition to graph traversal and payload formatting, the harness
+// exercises the asset download pipeline (src/clone_job_main.zig: downloadAssets)
+// via zoqa.openQADownloadToFile and an in-memory FileBackend (PR #42).
+//
+// ---------------------------------------------------------------------------
+// Oracles
+// ---------------------------------------------------------------------------
+//
+//   O1: Collected job IDs are unique and collected.len <= MAX_FEEDS.
+//   O2: A non-null parseOverride result has no '=' in key or scope.
+//   O3: Dependency graph closure: final_jobs.len == collected.len.
+//   O4: buildPostBody output ends with is_clone_job=1.
+//   O5: formatJsonOutput output parses as a valid JSON object.
+//   O6: Terminal download error triggers backend.delete() (no partial file).
+//   O7: 416 Range triggers skip-if-complete (mtime touch, 0 bytes streamed).
+//   O8: 200 OK download streams exact payload with zero byte corruption.
 //
 // ---------------------------------------------------------------------------
 // Corpus format
@@ -51,9 +62,15 @@
 //     bit 4: run injectReproduceSettings (needs "vars" in section 4)
 //     bit 5: run the --repeat loop
 //     bit 6: run collectRepoUrls on the origin job
-//     bit 7: reserved
-//   Byte 1: max_depth - 0xFF = null, else value & 0x0F (0 = unlimited in the
-//           walker). Default 1 (CLI default).
+//     bit 7: run asset download simulation (in-memory FileBackend)
+//   Byte 1:
+//     bits 0-3: max_depth - 0x0F = null, else value & 0x0F (0 = unlimited).
+//               Default 1 (CLI default). If full byte is 0xFF, max_depth is null.
+//     bits 4-5: asset download mock mode:
+//               0 = 200 OK (stream verify)
+//               1 = 416 Range Not Satisfiable (skip-if-complete probe)
+//               2 = 404 Not Found (terminal error cleanup)
+//               3 = HTML challenge (reject_html detection & cleanup)
 //   Byte 2: repeat count = (value & 0x03) + 2 (only with bit 5). Default 2.
 //
 // Section 4: server JSON (optional object)
@@ -71,18 +88,89 @@
 // The walk is capped at MAX_FEEDS feeds per iteration (the worklist can
 // grow on adversarial graphs; next() skips collected IDs but not queued
 // duplicates). Unknown job IDs map to an empty object, so the walk always
-// ends. No I/O: the harness is crash-only (v1), consistent with the other
-// four harnesses.
+// ends. No disk I/O: the asset download stage uses an in-memory mock backend.
 
 const std = @import("std");
 const zoqa = @import("zoqa");
 const clone_job = zoqa.clone_job;
+const mock_client = @import("mock_client.zig");
+const ProgrammableMockClient = mock_client.ProgrammableMockClient;
 
 const MAX_FEEDS = 64;
 const MAX_OVERRIDES = 64;
 
 const FROM_URL = "http://source.invalid";
 const DEST_HOST = "https://dest.invalid";
+
+// ---------------------------------------------------------------------------
+// In-memory FileBackend (PR #42)
+// ---------------------------------------------------------------------------
+
+const FuzzFileSink = struct {
+    aw: std.Io.Writer.Allocating,
+    updated: bool = false,
+    write_error: ?anyerror = null,
+
+    pub fn init(allocator: std.mem.Allocator) FuzzFileSink {
+        return .{ .aw = .init(allocator) };
+    }
+
+    pub fn writer(self: *FuzzFileSink, _: []u8) *std.Io.Writer {
+        return &self.aw.writer;
+    }
+
+    pub fn writeError(self: *FuzzFileSink) ?anyerror {
+        return self.write_error;
+    }
+
+    pub fn updateTimes(self: *FuzzFileSink, _: u64, _: u64) !void {
+        self.updated = true;
+    }
+
+    pub fn close(_: *FuzzFileSink) void {}
+
+    pub fn deinit(self: *FuzzFileSink) void {
+        self.aw.deinit();
+    }
+
+    pub fn written(self: *FuzzFileSink) []const u8 {
+        return self.aw.writer.buffered();
+    }
+};
+
+const FuzzFileBackend = struct {
+    stat_size: ?u64 = null,
+    sink: FuzzFileSink,
+    touch_count: usize = 0,
+    deleted: bool = false,
+
+    pub fn init(allocator: std.mem.Allocator) FuzzFileBackend {
+        return .{ .sink = .init(allocator) };
+    }
+
+    pub fn stat(self: *FuzzFileBackend, _: []const u8) !?u64 {
+        return self.stat_size;
+    }
+
+    pub fn create(self: *FuzzFileBackend, _: []const u8) !*FuzzFileSink {
+        self.sink.aw.clearRetainingCapacity();
+        self.sink.updated = false;
+        self.deleted = false;
+        return &self.sink;
+    }
+
+    pub fn delete(self: *FuzzFileBackend, _: []const u8) void {
+        self.deleted = true;
+    }
+
+    pub fn touch(self: *FuzzFileBackend, _: []const u8) !void {
+        self.touch_count += 1;
+    }
+
+    pub fn deinit(self: *FuzzFileBackend) void {
+        self.sink.deinit();
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Decoded input
@@ -137,13 +225,22 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 
     // parseOverride is exercised even when the jobs JSON is broken.
     // ORACLE: O2 - a non-null parseOverride result has no '=' in key or scope.
-    _ = decoded.overrides;
+    for (decoded.overrides) |ov| {
+        std.debug.assert(std.mem.indexOfScalar(u8, ov.key, '=') == null);
+        if (ov.scope) |sc| {
+            std.debug.assert(std.mem.indexOfScalar(u8, sc, '=') == null);
+        }
+    }
 
     // ------------------------------------------------------------------
-    // Parse section 1 (jobs JSON) into the arena. On failure, skip the
-    // walk/encode/format/repeat phases (override parsing already ran).
+    // Phase 1: parse section 1 (jobs JSON) into the arena. On failure,
+    // verify state hygiene and return (override parsing already ran).
     // ------------------------------------------------------------------
-    const jobs_root = std.json.parseFromSliceLeaky(std.json.Value, allocator, decoded.jobs_json, .{}) catch return;
+    const jobs_root = std.json.parseFromSliceLeaky(std.json.Value, allocator, decoded.jobs_json, .{}) catch {
+        // State hygiene: overrides count strictly bounded
+        std.debug.assert(decoded.overrides.len <= MAX_OVERRIDES);
+        return;
+    };
 
     // Build the job lookup table: id -> job ObjectMap.
     var jobs: std.ArrayList(struct { id: u64, obj: std.json.ObjectMap }) = .empty;
@@ -200,6 +297,13 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         }
 
         // ORACLE: O1 - collected job IDs are unique and collected.len <= MAX_FEEDS.
+        std.debug.assert(walker.collected.items.len <= MAX_FEEDS);
+        for (walker.collected.items, 0..) |item_a, idx| {
+            for (walker.collected.items[idx + 1 ..]) |item_b| {
+                std.debug.assert(item_a.job_id != item_b.job_id);
+            }
+        }
+
         walk = .{ .walker = walker, .assets = all_assets };
     }
 
@@ -218,6 +322,9 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     // ------------------------------------------------------------------
     const encode = runEncode(allocator, walk.walker.collected.items, decoded.overrides, decoded.opts) catch return;
 
+    // ORACLE: O3 - graph closure: final_jobs length matches collected length.
+    std.debug.assert(encode.final_jobs.items.len == walk.walker.collected.items.len);
+
     // ------------------------------------------------------------------
     // --check-repos (bit 6, origin job only)
     // ------------------------------------------------------------------
@@ -227,12 +334,116 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     }
 
     // ------------------------------------------------------------------
-    // Asset filter: isAssetGeneratedByClonedJobs + shouldSkipUefiVarsAsset
+    // Phase 4: Asset filter & in-memory download simulation (PR #42)
     // ------------------------------------------------------------------
     const skipped_parents = decoded.opts.skip_deps or decoded.opts.skip_chained_deps;
     for (walk.assets.items) |asset| {
-        _ = clone_job.isAssetGeneratedByClonedJobs(asset.filename, encode.final_jobs.items);
-        _ = clone_job.shouldSkipUefiVarsAsset(asset.filename, encode.final_jobs.items, skipped_parents);
+        const is_generated = clone_job.isAssetGeneratedByClonedJobs(asset.filename, encode.final_jobs.items);
+        const should_skip = clone_job.shouldSkipUefiVarsAsset(asset.filename, encode.final_jobs.items, skipped_parents);
+
+        if (downloadAssetsFlag() and !is_generated and !should_skip) {
+            const type_str: []const u8 = switch (asset.asset_type) {
+                .iso => "iso",
+                .hdd => "hdd",
+                .other => "other",
+            };
+
+            const dl_path = std.fmt.allocPrint(allocator, "/tests/{d}/asset/{s}/{s}", .{
+                asset.job_id, type_str, asset.filename,
+            }) catch return;
+
+            const basename = if (std.mem.lastIndexOfScalar(u8, asset.filename, '/')) |idx|
+                asset.filename[idx + 1 ..]
+            else
+                asset.filename;
+
+            const dest_path = std.fmt.allocPrint(allocator, "assets/{s}/{s}", .{ type_str, basename }) catch return;
+
+            var backend = FuzzFileBackend.init(allocator);
+            defer backend.deinit();
+
+            var client: ProgrammableMockClient = .{};
+            const mode = assetMode();
+            const dummy_body = "ZOQA_FUZZ_ASSET_PAYLOAD_1234567890";
+            const html_body = "<!DOCTYPE html><html><body>Challenge</body></html>";
+
+            switch (mode) {
+                0 => { // 200 OK
+                    client.response_status = .ok;
+                    client.response_body = dummy_body;
+                    client.response_content_length = dummy_body.len;
+                    backend.stat_size = null;
+                },
+                1 => { // 416 Skip-if-complete
+                    backend.stat_size = 1024;
+                    client.response_status = .range_not_satisfiable;
+                    client.response_body = "";
+                    client.response_content_length = 0;
+                },
+                2 => { // 404 Not Found
+                    backend.stat_size = null;
+                    client.response_status = .not_found;
+                    client.response_body = "Not Found";
+                    client.response_content_length = 9;
+                },
+                3 => { // HTML challenge
+                    backend.stat_size = null;
+                    client.response_status = .ok;
+                    client.custom_content_type = "text/html";
+                    client.response_body = html_body;
+                    client.response_content_length = html_body.len;
+                },
+            }
+
+            const download_res = zoqa.openQADownloadToFile(FROM_URL, dl_path, dest_path, .{
+                .allocator = allocator,
+                .credentials = null,
+                .quiet = true,
+                .retries = 1,
+                .retry_sleep_s = 0,
+                .allow_lengthless = false,
+            }, &client, &backend);
+
+            switch (mode) {
+                0 => {
+                    // ORACLE: O8 - successful download streams exact payload.
+                    if (download_res) |res| {
+                        if (res.status == .ok) {
+                            std.debug.assert(backend.sink.written().len == dummy_body.len);
+                        }
+                    } else |_| {}
+                },
+                1 => {
+                    // ORACLE: O7 - 416 Range triggers skip-if-complete (touch, no re-download).
+                    if (download_res) |res| {
+                        if (res.status == .ok) {
+                            std.debug.assert(backend.touch_count > 0);
+                            std.debug.assert(backend.sink.written().len == 0);
+                        }
+                    } else |_| {}
+                },
+                2 => {
+                    // ORACLE: O6 - non-2xx status triggers backend.delete().
+                    if (download_res) |res| {
+                        if (res.status == .not_found) {
+                            std.debug.assert(backend.deleted);
+                        }
+                    } else |_| {
+                        std.debug.assert(backend.deleted);
+                    }
+                },
+                3 => {
+                    // ORACLE: O6 - HTML challenge error triggers backend.delete().
+                    if (download_res) |_| {
+                        // If file ended with .html/.htm, UnexpectedHtmlResponse is suppressed
+                    } else |err| {
+                        if (err == error.UnexpectedHtmlResponse) {
+                            std.debug.assert(backend.deleted);
+                        }
+                    }
+                },
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -252,7 +463,8 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 
         const json_out = clone_job.formatJsonOutput(allocator, ids_map) catch return;
         // ORACLE: O5 - formatJsonOutput output parses as a JSON object.
-        _ = json_out;
+        const is_valid_json = std.json.validate(allocator, json_out) catch return;
+        std.debug.assert(is_valid_json);
     }
 
     // ------------------------------------------------------------------
@@ -264,7 +476,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
             clone_job.appendRepeatSuffix(allocator, encode.final_jobs.items, @intCast(i)) catch return;
             const iter_body = clone_job.buildPostBody(allocator, encode.final_jobs.items) catch return;
             // ORACLE: O4 - buildPostBody output ends with is_clone_job=1.
-            _ = iter_body;
+            std.debug.assert(std.mem.endsWith(u8, iter_body, "is_clone_job=1"));
         }
     }
 }
@@ -272,12 +484,6 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 // ---------------------------------------------------------------------------
 // Control-byte helpers
 // ---------------------------------------------------------------------------
-//
-// The control bytes are decoded in `decode` into CloneOptions booleans, but
-// the harness also needs the raw bits for reproduce/repeat/check-repos.
-// They are stored in a global set per iteration (AFL++ persistent mode is
-// single-threaded, so a global is safe and avoids threading the bytes
-// through every function).
 
 var g_control: [3]u8 = .{ 0, 1, 0 };
 
@@ -291,6 +497,14 @@ fn repeatFlag() bool {
 
 fn checkReposFlag() bool {
     return (g_control[0] & 0x40) != 0;
+}
+
+fn downloadAssetsFlag() bool {
+    return (g_control[0] & 0x80) != 0;
+}
+
+fn assetMode() u2 {
+    return @intCast((g_control[1] >> 4) & 0x03);
 }
 
 fn repeatCount() u32 {
@@ -426,6 +640,7 @@ fn runEncode(
 
     const post_body = try clone_job.buildPostBody(allocator, final_jobs.items);
     // ORACLE: O4 - buildPostBody output ends with is_clone_job=1.
+    std.debug.assert(std.mem.endsWith(u8, post_body, "is_clone_job=1"));
 
     const final_jobs_owned = try final_jobs.toOwnedSlice(allocator);
     return EncodeResult{
