@@ -94,9 +94,13 @@ to look for are:
 
 ### 4. Build the instrumented binaries
 
-There are two build modes:
+There are two build modes. **PcGuard is the recommended default** — it is
+faster (~32% more exec/s in our benchmarks), requires no LLVM version match,
+and is immune to the bitcode miscompilation bug. Use the bitcode path only
+if you need AFL++-specific LLVM passes (laf-intel, split-compares) that
+are unavailable in PcGuard mode.
 
-#### Default: Bitcode path (requires matching LLVM)
+#### Bitcode path (requires matching LLVM)
 
 Zig emits LLVM bitcode; `afl-cc` reads and instruments it. This gives access
 to AFL++'s LLVM passes (CmpLog, laf-intel, split-compares) but **requires**
