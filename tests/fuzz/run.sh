@@ -19,6 +19,9 @@
 #   - For --continue: out_<target>/ must already contain a prior campaign
 #
 # Environment variables honoured (set before calling this script):
+#   OUT_SUFFIX                        - append to output dir name (e.g. _pcguard,
+#                                       _bitcode) to keep campaigns from different
+#                                       build variants separate
 #   AFL_SKIP_CPUFREQ                  - skip CPU frequency check (useful on laptops)
 #   AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES - skip /proc/sys/kernel/core_pattern check
 #   Any other AFL_* variable is passed through to afl-fuzz unchanged.
@@ -122,7 +125,12 @@ fi
 # ---------------------------------------------------------------------------
 BINARY_PATH="$ROOT/zig-out/${BINARY[$TARGET]}"
 CORPUS_MIN="$FUZZ_DIR/corpus_${TARGET}_min"
-OUT_DIR="$FUZZ_DIR/out_${TARGET}"
+# OUT_SUFFIX allows running multiple build variants (pcguard, bitcode, etc.)
+# side by side without overwriting each other's campaign data.
+# Example: OUT_SUFFIX=_pcguard ./tests/fuzz/run.sh clone_job
+#          → output goes to out_clone_job_pcguard/
+OUT_SUFFIX="${OUT_SUFFIX:-}"
+OUT_DIR="$FUZZ_DIR/out_${TARGET}${OUT_SUFFIX}"
 DICT_FILE="$FUZZ_DIR/${DICT[$TARGET]}"
 
 # ---------------------------------------------------------------------------
@@ -167,10 +175,17 @@ else
 	echo "    Mode:    fresh   (-i $INPUT_FLAG)"
 fi
 echo "    Output:  $OUT_DIR"
+if [[ -n "$OUT_SUFFIX" ]]; then
+	echo "    Suffix:  $OUT_SUFFIX"
+fi
 if [[ -n "${DICT[$TARGET]}" ]]; then
 	echo "    Dict:    $DICT_FILE"
 else
 	echo "    Dict:    (none)"
+fi
+CMPLOG_BIN="${BINARY[$TARGET]}-cmplog"
+if [[ "${ZOQA_FUZZ_NO_CMPLOG:-0}" != "1" && -x "$ROOT/zig-out/$CMPLOG_BIN" ]]; then
+	echo "    CmpLog:  $CMPLOG_BIN (-c)"
 fi
 echo ""
 
@@ -183,6 +198,13 @@ AFL_ARGS=(
 if [[ -n "${DICT[$TARGET]}" ]]; then
 	AFL_ARGS+=(-x "$DICT_FILE")
 fi
+# CmpLog secondary binary (built with PCGUARD=1 CMPLOG=1). Auto-detected:
+# if zoqa-fuzz-<target>-cmplog exists next to the main binary, use it as -c.
+# Set ZOQA_FUZZ_NO_CMPLOG=1 to disable.
+CMPLOG_BIN="${BINARY[$TARGET]}-cmplog"
+if [[ "${ZOQA_FUZZ_NO_CMPLOG:-0}" != "1" && -x "$ROOT/zig-out/$CMPLOG_BIN" ]]; then
+	AFL_ARGS+=(-c "$ROOT/zig-out/$CMPLOG_BIN")
+fi
 # clone_job: collectRepoUrls on large inputs (69KB+) can take ~30ms,
 # exceeding the default 20ms exec timeout. Raise it to 50ms so slow
 # inputs finish instead of timing out (keeps stability high).
@@ -191,7 +213,7 @@ fi
 # with a MAX_INPUT cap in fuzz_clone_job.zig (truncate input to 8KB)
 # and remove this override.
 if [[ "$TARGET" == "clone_job" ]]; then
-	AFL_ARGS+=(-t 50)
+	AFL_ARGS+=(-t "${ZOQA_FUZZ_TIMEOUT:-50}")
 fi
 AFL_ARGS+=(-- "$BINARY_PATH")
 

@@ -63,13 +63,14 @@ pub const ProgrammableMockClient = struct {
             use_gzip: bool,
             link_header: ?[]const u8,
             emit_content_type: bool,
+            custom_content_type: ?[]const u8 = null,
             count: u8 = 0,
 
             pub fn next(self: *HeaderIterator) ?std.http.Header {
                 if (self.count == 0) {
                     self.count += 1;
                     if (self.emit_content_type) {
-                        return .{ .name = "Content-Type", .value = "application/json" };
+                        return .{ .name = "Content-Type", .value = self.custom_content_type orelse "application/json" };
                     }
                     // Skip Content-Type in headers - let structured field handle it
                     return self.next();
@@ -92,6 +93,7 @@ pub const ProgrammableMockClient = struct {
                 .link_header = self.link_header,
                 // Emit Content-Type in headers unless we want the structured fallback
                 .emit_content_type = self.content_type != null,
+                .custom_content_type = self.content_type,
             };
         }
     };
@@ -146,6 +148,7 @@ pub const ProgrammableMockClient = struct {
     partial_body_len: ?usize = null,
     link_header: ?[]const u8 = null,
     use_structured_ct: bool = true,
+    custom_content_type: ?[]const u8 = null,
     inject_read_failed: bool = false,
 
     // Multi-response mode: when non-null, each request() pops the next
@@ -200,7 +203,7 @@ pub const ProgrammableMockClient = struct {
                 // When use_structured_ct is false, set content_type to null so
                 // the fallback path in http_client.zig is exercised only via
                 // the header iterator.
-                .content_type = if (self.use_structured_ct) "application/json" else null,
+                .content_type = if (self.custom_content_type) |ct| ct else if (self.use_structured_ct) "application/json" else null,
                 .content_length = self.response_content_length,
             },
             .mock_reader = .{

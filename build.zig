@@ -133,7 +133,9 @@ pub fn build(b: *std.Build) void {
     docs_step.dependOn(&install_docs.step);
 
     if (b.option(bool, "fuzz", "enable building tooling for fuzz testing") orelse false) {
-        setupFuzzing(b, target, optimize);
+        const pcguard = b.option(bool, "fuzz_pcguard", "use Zig trace-pc-guard instrumentation instead of afl-cc bitcode passes (no LLVM version match required)") orelse false;
+        const cmplog = b.option(bool, "fuzz_cmplog", "also build -cmplog variants (requires -Dfuzz_pcguard)") orelse false;
+        setupFuzzing(b, target, optimize, pcguard, cmplog and pcguard);
     }
 
     if (b.option(bool, "coverage", "enable kcov coverage targets") orelse false) {
@@ -142,6 +144,28 @@ pub fn build(b: *std.Build) void {
 }
 
 fn addFuzzBinary(
+    b: *std.Build,
+    afl: anytype,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    pcguard: bool,
+    cmplog: bool,
+    afl_dir: []const u8,
+    name: []const u8,
+    src: []const u8,
+    imports: []const std.Build.Module.Import,
+) void {
+    if (pcguard) {
+        addFuzzBinaryPcGuard(b, target, afl_dir, name, src, imports, cmplog);
+    } else {
+        addFuzzBinaryBitcode(b, afl, target, optimize, name, src, imports);
+    }
+}
+
+/// Original path: Zig emits LLVM bitcode, afl-cc (system AFL++) reads it,
+/// applies its instrumentation passes, and produces the final binary.
+/// Requires afl-cc's LLVM major version to match Zig's bundled LLVM.
+fn addFuzzBinaryBitcode(
     b: *std.Build,
     afl: anytype,
     target: std.Build.ResolvedTarget,
@@ -169,15 +193,106 @@ fn addFuzzBinary(
     // Pass -lm explicitly: afl-cc links with clang against system libs, and
     // std.math.pow(f64, ...) pulls in log/exp from libm at link time.
     //
-    // Expected, harmless build noise: afl_kit compiles in two stages (Zig
-    // emits LLVM bitcode, then afl-cc/clang compiles it). The bitcode carries
-    // a generic x86_64-linux module triple while SUSE's clang defaults to
-    // x86_64-suse-linux, so clang overrides the triple and prints
-    // "overriding the module target triple ... [-Woverride-module]". The
-    // override is a no-op (only the vendor field differs) and the resulting
-    // machine code is identical, so the warning is safe to ignore.
+    // WARNING: This path hands Zig's LLVM bitcode to afl-cc. If afl-cc was
+    // built against a different LLVM major version than Zig bundles, the
+    // bitcode can be silently miscompiled (see conductor/plan-fuzz-llvm-bitcode-mismatch.md).
+    // Use -Dfuzz_pcguard to avoid this entirely.
     if (afl.addInstrumentedExe(b, target, optimize, null, true, obj, &.{"-lm"})) |afl_exe| {
         b.getInstallStep().dependOn(&b.addInstallFile(afl_exe, name).step);
+    }
+}
+
+/// Option T path: Zig's own LLVM compiles AND instruments (trace-pc-guard).
+/// Links AFL++'s C runtime object directly. No second LLVM reads the bitcode,
+/// so no version match is required.
+fn addFuzzBinaryPcGuard(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    afl_dir: []const u8,
+    name: []const u8,
+    src: []const u8,
+    imports: []const std.Build.Module.Import,
+    cmplog: bool,
+) void {
+    // afl.c comes from the afl_kit Zig package (fixed in cache);
+    // afl-compiler-rt.o comes from the AFL++ build (configurable via AFL_DIR).
+    const afl_kit_dep = b.lazyDependency("afl_kit", .{}) orelse @panic("afl_kit not available");
+    const afl_c_lazy = afl_kit_dep.path("afl.c");
+
+    const rt_obj_sub = b.fmt("{s}/afl-compiler-rt.o", .{afl_dir});
+    const rt_obj_lazy = std.Build.LazyPath{ .src_path = .{ .owner = b, .sub_path = rt_obj_sub } };
+
+    const main_obj = b.addObject(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(src),
+            .target = target,
+            .optimize = .ReleaseSafe,
+            .fuzz = false,
+            .imports = imports,
+        }),
+    });
+    main_obj.use_llvm = true;
+    main_obj.root_module.stack_check = false;
+    main_obj.root_module.link_libc = true;
+    main_obj.sanitize_coverage_trace_pc_guard = true;
+
+    const exe = b.addExecutable(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = .ReleaseSafe,
+            .link_libc = true,
+        }),
+    });
+    exe.addObject(main_obj);
+    exe.addCSourceFile(.{
+        .file = afl_c_lazy,
+        .flags = &.{},
+    });
+    exe.addObjectFile(rt_obj_lazy);
+    exe.linkLibC();
+    exe.linkSystemLibrary("m");
+    exe.linkSystemLibrary("dl");
+    const install = b.addInstallFile(exe.getEmittedBin(), name);
+    b.getInstallStep().dependOn(&install.step);
+
+    if (cmplog) {
+        const cmp_name = b.fmt("{s}-cmplog", .{name});
+        const cmp_obj = b.addObject(.{
+            .name = cmp_name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(src),
+                .target = target,
+                .optimize = .Debug,
+                .fuzz = true,
+                .imports = imports,
+            }),
+        });
+        cmp_obj.use_llvm = true;
+        cmp_obj.root_module.stack_check = false;
+        cmp_obj.root_module.link_libc = true;
+        cmp_obj.sanitize_coverage_trace_pc_guard = true;
+
+        const cmp_exe = b.addExecutable(.{
+            .name = cmp_name,
+            .root_module = b.createModule(.{
+                .target = target,
+                .optimize = .Debug,
+                .link_libc = true,
+            }),
+        });
+        cmp_exe.addObject(cmp_obj);
+        cmp_exe.addCSourceFile(.{
+            .file = afl_c_lazy,
+            .flags = &.{},
+        });
+        cmp_exe.addObjectFile(rt_obj_lazy);
+        cmp_exe.linkLibC();
+        cmp_exe.linkSystemLibrary("m");
+        cmp_exe.linkSystemLibrary("dl");
+        const cmp_install = b.addInstallFile(cmp_exe.getEmittedBin(), cmp_name);
+        b.getInstallStep().dependOn(&cmp_install.step);
     }
 }
 
@@ -185,8 +300,13 @@ fn setupFuzzing(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    pcguard: bool,
+    cmplog: bool,
 ) void {
     const afl = b.lazyImport(@This(), "afl_kit") orelse return;
+    // Path to AFL++ source tree (for afl.c + afl-compiler-rt.o). Overridable
+    // via -Dfuzz_afl_dir=<path>, mirroring the AFL_DIR env var in build.sh.
+    const afl_dir = b.option([]const u8, "fuzz_afl_dir", "path to AFL++ source tree (default: vendor/aflplusplus)") orelse "vendor/aflplusplus";
 
     const lib_mod = b.modules.get("zoqa").?;
 
@@ -217,30 +337,30 @@ fn setupFuzzing(
     });
 
     // zoqa-fuzz-config: INI parser + resolveHost (all 7 branches)
-    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-config", "tests/fuzz/fuzz_config.zig", &.{
+    addFuzzBinary(b, afl, target, optimize, pcguard, cmplog, afl_dir, "zoqa-fuzz-config", "tests/fuzz/fuzz_config.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },
     });
 
     // zoqa-fuzz-request: CLI arg parser + buildRequest + parseLinkHeader + JSON
-    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-request", "tests/fuzz/fuzz_request.zig", &.{
+    addFuzzBinary(b, afl, target, optimize, pcguard, cmplog, afl_dir, "zoqa-fuzz-request", "tests/fuzz/fuzz_request.zig", &.{
         .{ .name = "main", .module = main_mod },
         .{ .name = "zoqa", .module = lib_mod },
     });
 
     // zoqa-fuzz-execute: full execute pipeline: auth + retry + gzip + openQAReq
-    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-execute", "tests/fuzz/fuzz_execute.zig", &.{
+    addFuzzBinary(b, afl, target, optimize, pcguard, cmplog, afl_dir, "zoqa-fuzz-execute", "tests/fuzz/fuzz_execute.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },
     });
 
     // zoqa-fuzz-schedule: runSchedule sync + async paths and runMonitor
     // (see the corpus format in tests/fuzz/fuzz_schedule.zig).
-    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-schedule", "tests/fuzz/fuzz_schedule.zig", &.{
+    addFuzzBinary(b, afl, target, optimize, pcguard, cmplog, afl_dir, "zoqa-fuzz-schedule", "tests/fuzz/fuzz_schedule.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },
     });
 
     // zoqa-fuzz-clone-job: clone-job dependency graph algorithm
     // (see the corpus format in tests/fuzz/fuzz_clone_job.zig).
-    addFuzzBinary(b, afl, target, optimize, "zoqa-fuzz-clone-job", "tests/fuzz/fuzz_clone_job.zig", &.{
+    addFuzzBinary(b, afl, target, optimize, pcguard, cmplog, afl_dir, "zoqa-fuzz-clone-job", "tests/fuzz/fuzz_clone_job.zig", &.{
         .{ .name = "zoqa", .module = lib_mod },
     });
 }

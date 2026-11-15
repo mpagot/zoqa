@@ -3,7 +3,7 @@
 # in tests/fuzz/fuzz_clone_job.zig.
 
 # Section separator for fuzz_clone_job.zig
-"\n---\n"
+"\x0a\x2d\x2d\x2d\x0a"
 
 # JSON structural tokens
 "{"
