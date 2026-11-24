@@ -829,6 +829,156 @@ pub fn injectReproduceSettings(
 }
 
 // ---------------------------------------------------------------------------
+// Job response validation
+// ---------------------------------------------------------------------------
+
+/// Errors returned by `extractJobObject` when a job response has the wrong shape.
+pub const JobResponseError = error{
+    NotAnObject,
+    MissingJobField,
+    JobFieldNotObject,
+};
+
+/// Validate the top-level shape of a `GET /api/v1/jobs/{id}` response and
+/// return its `"job"` object.
+///
+/// Parameters:
+/// - `root`: The parsed JSON value of the response body.
+///
+/// Returns: The `job` object map, borrowed from `root`.
+///
+/// Errors:
+/// - `error.NotAnObject` when `root` is not a JSON object.
+/// - `error.MissingJobField` when `root` has no `"job"` key.
+/// - `error.JobFieldNotObject` when `"job"` is present but not an object.
+pub fn extractJobObject(root: std.json.Value) JobResponseError!std.json.ObjectMap {
+    const obj = switch (root) {
+        .object => |o| o,
+        else => return error.NotAnObject,
+    };
+    const job_val = obj.get("job") orelse return error.MissingJobField;
+    return switch (job_val) {
+        .object => |o| o,
+        else => error.JobFieldNotObject,
+    };
+}
+
+/// Append the string entries of a job's `"missing_assets"` array to `out`.
+///
+/// Each string is duplicated with `allocator`; non-string elements and a
+/// missing or non-array `"missing_assets"` value are ignored.
+///
+/// Parameters:
+/// - `allocator`: Arena allocator owning the duplicated filenames.
+/// - `job_obj`: The parsed `"job"` object map.
+/// - `out`: Destination list, appended in JSON order.
+///
+/// Errors: `OutOfMemory` if duplication or appending fails.
+pub fn collectMissingAssets(
+    allocator: std.mem.Allocator,
+    job_obj: std.json.ObjectMap,
+    out: *std.ArrayList([]const u8),
+) !void {
+    const ma_val = job_obj.get("missing_assets") orelse return;
+    const arr = switch (ma_val) {
+        .array => |a| a,
+        else => return,
+    };
+    for (arr.items) |entry| {
+        const s = switch (entry) {
+            .string => |str| str,
+            else => continue,
+        };
+        const duped = try allocator.dupe(u8, s);
+        errdefer allocator.free(duped);
+        try out.append(allocator, duped);
+    }
+}
+
+test "extractJobObject: returns job object from a valid response" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const root = try std.json.parseFromSliceLeaky(
+        std.json.Value,
+        arena.allocator(),
+        "{\"job\":{\"id\":7}}",
+        .{},
+    );
+    const job = try extractJobObject(root);
+    try std.testing.expect(job.get("id") != null);
+}
+
+test "extractJobObject: rejects non-object root" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const root = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), "[]", .{});
+    try std.testing.expectError(error.NotAnObject, extractJobObject(root));
+}
+
+test "extractJobObject: rejects missing job field" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const root = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), "{}", .{});
+    try std.testing.expectError(error.MissingJobField, extractJobObject(root));
+}
+
+test "extractJobObject: rejects non-object job field" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const root = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), "{\"job\":42}", .{});
+    try std.testing.expectError(error.JobFieldNotObject, extractJobObject(root));
+}
+
+test "collectMissingAssets: keeps strings and skips other types" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const root = try std.json.parseFromSliceLeaky(
+        std.json.Value,
+        a,
+        "{\"job\":{\"missing_assets\":[\"iso/a.iso\",7,\"hdd/b.qcow2\",null]}}",
+        .{},
+    );
+    const job = try extractJobObject(root);
+
+    var out: std.ArrayList([]const u8) = .empty;
+    try collectMissingAssets(a, job, &out);
+
+    try std.testing.expectEqual(@as(usize, 2), out.items.len);
+    try std.testing.expectEqualStrings("iso/a.iso", out.items[0]);
+    try std.testing.expectEqualStrings("hdd/b.qcow2", out.items[1]);
+}
+
+test "collectMissingAssets: absent or non-array field is a no-op" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const root = try std.json.parseFromSliceLeaky(
+        std.json.Value,
+        a,
+        "{\"job\":{\"missing_assets\":\"not-an-array\"}}",
+        .{},
+    );
+    const job = try extractJobObject(root);
+
+    var out: std.ArrayList([]const u8) = .empty;
+    try collectMissingAssets(a, job, &out);
+    try std.testing.expectEqual(@as(usize, 0), out.items.len);
+}
+
+// ---------------------------------------------------------------------------
 // Asset extraction and filtering
 // ---------------------------------------------------------------------------
 

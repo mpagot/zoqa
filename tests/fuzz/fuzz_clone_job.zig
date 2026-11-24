@@ -6,6 +6,11 @@
 //  shouldSkipUefiVarsAsset, extractJobSettings, extractDeps,
 //  findSettingValue, collectRepoUrls, DependencyWalker).
 //
+// The walk phase calls the real library orchestrator
+// (src/clone_job_walk.zig: walkDependencyGraph) with a path-keyed mock HTTP
+// client, so production walk code (BFS loop, JSON shape validation, asset and
+// missing-asset collection) is fuzzed directly rather than reimplemented.
+//
 // In addition to graph traversal and payload formatting, the harness
 // exercises the asset download pipeline (src/clone_job_main.zig: downloadAssets)
 // via zoqa.openQADownloadToFile and an in-memory FileBackend (PR #42).
@@ -22,6 +27,11 @@
 //   O6: Terminal download error triggers backend.delete() (no partial file).
 //   O7: 416 Range triggers skip-if-complete (mtime touch, 0 bytes streamed).
 //   O8: 200 OK download streams exact payload with zero byte corruption.
+//   O9: walkDependencyGraph reports error.WalkFailed (never panic/exit) on bad
+//       shapes, malformed JSON, non-2xx, or budget exhaustion.
+//   O10: every collected asset belongs to a job in the collected set.
+//   O11: missing_asset_filenames matches the fed jobs' missing_assets arrays.
+//   O12: the walk issues at most MAX_FEEDS fetches.
 //
 // ---------------------------------------------------------------------------
 // Corpus format
@@ -42,10 +52,12 @@
 //
 // Section 1: jobs (JSON array)
 //   A JSON array of job objects shaped like the "job" field of
-//   GET /api/v1/jobs/{id}. The harness answers walker item job_id with the
-//   first element whose "id" equals it; an unknown ID gets an empty object,
-//   so the walk always ends. Origin = the "id" of element 0 (default 1 when
-//   the array is empty, not an array, or element 0 has no non-negative
+//   GET /api/v1/jobs/{id}. Each element is served to the library
+//   walkDependencyGraph (through a path-keyed mock client) wrapped as
+//   {"job": <element>}. A dependency on an ID absent from the array is
+//   answered with an empty job object (or a 404 when the walk-body mode is
+//   6), so the walk always ends. Origin = the "id" of element 0 (default 1
+//   when the array is empty, not an array, or element 0 has no non-negative
 //   integer id). Invalid JSON: phases 1-4 are skipped but section 2 is
 //   still parsed, so override parsing is fuzzed even when the JSON breaks.
 //
@@ -71,7 +83,17 @@
 //               1 = 416 Range Not Satisfiable (skip-if-complete probe)
 //               2 = 404 Not Found (terminal error cleanup)
 //               3 = HTML challenge (reject_html detection & cleanup)
-//   Byte 2: repeat count = (value & 0x03) + 2 (only with bit 5). Default 2.
+//   Byte 2:
+//     bits 0-1: repeat count = (value & 0x03) + 2 (only with bit 5). Default 2.
+//     bits 2-4: walk-phase job-body shape:
+//               0 = {"job": <job obj>}  (valid)
+//               1 = {"job": 42}         (job not an object)
+//               2 = {}                  (missing job)
+//               3 = []                  (root not an object)
+//               4 = raw section 1       (malformed JSON / arbitrary root)
+//               5 = {"job": null}
+//               6 = 404 for every fetch (HTTP status gate)
+//               7 = same as 0 (reserved)
 //
 // Section 4: server JSON (optional object)
 //   {"ids":{...},"vars":{...}}
@@ -85,10 +107,11 @@
 // Safety
 // ---------------------------------------------------------------------------
 //
-// The walk is capped at MAX_FEEDS feeds per iteration (the worklist can
-// grow on adversarial graphs; next() skips collected IDs but not queued
-// duplicates). Unknown job IDs map to an empty object, so the walk always
-// ends. No disk I/O: the asset download stage uses an in-memory mock backend.
+// The walk runs the real library `walkDependencyGraph` with a mock client. A
+// per-request budget (MAX_FEEDS) makes the client return an error past the
+// limit, so adversarial graphs terminate. Unknown job IDs map to an empty
+// object (or a 404 in walk-body mode 6). No disk I/O: the asset download
+// stage uses an in-memory mock backend.
 
 const std = @import("std");
 const zoqa = @import("zoqa");
@@ -184,15 +207,6 @@ const Decoded = struct {
 };
 
 // ---------------------------------------------------------------------------
-// Walk result
-// ---------------------------------------------------------------------------
-
-const WalkResult = struct {
-    walker: clone_job.DependencyWalker,
-    assets: std.ArrayList(clone_job.AssetEntry),
-};
-
-// ---------------------------------------------------------------------------
 // Encode result
 // ---------------------------------------------------------------------------
 
@@ -262,50 +276,102 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     }
 
     // ------------------------------------------------------------------
-    // Phase 1: walk (BFS with feed cap)
+    // Phase 1: walk the dependency graph via the library orchestrator.
+    //
+    // The walk is driven by the same `walkDependencyGraph` the production
+    // executable uses; only the injected HTTP client differs. Responses are
+    // selected by exact request path, and a per-request budget bounds
+    // adversarial graphs (no production cap is introduced).
     // ------------------------------------------------------------------
-    var walk: WalkResult = undefined;
-    {
-        var walker = clone_job.DependencyWalker.init(allocator, origin, decoded.opts) catch return;
-        var all_assets: std.ArrayList(clone_job.AssetEntry) = .empty;
+    const walk_mode = walkBodyMode();
 
-        var feeds: u32 = 0;
-        while (walker.next()) |item| {
-            if (feeds >= MAX_FEEDS) break;
-            feeds += 1;
+    var path_responses: std.ArrayList(mock_client.PathResponse) = .empty;
+    defer path_responses.deinit(allocator);
+    for (jobs.items) |entry| {
+        const body = buildJobBody(allocator, entry.obj, walk_mode, decoded.jobs_json) catch return;
+        const path = std.fmt.allocPrint(allocator, "/api/v1/jobs/{d}", .{entry.id}) catch return;
+        path_responses.append(allocator, .{
+            .path = path,
+            .status = if (walk_mode == 6) .not_found else .ok,
+            .body = body,
+        }) catch return;
+    }
 
-            // Look up the job object by id; unknown IDs get an empty object.
-            var job_obj: std.json.ObjectMap = undefined;
-            var found = false;
-            for (jobs.items) |entry| {
-                if (entry.id == item.job_id) {
-                    job_obj = entry.obj;
-                    found = true;
-                    break;
+    var mock: ProgrammableMockClient = .{
+        .path_responses = path_responses.items,
+        .max_requests = MAX_FEEDS,
+    };
+    if (walk_mode == 6) {
+        // Exercise the HTTP status gate: every fetch returns 404.
+        mock.response_status = .not_found;
+        mock.response_body = "{\"error\":\"not found\"}";
+    } else {
+        // Unknown dependency IDs behave like an empty job so the walk ends
+        // (mirrors the previous hand-rolled lookup fallback).
+        mock.response_status = .ok;
+        mock.response_body = "{\"job\":{}}";
+    }
+
+    const walk = zoqa.clone_job_walk.walkDependencyGraph(
+        allocator,
+        allocator,
+        origin,
+        null,
+        .{ .retries = 0 },
+        decoded.opts,
+        false,
+        true, // quiet: suppress diagnostics from the library walker
+        false,
+        &mock,
+    ) catch |err| {
+        // ORACLE: O9 - the walker only ever reports error.WalkFailed (never a
+        // panic or process exit), and it stops after bounded fetches.
+        std.debug.assert(err == error.WalkFailed);
+        std.debug.assert(mock.request_count <= MAX_FEEDS + 1);
+        return;
+    };
+
+    // ORACLE: O12 - the fetch budget bounds the walk.
+    std.debug.assert(mock.request_count <= MAX_FEEDS);
+    // A forced-404 run (mode 6) can never succeed.
+    std.debug.assert(walk_mode != 6);
+
+    // ORACLE: O1 - collected job IDs are unique and bounded.
+    std.debug.assert(walk.walker.collected.items.len <= MAX_FEEDS);
+    for (walk.walker.collected.items, 0..) |item_a, idx| {
+        for (walk.walker.collected.items[idx + 1 ..]) |item_b| {
+            std.debug.assert(item_a.job_id != item_b.job_id);
+        }
+    }
+
+    // ORACLE: O10 - every collected asset belongs to a collected job.
+    for (walk.assets.items) |asset| {
+        var asset_owner_collected = false;
+        for (walk.walker.collected.items) |ce| {
+            if (ce.job_id == asset.job_id) {
+                asset_owner_collected = true;
+                break;
+            }
+        }
+        std.debug.assert(asset_owner_collected);
+    }
+
+    // ORACLE: O11 - missing asset filenames match the fed jobs' arrays.
+    var expected_missing: usize = 0;
+    for (walk.walker.collected.items) |ce| {
+        for (jobs.items) |je| {
+            if (je.id != ce.job_id) continue;
+            if (je.obj.get("missing_assets")) |v| {
+                if (v == .array) {
+                    for (v.array.items) |it| {
+                        if (it == .string) expected_missing += 1;
+                    }
                 }
             }
-            if (!found) {
-                job_obj = std.json.ObjectMap.init(allocator);
-            }
-
-            walker.feed(allocator, item, job_obj) catch return;
-
-            const job_assets = clone_job.extractAssets(allocator, job_obj, item.job_id) catch return;
-            for (job_assets) |asset| {
-                all_assets.append(allocator, asset) catch return;
-            }
+            break;
         }
-
-        // ORACLE: O1 - collected job IDs are unique and collected.len <= MAX_FEEDS.
-        std.debug.assert(walker.collected.items.len <= MAX_FEEDS);
-        for (walker.collected.items, 0..) |item_a, idx| {
-            for (walker.collected.items[idx + 1 ..]) |item_b| {
-                std.debug.assert(item_a.job_id != item_b.job_id);
-            }
-        }
-
-        walk = .{ .walker = walker, .assets = all_assets };
     }
+    std.debug.assert(walk.missing_asset_filenames.items.len == expected_missing);
 
     // ------------------------------------------------------------------
     // --reproduce: inject vars.json settings (bit 4, vars present)
@@ -511,6 +577,11 @@ fn repeatCount() u32 {
     return (g_control[2] & 0x03) + 2;
 }
 
+/// Walk-phase job-body shape selector (control byte 2, bits 2-4).
+fn walkBodyMode() u3 {
+    return @intCast((g_control[2] >> 2) & 0x07);
+}
+
 // ---------------------------------------------------------------------------
 // decode - section splitting, override parsing, control bytes
 // ---------------------------------------------------------------------------
@@ -685,4 +756,39 @@ fn getVarsObject(server_json: []const u8, allocator: std.mem.Allocator) ?std.jso
         .object => |o| o,
         else => null,
     };
+}
+
+// ---------------------------------------------------------------------------
+// Walk-phase job body construction
+// ---------------------------------------------------------------------------
+
+/// Build the HTTP body returned for a known job, selected by `mode`.
+///
+/// Modes 0/6/7 produce a well-formed `{"job": <obj>}` wrapper; 1-5 inject a
+/// malformed or wrong-shaped body to exercise `walkDependencyGraph`'s
+/// validation branches.
+fn buildJobBody(
+    allocator: std.mem.Allocator,
+    obj: std.json.ObjectMap,
+    mode: u3,
+    raw_section1: []const u8,
+) ![]const u8 {
+    return switch (mode) {
+        1 => allocator.dupe(u8, "{\"job\":42}"),
+        2 => allocator.dupe(u8, "{}"),
+        3 => allocator.dupe(u8, "[]"),
+        4 => allocator.dupe(u8, raw_section1),
+        5 => allocator.dupe(u8, "{\"job\":null}"),
+        else => wrapJobObject(allocator, obj),
+    };
+}
+
+/// Serialize `{"job": <object>}` as a UTF-8 JSON body.
+fn wrapJobObject(allocator: std.mem.Allocator, obj: std.json.ObjectMap) ![]const u8 {
+    var aw = std.Io.Writer.Allocating.init(allocator);
+    defer aw.deinit();
+    try aw.writer.writeAll("{\"job\":");
+    try std.json.Stringify.value(std.json.Value{ .object = obj }, .{}, &aw.writer);
+    try aw.writer.writeAll("}");
+    return aw.toOwnedSlice();
 }

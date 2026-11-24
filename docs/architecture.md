@@ -28,7 +28,9 @@ harnesses without modification.
 **Services exposed:**
 
 - `openQAReq(host, path, opts, client)`: authenticated HTTP request to openQA.
-- Workflow orchestrators: `runArchive`, `runMonitor`, `runSchedule`.
+- Workflow orchestrators: `runArchive`, `runMonitor`, `runSchedule`, and
+  `clone_job_walk.walkDependencyGraph` (clone-job Pass 1 BFS), all taking an
+  injected `client: anytype`.
 - Pure utilities: credential lookup (`config.findCredentials`), host resolution
   (`config.resolveHost`), credential merge (`config.mergeCredentials`), auth
   headers (`auth.buildAuthHeaders`), URL encoding (`url.formEncodeAppend`),
@@ -72,9 +74,10 @@ Each executable owns:
 - Executables import `zoqa` (library), `arg_match`, and `cli_env`.
 - Business logic is implemented in the library; executables are thin orchestration shells.
 - Each executable may define its own named helper functions for multi-phase
-  workflows (e.g., `walkDependencyGraph` drives the library's `DependencyWalker`
-  with HTTP I/O and `process.exit` error handling) that are too I/O-heavy or
-  tool-specific for the library.
+  workflows that are too tool-specific for the library (e.g. argument
+  interpretation, credentials resolution, exit-code mapping). I/O-heavy
+  orchestration shared by tests and frontends lives in the library behind an
+  injected `client`, not in the executable.
 
 ---
 
@@ -103,8 +106,10 @@ Each executable owns:
 
 7. **Reusable graph traversal.** The `DependencyWalker` in `clone_job.zig` is a
    pull-based BFS iterator that separates traversal logic (cycle detection,
-   depth tracking, dependency filtering) from I/O. Any frontend (CLI, GUI,
-   test harness) drives the same walker by calling `next()` → fetch → `feed()`.
+   depth tracking, dependency filtering) from I/O. The default driver is
+   `clone_job_walk.walkDependencyGraph` (library, with `client: anytype`), used
+   by the CLI and the fuzz harness alike. A frontend that needs different control
+   flow can still drive the walker directly via `next()` → fetch → `feed()`.
 
 ---
 
@@ -113,6 +118,7 @@ Each executable owns:
 ```
 build.zig:
   lib_mod (zoqa)        -> src/root.zig              [library: UX-agnostic]
+    imports             -> src/clone_job_walk.zig    [library Pass 1 walker]
   arg_match_mod         -> src/arg_match.zig         [CLI parsing primitives]
   cli_env_mod           -> src/cli_env.zig           [CLI env/credential resolution]
   exe (zoqa)            -> src/main.zig              [imports: zoqa, arg_match, cli_env]
@@ -131,6 +137,9 @@ cli_env.zig          <- imports zoqa (for config + url)
       v
 main.zig ----------> zoqa (root.zig)
 clone_job_main.zig -> zoqa (root.zig)
+
+inside the library:
+clone_job_walk.zig <- clone_job.zig, config.zig, http_client.zig
 ```
 
 The library (`root.zig`) has no knowledge of `arg_match` or `cli_env`.

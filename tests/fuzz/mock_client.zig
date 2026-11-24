@@ -40,6 +40,16 @@
 
 const std = @import("std");
 
+/// One canned response selected by exact request path.
+pub const PathResponse = struct {
+    /// Exact request path without query, e.g. "/api/v1/jobs/42".
+    path: []const u8,
+    status: std.http.Status = .ok,
+    body: []const u8 = "{}",
+    content_type: ?[]const u8 = "application/json",
+    content_length: ?u64 = null,
+};
+
 pub const ProgrammableMockClient = struct {
     const Self = @This();
 
@@ -157,15 +167,49 @@ pub const ProgrammableMockClient = struct {
     next_bodies: ?[]const []const u8 = null,
     next_statuses: ?[]const std.http.Status = null,
 
+    // Path-aware mode: when non-null, a request whose URI path exactly equals
+    // an entry's `path` gets that entry's status/body. Unmatched requests fall
+    // back to the single/scripted response below.
+    path_responses: ?[]const PathResponse = null,
+
+    // Hard cap on request() calls. Once exceeded, request() returns
+    // error.FuzzBudgetExhausted so a harness can bound adversarial walks.
+    max_requests: ?usize = null,
+    request_count: usize = 0,
+
     // Internal state - reset by each call to request().
     attempt: usize = 0,
     scripted_index: usize = 0,
     response: MockResponse = undefined,
 
-    pub fn request(self: *Self, _: std.http.Method, _: std.Uri, _: anytype) !*MockResponse {
+    pub fn request(self: *Self, _: std.http.Method, uri: std.Uri, _: anytype) !*MockResponse {
+        self.request_count += 1;
+        if (self.max_requests) |max| {
+            if (self.request_count > max) return error.FuzzBudgetExhausted;
+        }
+
         if (self.attempt < self.fail_attempts) {
             self.attempt += 1;
             return error.ConnectionRefused;
+        }
+
+        // Path-aware mode takes precedence over the single/scripted selection.
+        if (self.path_responses) |prs| {
+            const path = uri.path.percent_encoded;
+            for (prs) |pr| {
+                if (std.mem.eql(u8, path, pr.path)) {
+                    self.response = .{
+                        .head = .{
+                            .status = pr.status,
+                            .use_gzip = false,
+                            .content_type = pr.content_type,
+                            .content_length = pr.content_length,
+                        },
+                        .mock_reader = .{ .body = pr.body },
+                    };
+                    return &self.response;
+                }
+            }
         }
         // Do not increment self.attempt further once it has reached fail_attempts.
         // This avoids any integer overflow in infinite loops while ensuring all

@@ -153,6 +153,10 @@ pub const runMonitor = monitor.runMonitor;
 pub const ScheduleOptions = schedule.ScheduleOptions;
 pub const runSchedule = schedule.runSchedule;
 
+pub const clone_job_walk = @import("clone_job_walk.zig");
+pub const WalkResult = clone_job_walk.WalkResult;
+pub const walkDependencyGraph = clone_job_walk.walkDependencyGraph;
+
 test "parseLinkHeader: multiple relations in header order" {
     const header = "</api/v1/jobs?offset=0>; rel=\"first\", </api/v1/jobs?offset=10>; rel=\"next\"";
     var it = parseLinkHeader(header);
@@ -254,4 +258,5 @@ test {
     _ = @import("monitor.zig");
     _ = @import("schedule.zig");
     _ = @import("archive.zig");
+    _ = @import("clone_job_walk.zig");
 }
