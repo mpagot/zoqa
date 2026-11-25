@@ -156,6 +156,36 @@ if [[ -n "$_m17_zig_new_id" ]]; then
 fi
 
 # =============================================================================
+# Section: --host vs --from disambiguation (CLO-132)
+#
+# --host is the DESTINATION (default: localhost); --from is the SOURCE.
+# Passing --from alone must still clone onto the default destination.
+# =============================================================================
+
+# CLO-132: Omitting --host falls back to the default DESTINATION (localhost).
+# --from selects the SOURCE; without --host the clone is created on localhost.
+# This documents the reference behaviour that makes "--from REMOTE 42" alone
+# post the clone to localhost, and locks in the default-destination contract.
+echo "--- Test CLO-132: --from only -> default destination is localhost ---"
+tag="clo-132"
+run_clone_both "$tag" \
+	"--from http://localhost --skip-download $JOB_ID"
+assert_capture_exits "$tag" 0
+assert_stdout_pattern "$tag" 'http://localhost/tests/[0-9]+'
+
+# Drain the clones this test queued (single worker) before continuing.
+_clo132_perl_new_id=$(grep -oP '(?<=tests/)\d+' "$LOG_DIR/${tag}_perl_stdout.log" | head -1) || true
+if [[ -n "$_clo132_perl_new_id" ]]; then
+	wait_for_job "$_clo132_perl_new_id" 300 >/dev/null ||
+		echo "  WARNING: timeout waiting for Perl CLO-132 clone"
+fi
+_clo132_zig_new_id=$(grep -oP '(?<=tests/)\d+' "$LOG_DIR/${tag}_zig_stdout.log" | head -1) || true
+if [[ -n "$_clo132_zig_new_id" ]]; then
+	wait_for_job "$_clo132_zig_new_id" 300 >/dev/null ||
+		echo "  WARNING: timeout waiting for Zig CLO-132 clone"
+fi
+
+# =============================================================================
 # Section M-Host: Host Resolution Tests (M43–M44)
 #
 # Validates that zoqa-clone-job uses different host resolution rules from zoqa api:

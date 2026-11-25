@@ -18,8 +18,8 @@ of the harness and how to run it, see [README.md](README.md).
 | `tests_help.sh` | I | Help output structure and stream routing | HEL-1–HEL-8 |
 | `tests_monitor.sh` | I | Monitor subcommand | MON-1–MON-51 |
 | `tests_schedule.sh` | J | Schedule subcommand | SCH-1–SCH-RK-3 |
-| `tests_clone_smoke.sh` | K | Clone-job: smoke (--help, no-args, bare integer) | CLO-1–CLO-11 |
-| `tests_clone_single.sh` | K | Clone-job: single-job flags (--reproduce, --repeat, assets, --check-repos, …) | CLO-12–CLO-89, CLO-98–CLO-108, CLO-115–CLO-126, CLO-RK-1 |
+| `tests_clone_smoke.sh` | K | Clone-job: smoke (--help, no-args, bare integer, --host/--from) | CLO-1–CLO-11, CLO-130, CLO-131, CLO-133 |
+| `tests_clone_single.sh` | K | Clone-job: single-job flags (--reproduce, --repeat, assets, --check-repos, …) | CLO-12–CLO-89, CLO-98–CLO-108, CLO-115–CLO-126, CLO-132, CLO-RK-1 |
 | `tests_clone_topology.sh` | K | Clone-job: graph topologies (chained, fan-out, diamond, parallel) | CLO-20–M42 |
 | `tests_clone_maxdepth.sh` | K | Clone-job: --max-depth traversal limits | CLO-90–CLO-97 |
 | `tests_clone_uefi.sh` | K | Clone-job: UEFI vars asset filtering | CLO-110–CLO-112 |
@@ -251,6 +251,10 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-15 | BUILD override | `BUILD=e2e-clone-override` reflected in cloned job settings. |
 | CLO-16 | Non-existent job | Cloning job 999999 exits non-zero. |
 | CLO-17 | --from --host --skip-download | Long-form flag equivalent of `--within-instance` exits 0. |
+| CLO-130 | --host with bare integer, no --from | `--host` sets the destination only; with a bare-integer JOBREF and no `--from`/URL source, both tools exit non-zero (missing source host). No network. |
+| CLO-131 | Job id embedded in --host URL | A `/tN` or `/tests/N` path inside the `--host` value is not a JOBREF; with no positional JOBREF both tools exit non-zero. No network. |
+| CLO-132 | --from only → default destination localhost | Omitting `--host` falls back to the default destination (`localhost`); `--from http://localhost <id>` clones successfully and the stdout URL points at `http://localhost/tests/N`. |
+| CLO-133 | Missing-source-host error names --from | Zig's "cannot determine source host" diagnostic mentions `source host` and `--from`, making the `--host` vs `--from` distinction clear. |
 | CLO-20 | Chained child clones both | Default clone of chained child creates parent + child (2 jobs). |
 | CLO-21 | Cloned parent CLONED_FROM | Correct `CLONED_FROM` on the cloned parent job. |
 | CLO-22 | Child points to cloned parent | `_START_AFTER` dependency links to the new parent, not the original. |

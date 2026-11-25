@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# test_clone_smoke.sh - CLO-1 to CLO-11: pure-CLI smoke tests.
+# test_clone_smoke.sh - CLO-1 to CLO-11, CLO-130 to CLO-133: pure-CLI smoke tests.
 #
 # Tests --help, no-args, and bare-integer invocations.  No container or API
 # access required - these run against the binary on PATH only.
@@ -15,7 +15,7 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_topology.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-echo "==> [clone_job/smoke] Running clone-job smoke tests (CLO-1 to CLO-11)..."
+echo "==> [clone_job/smoke] Running clone-job smoke tests (CLO-1 to CLO-11, CLO-130 to CLO-133)..."
 
 # Local binary handles - different from the global PERL_EXE/ZIG_EXE which
 # point at openqa-cli / zoqa.
@@ -77,3 +77,67 @@ run_test "PERL: bare integer without --from writes to stdout (pod2usage quirk)" 
 	"bash -c \"$PERL_CLONE_EXE 42 > /tmp/out 2> /tmp/err; test -s /tmp/out && ! test -s /tmp/err\"" 0
 run_test "ZIG : bare integer without --from writes to stderr" \
 	"bash -c \"$ZIG_CLONE_EXE 42 > /tmp/out 2> /tmp/err; test -s /tmp/err && ! test -s /tmp/out\"" 0
+
+# =============================================================================
+# Section: --host vs --from disambiguation (CLO-130, CLO-131, CLO-133)
+#
+# openqa-clone-job has two distinct host options:
+#   --host  = DESTINATION instance (where the clone is created; default localhost)
+#   --from  = SOURCE instance (where the job and its assets are read)
+#
+# A full URL in JOBREF (HOST/tN or HOST/tests/N) also sets the source. Passing a
+# host to --host does NOT set the source, and a job ID embedded in a --host URL
+# is NOT treated as the JOBREF. Every case below fails during argument/JOBREF
+# resolution, so no network access is required.
+# =============================================================================
+
+# CLO-130: --host sets only the destination. With a bare-integer JOBREF and no
+# --from (or URL JOBREF), neither tool can determine the SOURCE host, so both
+# must exit non-zero before any HTTP call.
+echo "--- Test CLO-130: --host + bare integer, no --from -> missing source host ---"
+tag="clo-130"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --host http://openqaworker15.invalid 400808" \
+	"$ZIG_CLONE_EXE --host http://openqaworker15.invalid 400808"
+if [[ "$_PERL_EXIT" -ne 0 ]]; then
+	echo "PASS: CLO-130 Perl exits non-zero without a source host (got $_PERL_EXIT)"
+else
+	echo "FAIL: CLO-130 Perl exited 0 (expected non-zero)"
+	cat "$LOG_DIR/${tag}_perl_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+	echo "PASS: CLO-130 Zig exits non-zero without a source host (got $_ZIG_EXIT)"
+else
+	echo "FAIL: CLO-130 Zig exited 0 (expected non-zero)"
+	cat "$LOG_DIR/${tag}_zig_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# CLO-131: A job ID embedded in the --host URL is NOT a JOBREF. With no
+# positional JOBREF and no --from, both tools must fail (missing job reference).
+echo "--- Test CLO-131: job id embedded in --host URL is not a JOBREF ---"
+tag="clo-131"
+run_capture_both "$tag" \
+	"$PERL_CLONE_EXE --host http://openqaworker15.invalid/tests/400808" \
+	"$ZIG_CLONE_EXE --host http://openqaworker15.invalid/tests/400808"
+if [[ "$_PERL_EXIT" -ne 0 ]]; then
+	echo "PASS: CLO-131 Perl exits non-zero without a JOBREF (got $_PERL_EXIT)"
+else
+	echo "FAIL: CLO-131 Perl exited 0 (expected non-zero)"
+	cat "$LOG_DIR/${tag}_perl_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+if [[ "$_ZIG_EXIT" -ne 0 ]]; then
+	echo "PASS: CLO-131 Zig exits non-zero without a JOBREF (got $_ZIG_EXIT)"
+else
+	echo "FAIL: CLO-131 Zig exited 0 (expected non-zero)"
+	cat "$LOG_DIR/${tag}_zig_stderr.log"
+	failed_tests=$((failed_tests + 1))
+fi
+
+# CLO-133: The Zig missing-source-host diagnostic must name the distinction,
+# pointing the user at --from / a full URL. Reuses the CLO-130 Zig stderr log.
+echo "--- Test CLO-133: missing-source-host error points at --from / full URL ---"
+assert_impl_log_pattern "clo-130" zig stderr "source host.*--from" \
+	"CLO-133 Zig error mentions 'source host' and '--from'"
