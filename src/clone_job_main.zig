@@ -455,9 +455,14 @@ const CloneArgs = struct {
     repeat: ?u32 = null,
     retry: ?u32 = null,
 
-    // Positional: JOBREF and KEY=[VALUE] overrides
-    // All slices borrow directly from argv, no copies are made during parsing.
-    positionals: std.ArrayList([]const u8),
+    // Positional: JOBREF and KEY=[VALUE] overrides.
+    // All string slices borrow directly from argv (no copies are made during parsing),
+    // making `positionals` the only dynamically allocated field in `CloneArgs`.
+    // While an arena allocator at the CLI boundary could free this in bulk,
+    // `deinit()` is intentionally retained so callers using non-arena allocators
+    // (such as `std.testing.allocator` in unit tests) can clean up and detect leaks
+    // without requiring per-test arena scaffolding.
+    positionals: std.ArrayList([]const u8) = .empty,
 
     pub fn deinit(self: *CloneArgs, allocator: std.mem.Allocator) void {
         self.positionals.deinit(allocator);
@@ -478,9 +483,7 @@ const CloneArgs = struct {
 ///   - `error.UnknownFlag` : unrecognised flag.
 ///   - `error.InvalidNumber` : a numeric flag has a non-numeric value.
 fn parseCloneArgs(allocator: std.mem.Allocator, argv: []const []const u8) !CloneArgs {
-    var args = CloneArgs{
-        .positionals = .empty,
-    };
+    var args: CloneArgs = .{};
 
     var i: usize = 1; // skip argv[0] = program name
     while (i < argv.len) : (i += 1) {
@@ -644,155 +647,6 @@ fn printStderr(comptime fmt: []const u8, args_fmt: anytype) void {
     var w = std.fs.File.stderr().writer(&buf);
     w.interface.print(fmt, args_fmt) catch {};
     w.interface.flush() catch {};
-}
-
-// ---------------------------------------------------------------------------
-// BFS dependency graph walk
-// ---------------------------------------------------------------------------
-
-/// Walk the dependency graph starting from the origin job, fetching each
-/// reachable job from the source instance and recording its settings and deps.
-///
-/// Returns the walker with collected entries (owned by `arena_alloc`).
-/// Calls `std.process.exit(1)` on any fatal error (this is an exe-layer helper).
-const WalkResult = struct {
-    walker: zoqa.clone_job.DependencyWalker,
-    assets: std.ArrayList(zoqa.clone_job.AssetEntry),
-    missing_asset_filenames: std.ArrayList([]const u8),
-};
-
-/// Perform a BFS walk of the job dependency graph from the origin job.
-///
-/// Fetches each reachable job from the source instance, records settings and
-/// dependency information, extracts asset references, and collects any
-/// server-reported missing asset filenames (when `check_assets=1` is sent).
-///
-/// Parameters:
-/// - `gpa`: General-purpose allocator for transient allocations (freed per-iteration).
-/// - `arena_alloc`: Arena allocator for long-lived data (walker entries, assets).
-/// - `resolved`: Resolved job reference containing `from_url` and `job_id`.
-/// - `from_creds`: Optional API credentials for the source instance.
-/// - `retry_cfg`: Retry/timeout configuration for HTTP requests.
-/// - `clone_opts`: Clone behavior flags (skip_deps, clone_children, etc.).
-/// - `verbose`: When `true`, enables verbose HTTP request output.
-/// - `ignore_missing_assets`: When `true`, suppresses the `?check_assets=1` query.
-/// - `client`: HTTP client instance (shared across requests).
-///
-/// Returns: A `WalkResult` containing the walker state, collected assets, and
-///   any missing asset filenames reported by the server.
-fn walkDependencyGraph(
-    gpa: std.mem.Allocator,
-    arena_alloc: std.mem.Allocator,
-    resolved: anytype,
-    from_creds: ?zoqa.config.Credentials,
-    retry_cfg: cli_env.RetryConfig,
-    clone_opts: zoqa.clone_job.CloneOptions,
-    verbose: bool,
-    ignore_missing_assets: bool,
-    client: *std.http.Client,
-) WalkResult {
-    var walker = zoqa.clone_job.DependencyWalker.init(arena_alloc, resolved.job_id, clone_opts) catch |err| {
-        printStderr("Error: walker init failed: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-    var all_assets: std.ArrayList(zoqa.clone_job.AssetEntry) = .empty;
-    var all_missing_assets: std.ArrayList([]const u8) = .empty;
-
-    // Fetch job from source instance; add check_assets=1 unless suppressed
-    const check_assets_qs: []const u8 = if (!ignore_missing_assets) "?check_assets=1" else "";
-
-    while (walker.next()) |item| {
-        const job_path = std.fmt.allocPrint(gpa, "jobs/{d}{s}", .{ item.job_id, check_assets_qs }) catch |err| {
-            printStderr("Error: allocPrint failed: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-        defer gpa.free(job_path);
-
-        const get_resp = zoqa.openQAReq(resolved.from_url, job_path, .{
-            .allocator = gpa,
-            .method = .GET,
-            .credentials = from_creds,
-            .retries = retry_cfg.retries,
-            .connect_timeout_s = retry_cfg.connect_timeout_s,
-            .retry_sleep_s = retry_cfg.retry_sleep_s,
-            .retry_factor = retry_cfg.retry_factor,
-            .quiet = !verbose,
-        }, client) catch |err| {
-            printStderr("Error: GET job {d} failed: {s}\n", .{ item.job_id, @errorName(err) });
-            std.process.exit(1);
-        };
-        defer get_resp.deinit();
-
-        if (get_resp.exitCode() != 0) {
-            printStderr("Error: failed to get job '{d}': {d}\n", .{
-                item.job_id, @intFromEnum(get_resp.status),
-            });
-            std.process.exit(1);
-        }
-
-        // Parse job response
-        const get_parsed = std.json.parseFromSlice(std.json.Value, gpa, get_resp.body, .{}) catch |err| {
-            printStderr("Error: failed to parse job {d} response: {s}\n", .{ item.job_id, @errorName(err) });
-            std.process.exit(1);
-        };
-        defer get_parsed.deinit();
-
-        const job_val = get_parsed.value.object.get("job") orelse {
-            printStderr("Error: response for job {d} missing 'job' field\n", .{item.job_id});
-            std.process.exit(1);
-        };
-        const job_obj = switch (job_val) {
-            .object => |o| o,
-            else => {
-                printStderr("Error: 'job' field is not an object for job {d}\n", .{item.job_id});
-                std.process.exit(1);
-            },
-        };
-
-        // Feed parsed job to walker (extracts settings, deps, enqueues children)
-        walker.feed(arena_alloc, item, job_obj) catch |err| {
-            printStderr("Error: walker feed failed for job {d}: {s}\n", .{ item.job_id, @errorName(err) });
-            std.process.exit(1);
-        };
-
-        // Extract assets from this job
-        const job_assets = zoqa.clone_job.extractAssets(arena_alloc, job_obj, item.job_id) catch |err| {
-            printStderr("Error: extractAssets failed for job {d}: {s}\n", .{ item.job_id, @errorName(err) });
-            std.process.exit(1);
-        };
-        for (job_assets) |asset| {
-            all_assets.append(arena_alloc, asset) catch |err| {
-                printStderr("Error: asset append failed: {s}\n", .{@errorName(err)});
-                std.process.exit(1);
-            };
-        }
-
-        // Collect server-reported missing_assets (populated when check_assets=1 was sent)
-        if (job_obj.get("missing_assets")) |ma_val| {
-            switch (ma_val) {
-                .array => |arr| {
-                    for (arr.items) |entry| {
-                        switch (entry) {
-                            .string => |s| {
-                                const duped = arena_alloc.dupe(u8, s) catch |err| {
-                                    printStderr("Error: dupe failed: {s}\n", .{@errorName(err)});
-                                    std.process.exit(1);
-                                };
-                                all_missing_assets.append(arena_alloc, duped) catch |err| {
-                                    printStderr("Error: missing_assets append failed: {s}\n", .{@errorName(err)});
-                                    std.process.exit(1);
-                                };
-                            },
-                            else => {},
-                        }
-                    }
-                },
-                else => {},
-            }
-        }
-    }
-
-    return .{ .walker = walker, .assets = all_assets, .missing_asset_filenames = all_missing_assets };
 }
 
 /// Encode inter-job dependencies (filtering to only collected IDs) and apply
@@ -1485,17 +1339,25 @@ pub fn main() !void {
     };
 
     // Walk dependency graph, fetch all reachable jobs.
-    const walk_result = walkDependencyGraph(
+    const walk_result = zoqa.clone_job_walk.walkDependencyGraph(
         gpa,
         arena_alloc,
-        &resolved,
+        resolved.job_id,
         from_creds,
-        retry_cfg,
+        .{
+            .retries = retry_cfg.retries,
+            .connect_timeout_s = retry_cfg.connect_timeout_s,
+            .retry_sleep_s = retry_cfg.retry_sleep_s,
+            .retry_factor = retry_cfg.retry_factor,
+        },
         clone_opts,
         args.verbose,
+        false, // clone-job has no --quiet: keep BFS error diagnostics always on
         args.ignore_missing_assets,
         &client,
-    );
+    ) catch {
+        std.process.exit(1);
+    };
 
     // --reproduce fetch vars.json and inject versioning settings.
     if (args.reproduce) {
@@ -1698,6 +1560,13 @@ pub fn main() !void {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+test "CloneArgs: default initialization" {
+    const args: CloneArgs = .{};
+    try std.testing.expectEqual(@as(usize, 0), args.positionals.items.len);
+    try std.testing.expect(args.host == null);
+    try std.testing.expect(!args.skip_deps);
+}
 
 test "parseCloneArgs: --help returns help flag" {
     const allocator = std.testing.allocator;
