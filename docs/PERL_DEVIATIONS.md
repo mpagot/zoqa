@@ -12,7 +12,7 @@ so it can be re-verified.
 is the behavioral oracle for *user-visible behavior only*; internal
 architecture is free to improve. The deviations below fall into two buckets:
 
-- **Deliberate divergence**: an intentional, documented, and tested departure,
+- **Deliberate deviation**: an intentional, documented, and tested departure,
   usually because the Perl behavior is a bug or a footgun.
 - **Accepted / cosmetic**: output-format differences that are structurally
   equivalent and not necessary to match byte-for-byte.
@@ -34,13 +34,13 @@ scheme, matching Perl.
 
 ## `zoqa api` (vs `openqa-cli api`)
 
-### Body on a bodiless method: **deliberate divergence**
+### Body on a bodiless method: **deliberate deviation**
 - **Perl:** silently sends a body on a `GET` (e.g. `--data-file` without `-X POST`); the server ignores it and Perl exits `0`.
 - **Zig:** rejects the request up front with `error.BodyOnBodilessMethod`, non-zero exit, stderr message: `Error: a request body was provided for GET, which does not allow a body (use -X POST/PUT/PATCH)`.
 - **Why:** Perl's behavior is a footgun (silently discarded body ≈ a forgotten `-X POST`), and Zig's `std.http.Client` would otherwise *assert*/panic (SIGABRT / exit 134) when sending a body on GET. The guard runs once before the retry loop.
 - **Source:** `src/http_client.zig:259`; e2e ROB-8 (`tests_robustness.sh:200`).
 
-### `--data-file` / stdin size cap: **deliberate divergence**
+### `--data-file` / stdin size cap: **deliberate deviation**
 - **Perl:** no size limit; reads the whole file regardless of size.
 - **Zig:** hard **10 MiB cap**; an oversized file is rejected with a non-zero exit before the request is built (memory-safety bound: body read into a single allocation).
 - **Source:** e2e ROB-7 (`tests_robustness.sh:168`); TEST_CATALOG ROB-7.
@@ -86,33 +86,33 @@ scheme, matching Perl.
 - **`zoqa-clone-job`:** `--retry` (default `5`) applies uniformly to **all** HTTP operations: BFS GETs, POST to destination, and asset downloads. `OPENQA_CLI_RETRIES` fallback is bypassed. Exponential backoff (base 3 s, factor 2 → 3 s, 6 s, 12 s, 24 s, 48 s) is the effective default, matching Perl's `OPENQA_CLI_RETRY_FACTOR //= 2`.
 - **Source:** e2e CLO-84…CLO-89.
 
-### Exit code on download failure: **deliberate divergence**
+### Exit code on download failure: **deliberate deviation**
 - **Perl:** invokes `curl` without `--fail`, so curl exits `0` on 404/503; the `mirror()` error check is a no-op. **The process exits `0` even when every asset download failed** (upstream bug).
 - **Zig:** exits `1` immediately on HTTP 404 (no retry), exits `1` after exhausting `--retry` on transient errors, and only exits `0` if all assets downloaded (or were skipped via `--ignore-missing-assets`).
 - **Source:** e2e CLO-86 (404), CLO-88 (`--retry 0`), GAT-26; the suite explicitly accepts Perl's buggy exit-0 without failing (`tests_clone_single.sh:1129`); TEST_CATALOG CLO-86/CLO-88/GAT-26.
 
-### HTML/bot-challenge page on asset download: **deliberate divergence**
+### HTML/bot-challenge page on asset download: **deliberate deviation**
 - **Perl:** saves the HTML challenge page as the asset file and exits `0` (footgun: leaves corrupt/invalid asset files on disk).
 - **Zig:** detects `text/html` on a `.ok` asset response, rejects it as a permanent terminal error (`error.UnexpectedHtmlResponse`), makes no retries, deletes any partial file, and exits `1` with a clear diagnostic message: `Error: asset download failed for '<name>': server returned an HTML page instead of the asset (bot challenge?)`.
 - **Exception:** assets explicitly named `*.htm` or `*.html` (case-insensitive) are exempted from HTML rejection so legitimate HTML assets are not blocked (GAT-42). Note that for an `.htm`/`.html` asset, a bot challenge page is saved silently (known gap tracked by GAT-43).
 - **Source:** e2e GAT-22, GAT-41, GAT-42, GAT-43; SPEC §18.18.5; TEST_CATALOG GAT-22/GAT-41.
 
-### `Retry-After` cap: **deliberate divergence**
+### `Retry-After` cap: **deliberate deviation**
 - **Perl:** honors any `Retry-After` header value verbatim, uncapped.
 - **Zig:** clamps a parsed, server-supplied integer `Retry-After` value to `RETRY_AFTER_CAP_S = 60` seconds (rationale: UX: an unbounded header value would hang the CLI indefinitely; capping at 60s ensures zoqa retries safely). Unparsable or non-integer values (such as HTTP dates) are ignored and fall back to computed exponential backoff.
 - **Source:** unit tests (`retryDelayNs` override cap).
 
-### Mid-transfer TCP drop / short-read validation: **deliberate divergence**
+### Mid-transfer TCP drop / short-read validation: **deliberate deviation**
 - **Perl:** on a length-bearing TCP drop, curl detects `CURLE_PARTIAL_FILE` (18) but **does not retry** it (curl's `--retry` excludes error 18), so the clone fails immediately even when retries are configured. On a *length-less* response it interprets the reset as clean EOF, exits `0`, and leaves a corrupt truncated file.
 - **Zig:** strictly compares bytes-streamed against `Content-Length`; a short read raises `error.HttpTransferTruncated`, treated as a **transient** error → exponential-backoff retry up to the limit. Partial files are deleted between attempts (no concatenation). Net effect: **Zig self-heals and completes where Perl fails.** (Length-less responses currently still mirror curl's silent truncation: Gap 8b.)
 - **Source:** e2e CLO-98 (Perl fails), CLO-99 (Zig); `tests_clone_single.sh:1426`.
 
-### UEFI vars asset on skipped parents: **deliberate divergence**
+### UEFI vars asset on skipped parents: **deliberate deviation**
 - **Perl:** with `--skip-deps`, parent details aren't fetched, so its filter concludes no parent publishes the `UEFI_PFLASH_VARS` asset and **skips downloading it** → the cloned child lands in a broken, unrunnable state (asset missing, parent not regenerated).
 - **Zig:** if a `UEFI_PFLASH_VARS` asset is requested and parent enqueuing was skipped (via `--skip-deps`/`--skip-chained-deps`) while parent deps exist, Zig **downloads** the asset from the source, keeping the cloned child runnable.
 - **Source:** e2e CLO-110 (`tests_clone_uefi.sh`), CLO-112.
 
-### Error exit codes collapsed to `1`: **deliberate divergence (Gap 7)**
+### Error exit codes collapsed to `1`: **deliberate deviation (Gap 7)**
 - **Perl:** unhandled errors, invalid arguments, or `die` (e.g. from `Getopt::Long` / `pod2usage`) yield exit `255`.
 - **Zig (clone-job Tier A):** all error conditions (including argument parsing and job-ref resolution errors) collapse to `1`. Perl's `255` is not modelled per spec.
 - **Verification:** verified side-by-side via E2E tests `CLO-105` to `CLO-108`.
@@ -127,7 +127,7 @@ scheme, matching Perl.
 - The on/off semantics are identical: no flag = silent, flag = meter on stderr.
 - **Source:** E2E tests CLO-121..125.
 
-### Skip-if-complete probe order: **deliberate divergence**
+### Existing-asset probe order: **deliberate deviation**
 - **Perl:** uses `curl -C -` (resume mode), which opens the destination file for
   writing *before* querying the server. If the file is already complete, the
   server returns HTTP 416 and curl closes the file untouched. However, the
@@ -144,7 +144,7 @@ scheme, matching Perl.
 - **Source:** `src/http_client.zig` (`isRemoteComplete`, `openQADownloadToFile`);
   e2e CLO-75 (`tests_clone_single.sh`).
 
-### Asset download request count: HEAD redirect-resolution probe (accepted)
+### Asset download request count: same total, different composition (accepted)
 - **Perl:** issues **two** HTTP requests per asset: a `HEAD`
   (`curl --head --location -w %{url_effective}`, `_resolve_redirection`,
   CloneJob.pm:196-198) to resolve the final URL after following redirects,
@@ -153,16 +153,21 @@ scheme, matching Perl.
   shell-out-to-curl architecture: it needs the final URL as a string to
   compose the second curl command line. Both requests carry auth headers
   and are subject to `--retry`.
-- **Zig:** follows redirects in-process and issues a **single** ranged GET
-  per asset. No separate HEAD is needed. Redirects are handled by zoqa, not
-  by `std.http.Client` (see the next section).
-- **Net effect:** the downloaded file is byte-identical (same MD5); the
-  difference is request count only (Perl: 2, Zig: 1 per asset). This is
-  observable in rate-limit / fault-proxy testing (e.g. GAT-26: Perl gets
-  2 hits on the fault path, Zig gets 1) but is not a behavioral
-  divergence; the user-visible result (the file on disk) is the same.
-- **Source:** `CloneJob.pm:196-204`; SPEC §18.18 step 4 note; e2e GAT-26
-  (`tests_gatekeeper.sh`).
+- **Zig:** also issues **two** requests per asset, composed differently:
+  `GET /api/v1/assets/{type}/{name}` to learn the expected size, then the
+  asset `GET` (redirects followed in-process, so no separate HEAD). The
+  metadata call feeds the strict truncation checks on responses that carry
+  no `Content-Length`; without it a length-less transfer could only be
+  trusted blindly. If the metadata call fails, the clone aborts unless
+  `--ignore-missing-assets` or `ZOQA_ALLOW_LENGTHLESS` is set.
+- **Net effect:** the same number of requests per asset as Perl, and a
+  byte-identical file (same MD5). `GAT-26` shows 1 vs 2 because it counts
+  hits on the `/tests/.../asset` route only, not total requests.
+- **Under review:** whether the metadata call stays unconditional, becomes
+  conditional, or is dropped is an open design question. The request count
+  above is what ships today.
+- **Source:** `src/clone_job_main.zig` (`fetchAssetSize`, `downloadAssets`);
+  `CloneJob.pm:196-204`; e2e GAT-26 (`tests_gatekeeper.sh`).
 
 ### Redirect signing: HMAC per hop, credentials kept on the same origin only
 - **Perl:** resolves the final URL with `curl --head --location`, then calls
@@ -180,7 +185,7 @@ scheme, matching Perl.
 - **Net effect:** same result as Perl for openQA's same-host
   `/tests/<id>/asset/...` → `/assets/...` redirect, also when the server sets
   `[auth] require_for_assets = 1` (OSD). Before this fix Zig got 403 there.
-  Zig never sends the API key to another host (deliberate divergence).
+  Zig never sends the API key to another host (deliberate deviation).
 - **Source:** `src/http_client.zig` (`RedirectState`); e2e AUT-8
   (`tests_auth.sh`), GAT-20 (`tests_gatekeeper.sh`), and all faultproxy asset
   tests (the proxy now passes 3xx responses to the client).
@@ -192,7 +197,7 @@ scheme, matching Perl.
 
 ## `schedule` (vs `openqa-cli schedule`)
 
-### `failed_job_info` field name: **deliberate divergence (improvement)**
+### `failed_job_info` field name: **deliberate deviation (improvement)**
 - **Perl:** `_error_from_json` inspects only `results.failed`, so it **silently misses async-side scheduler errors** and reports success when the server reported partial/total failure.
 - **Zig:** `schedule --monitor` inspects, in order: `results.failed_job_info`, then `results.failed`, then `results.error` / top-level `error`. Non-empty → joined messages to stderr, exit `1`. Catches an error class Perl misses.
 
