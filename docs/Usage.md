@@ -8,7 +8,7 @@ Run `zoqa <subcommand> --help` or `zoqa-clone-job --help` for the full flag list
 
 - [`api`](#api-make-a-raw-api-request) - make a raw API request
 - [`archive`](#archive-download-a-jobs-assets-and-test-results) - download a job's assets and test results
-- [`monitor`](#monitor-wait-until-jobs-reach-a-final-state) - wait until jobs reach a final state
+- [`monitor`](#monitor-wait-until-jobs-reach-a-terminal-state) - wait until jobs reach a terminal state
 - [`schedule`](#schedule-create-new-jobs-via-post-apiv1isos) - create new jobs via `POST /api/v1/isos`
 - [`zoqa-clone-job`](#zoqa-clone-job-clone-and-re-trigger-jobs) - clone and re-trigger jobs across or within instances
 - [Authentication](#authentication)
@@ -58,7 +58,7 @@ zoqa archive --o3 -l 50 12345 ./job-12345
 ```
 
 
-## `monitor`: wait until jobs reach a final state
+## `monitor`: wait until jobs reach a terminal state
 
 Polls the server until each given job is done. Exit code summarizes the
 outcome: `0` if every job passed/softfailed, `1` if any job is missing or
@@ -74,7 +74,7 @@ zoqa monitor --o3 12345 12346 12347
 # Tighten the polling interval (default: 10s)
 zoqa monitor --o3 --poll-interval 5 12345
 
-# Track the newest clone of each job (useful when jobs get restarted)
+# Follow the newest clone of each job (useful when jobs get restarted)
 zoqa monitor --o3 --follow 12345
 ```
 
@@ -124,7 +124,7 @@ or a full URL such as `https://openqa.opensuse.org/tests/12345`.
 # Clone within the same instance (no asset downloads needed)
 zoqa-clone-job --within-instance openqa.opensuse.org 12345
 
-# Clone from a remote server to a local openQA instance (downloads assets)
+# Clone from a source instance to a destination instance (downloads assets)
 zoqa-clone-job --from https://openqa.opensuse.org 12345
 
 # Display a live progress meter while downloading assets
@@ -133,6 +133,11 @@ zoqa-clone-job --from https://openqa.opensuse.org --show-progress 12345
 # Specify explicit source and destination instances
 zoqa-clone-job --from https://openqa.opensuse.org --host http://localhost 12345
 ```
+
+Assets already present at their full size in the destination directory are not
+re-fetched: the server decides via a ranged request and answers HTTP `416` when
+nothing is left to transfer, so re-clones are cheap. A corrupt file of the
+correct size is therefore kept as it is.
 
 ### Setting overrides
 

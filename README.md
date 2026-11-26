@@ -108,6 +108,9 @@ zoqa <subcommand> --help   # api | archive | monitor | schedule
 zoqa-clone-job --help      # drop-in replacement for openqa-clone-job
 ```
 
+Terms used throughout these docs — **clone**, **asset**, **dependency graph**,
+**deviation** — are defined in **[docs/GLOSSARY.md](docs/GLOSSARY.md)**.
+
 
 ## Building from source
 
@@ -162,7 +165,7 @@ shared infrastructure and standalone tools:
 | `src/auth.zig` | HMAC-SHA1 authentication header generation |
 | `src/http_client.zig` | HTTP client wrapper with retry logic and streaming downloads |
 | `src/archive.zig` | `archive` subcommand: stream a job's assets and test results to disk |
-| `src/monitor.zig` | `monitor` subcommand: poll until specified jobs reach a final state |
+| `src/monitor.zig` | `monitor` subcommand: poll until specified jobs reach a terminal state |
 | `src/schedule.zig` | `schedule` subcommand: POST `/api/v1/isos` to start jobs |
 | `src/fs_utils.zig` | Filesystem abstraction layer (live and memory-backed filesystems) |
 | `src/cli_env.zig` | CLI environment and argument resolution |

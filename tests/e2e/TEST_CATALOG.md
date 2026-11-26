@@ -303,6 +303,8 @@ of the harness and how to run it, see [README.md](README.md).
 | CLO-98b | Perl mid-transfer drop WITH Content-Length | Proxy sends 200 + 64 bytes then RST (partial_cl mode) with Content-Length; curl sees CURLE_PARTIAL_FILE (18) and fails; Perl exits non-zero (cannot retry length-bearing drop). |
 | CLO-99 | Zig mid-transfer TCP drop | Same partial fault scenario as CLO-98; Zig currently exits non-zero; exactly 1 proxy hit; no partial file must remain. |
 | CLO-99b | Zig mid-transfer drop WITH Content-Length | Same partial_cl scenario as CLO-98b; Zig currently exits 0 with truncated files. |
+| CLO-100 | Perl does not re-download a complete asset | Assets pre-placed as same-size, all-zero sentinels with an aged mtime; Perl's `curl -C -` gets 416, leaves the sentinel md5 unchanged (≠ real asset md5) and bumps the mtime into the run window. |
+| CLO-101 | Zig does not re-fetch a complete asset | Same sentinel scenario as CLO-100 against `zoqa-clone-job`; sentinel content preserved (md5 unchanged, ≠ real asset md5) and mtime touched, proving the ranged-GET/416 probe short-circuits without writing. |
 | CLO-110 | Skip unpublished UEFI vars asset | No cloned job publishes the UEFI variables; asset download is skipped. |
 | CLO-111 | Skip generated UEFI vars asset | Cloned parent job publishes the UEFI variables; asset download is skipped since parent will regenerate. |
 | CLO-112 | Download UEFI variables when parent is skipped | Child depends on parent that publishes UEFI variables, but parent is skipped via --skip-deps; asset download is required. |
